@@ -1,0 +1,31 @@
+# Secrets — never commit. Use .env.example as the template.
+.env
+.env.local
+.env.*.local
+.env.development
+.env.staging
+.env.production
+secrets/
+
+# Mattermost runtime state (bind mounts, owned by uid 2000 inside the container)
+mattermost/volumes/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ai-core runtime output
+ai-core/logs/
+ai-core/evals/reports/
+*.jsonl
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp

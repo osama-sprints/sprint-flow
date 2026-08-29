@@ -1,0 +1,175 @@
+# SprintFlow — virtual corporate workspace.
+#
+#   postgres     one cluster, two databases (mattermost + sprintflow)
+#   mattermost   the chat UI people actually use
+#   ai-core      FastAPI + LangGraph orchestrator; all LLM calls via LiteLLM
+#
+# Long-term memory (mem0) lives in an EXTERNAL Qdrant instance, so no vector
+# extension is ever loaded into the cluster Mattermost depends on.
+#
+# Why two database containers rather than one cluster with two databases:
+# isolated failure domains. The vector workload and the chat platform now fail,
+# restart and upgrade independently — a bad extension or a runaway vector query
+# cannot stop the postmaster that Mattermost depends on to boot.
+#
+# Network layout:
+#   mm-db     internal: true  -> Mattermost <-> its database, no route off host
+#   ai-db     internal: true  -> ai-core   <-> its database, no route off host
+#   frontend  bridge          -> mattermost <-> ai-core, and the default route
+#                                ai-core needs to reach the LiteLLM proxy.
+# ai-core has no access to Mattermost's database and vice versa.
+
+# Compose project name. Pinned explicitly so every container, volume and
+# network is prefixed 'sprintflow' regardless of what the checkout folder
+# happens to be called.
+name: sprintflow
+
+services:
+  postgres:
+    # Plain Postgres, no extensions. Serves BOTH databases: Mattermost's
+    # transactional data and ai-core's LangGraph checkpointer. The vector
+    # workload lives in an external Qdrant instance, so nothing exotic is ever
+    # loaded into the cluster Mattermost boots against.
+    image: postgres:16-alpine
+    container_name: sprintflow-postgres
+    restart: unless-stopped
+    environment:
+      # This creates ai-core's database; the init script adds Mattermost's.
+      POSTGRES_DB: ${POSTGRES_DB:-sprintflow}
+      POSTGRES_USER: ${POSTGRES_USER:-sprintflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      MATTERMOST_DB: ${MATTERMOST_DB:-mattermost}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1 matters: during init the temporary server listens on the
+      # unix socket only, so a socket check reports healthy too early.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-sprintflow} -d ${POSTGRES_DB:-sprintflow}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    networks:
+      - backend
+
+  mattermost:
+    image: mattermost/mattermost-team-edition:11.7.10
+    container_name: sprintflow-mattermost
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # The image expects to own its bind-mounted directories as uid:gid 2000.
+    user: "2000:2000"
+    ports:
+      - "${MATTERMOST_HOST_PORT:-8065}:8065"
+    environment:
+      TZ: ${TZ:-UTC}
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: "postgres://${POSTGRES_USER:-sprintflow}:${POSTGRES_PASSWORD}@postgres:5432/${MATTERMOST_DB:-mattermost}?sslmode=disable&connect_timeout=10"
+      MM_SERVICESETTINGS_SITEURL: ${MM_SITE_URL:-http://localhost:8065}
+
+      # --- Integrations SprintFlow depends on ---
+      MM_SERVICESETTINGS_ENABLEOUTGOINGWEBHOOKS: "true"
+      MM_SERVICESETTINGS_ENABLEINCOMINGWEBHOOKS: "true"
+      MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION: "true"
+      MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS: "true"
+      MM_SERVICESETTINGS_ENABLEPOSTUSERNAMEOVERRIDE: "true"
+      MM_SERVICESETTINGS_ENABLEPOSTICONOVERRIDE: "true"
+
+      # Mattermost routes outgoing-webhook calls through an SSRF filter that
+      # rejects any host resolving into a reserved range — every Docker bridge
+      # IP. The hostname must appear here VERBATIM; no wildcards, and the port
+      # is stripped before comparison. Without it the webhook fails silently.
+      MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: "ai-core"
+
+      # Lets the bootstrap script drive mmctl over the local socket.
+      MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
+      MM_TEAMSETTINGS_ENABLEOPENSERVER: "true"
+
+      # --- White-labelling (all supported on Team Edition, no licence) ---
+      MM_TEAMSETTINGS_SITENAME: ${MM_SITE_NAME:-SprintFlow}
+      MM_TEAMSETTINGS_ENABLECUSTOMBRAND: "true"
+      MM_TEAMSETTINGS_CUSTOMBRANDTEXT: ${MM_CUSTOM_BRAND_TEXT:-}
+      MM_TEAMSETTINGS_CUSTOMDESCRIPTIONTEXT: ${MM_CUSTOM_DESCRIPTION_TEXT:-}
+      # The login logo and team icon are PNG uploads, not env vars — Mattermost
+      # rejects SVG. scripts/bootstrap_mattermost.sh rasterises and uploads them.
+      #
+      # NOTE: themes are licence-gated (client.go strips DefaultTheme without a
+      # licence), so everyone gets the stock Denim theme. Not set here on
+      # purpose — setting it would look like it works and silently do nothing.
+
+      # Channels every user joins with any team. CRITICAL: Mattermost's env
+      # decoder splits slice values on SPACES, not commas. "qa,support" would
+      # be read as a single channel named "qa,support" and silently skipped.
+      MM_TEAMSETTINGS_EXPERIMENTALDEFAULTCHANNELS: ${MM_DEFAULT_CHANNELS:-qa support}
+    volumes:
+      - ./mattermost/volumes/app/mattermost/config:/mattermost/config:rw
+      - ./mattermost/volumes/app/mattermost/data:/mattermost/data:rw
+      - ./mattermost/volumes/app/mattermost/logs:/mattermost/logs:rw
+      - ./mattermost/volumes/app/mattermost/plugins:/mattermost/plugins:rw
+      - ./mattermost/volumes/app/mattermost/client/plugins:/mattermost/client/plugins:rw
+    # No healthcheck block: the image ships its own (mmctl over the local
+    # socket). Do not replace it with curl — the image is distroless.
+    networks:
+      - backend
+      - frontend
+
+  ai-core:
+    build:
+      context: ./ai-core
+      args:
+        APP_ENV: ${APP_ENV:-development}
+    container_name: sprintflow-ai-core
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No published port, deliberately. Mattermost reaches ai-core by service
+    # name over the `frontend` network, and nothing outside the compose project
+    # needs it — publishing it would expose /docs, /openapi.json and /metrics
+    # unauthenticated on the host.
+    # To debug from the host, tunnel instead of republishing:
+    #   docker compose exec ai-core python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/health').read())"
+    env_file:
+      - .env
+    environment:
+      # `environment` wins over `env_file`, so these pin what must differ
+      # inside the container regardless of what .env says.
+      APP_ENV: ${APP_ENV:-development}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-sprintflow}
+      MATTERMOST_URL: http://mattermost:8065
+    volumes:
+      - ./ai-core/app:/app/app
+      - ./ai-core/logs:/app/logs
+    healthcheck:
+      # python:3.13-slim has no curl. urlopen raises on 503, which is what we
+      # want: /health returns 503 when the database is unreachable.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - backend
+      - frontend
+
+networks:
+  backend:
+    driver: bridge
+    # No route off the host. Postgres lives only here.
+    internal: true
+  frontend:
+    driver: bridge
+    # Supplies the default route mattermost and ai-core need — ai-core reaches
+    # both the LiteLLM proxy and the external Qdrant instance through it.
+
+volumes:
+  postgres-data:
