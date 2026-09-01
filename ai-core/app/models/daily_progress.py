@@ -13,4 +13,7 @@ class DailyProgress(DomainBase, table=True):
     cohort_membership_id: int = Field(foreign_key="cohortmembership.id")
     date: Date = Field(default_factory=Date.today)
     status: str = Field(default="pending")  # pending, completed or skipped
-    notes: str | None = Field(default=None)
+    #notes: str | None = Field(default=None)
+    what_i_did: str
+    what_i_will_do: str
+    blockers: str | None = Field(default=None)

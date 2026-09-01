@@ -8,9 +8,10 @@ from app.services.database import database_service
 
 
 ROLES = [
-    "member",
+    "learner",
     "mentor",
-    "admin",
+    "manager",
+    "coordinator",
 ]
 
 CEREMONY_TYPES = [
@@ -18,6 +19,7 @@ CEREMONY_TYPES = [
     "planning",
     "review",
     "retrospective",
+    "demo",
 ]
 
 
