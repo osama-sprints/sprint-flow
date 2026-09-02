@@ -62,7 +62,10 @@ def validate_and_parse_time(raw_time: str) -> tuple[datetime | None, str]:
     """
 
     # Step 1: Try to understand what time the user wrote
-    parsed = dateparser.parse(raw_time, settings={"RETURN_AS_TIMEZONE_AWARE": True})
+    # Do not force timezone awareness here. When the user omits a timezone,
+    # dateparser otherwise attaches the host's local timezone and makes an
+    # ambiguous input look explicit.
+    parsed = dateparser.parse(raw_time)
     if not parsed:
         return None, "Error: I couldn't understand that time. Ask the user to be more specific (e.g. 'Monday 9 AM UTC')."
 

@@ -8,6 +8,7 @@ from app.core.langgraph.tools.ceremony_scheduler import (
     schedule_ceremony,
     amend_ceremony,
     read_ceremonies,
+    validate_and_parse_time,
 )
 from app.models.cohort import Cohort
 from app.services.admin_service import AuthorisationRefusalError
@@ -28,6 +29,42 @@ def mock_admin_service():
     # By default, pass authorization
     service.evaluate_permission.return_value = None
     return service
+
+
+# TIME VALIDATION
+def test_validate_time_accepts_explicit_utc_time():
+    parsed, error = validate_and_parse_time("January 1, 2100 at 6 PM UTC")
+
+    assert error == ""
+    assert parsed == datetime(2100, 1, 1, 18, 0, tzinfo=timezone.utc)
+
+
+def test_validate_time_rejects_missing_timezone():
+    parsed, error = validate_and_parse_time("January 1, 2100 at 6 PM")
+
+    assert parsed is None
+    assert "time is ambiguous" in error
+
+
+def test_validate_time_rejects_missing_ampm():
+    parsed, error = validate_and_parse_time("January 1, 2100 at 6 UTC")
+
+    assert parsed is None
+    assert error.startswith("Error:")
+
+
+def test_validate_time_rejects_unparseable_input():
+    parsed, error = validate_and_parse_time("not a real time")
+
+    assert parsed is None
+    assert "couldn't understand that time" in error
+
+
+def test_validate_time_rejects_past_time():
+    parsed, error = validate_and_parse_time("January 1, 2000 at 6 PM UTC")
+
+    assert parsed is None
+    assert "time is in the past" in error
 
 
 # 1. SCHEDULE CEREMONY
