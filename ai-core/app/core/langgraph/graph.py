@@ -42,6 +42,7 @@ from psycopg.rows import (
 from psycopg_pool import AsyncConnectionPool
 
 from app.core.config import settings
+from app.core.langgraph.supervisor import describe_specialisation, supervisor_node
 from app.core.langgraph.tools import tools
 from app.core.logging import logger
 from app.core.metrics import llm_inference_duration_seconds
@@ -147,7 +148,11 @@ class LangGraphAgent:
 
         username = config.get("metadata", {}).get("username")
         thread_id = config.get("configurable", {}).get("thread_id")
-        SYSTEM_PROMPT = load_system_prompt(username=username, long_term_memory=state.long_term_memory)
+        SYSTEM_PROMPT = load_system_prompt(
+            username=username,
+            long_term_memory=state.long_term_memory,
+            specialisation_context=describe_specialisation(state.specialisation),
+        )
 
         # Prepare messages with system prompt
         messages = prepare_messages(state.messages, SYSTEM_PROMPT)
@@ -223,6 +228,11 @@ class LangGraphAgent:
         if self._graph is None:
             try:
                 graph_builder = StateGraph(GraphState)
+                # Rule-based classifier, no LLM call — see supervisor.py. Always
+                # proceeds to "chat"; specialisation only shapes that node's
+                # system prompt (see describe_specialisation), it does not
+                # change which tools are bound.
+                graph_builder.add_node("supervisor", supervisor_node)
                 graph_builder.add_node("chat", self._chat, destinations=("tool_call", END))
                 graph_builder.add_node(
                     "tool_call",
@@ -230,7 +240,8 @@ class LangGraphAgent:
                     destinations=("chat",),
                     retry_policy=RetryPolicy(max_attempts=3),
                 )
-                graph_builder.set_entry_point("chat")
+                graph_builder.add_edge("supervisor", "chat")
+                graph_builder.set_entry_point("supervisor")
                 graph_builder.set_finish_point("chat")
 
                 # Raises if the pool cannot be created — no checkpointer, no service.
