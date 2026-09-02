@@ -11,6 +11,8 @@ from pydantic import (
 
 
 class Specialisation(str, Enum):
+    """The specialist handler a request is routed to."""
+
     LEARNER_SUPPORT = "learner_support"
     ADMIN_OPS = "admin_ops"
     GENERAL_FALLBACK = "general_fallback"
@@ -24,6 +26,8 @@ class GraphState(BaseModel):
     )
     long_term_memory: str = Field(default="", description="The long term memory of the conversation")
 
+    # --- Sprint 1: supervisor routing (additive — all optional/defaulted so
+    # existing checkpointed state, which predates these fields, still loads) ---
     specialisation: Optional[Specialisation] = Field(
         default=None, description="The specialist this turn was routed to"
     )
