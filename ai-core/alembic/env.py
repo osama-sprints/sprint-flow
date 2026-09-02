@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.models.session import Session  # noqa: F401
 from app.models.thread import Thread  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.onboarding import OnboardingState  # noqa: F401
 
 from app.models.ceremony import Ceremony  # noqa: F401
 from app.models.ceremony_type import CeremonyType  # noqa: F401
