@@ -41,6 +41,7 @@ dependencies = [
     "asgi-correlation-id>=4.3.4",
     "alembic>=1.18.4",
     "websockets>=14.2",
+    "dateparser>=1.2.0",
 ]
 
 [project.optional-dependencies]
