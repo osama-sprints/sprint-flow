@@ -69,3 +69,12 @@ branding: ## Rasterise branding/logo.svg into the PNGs Mattermost accepts
 .PHONY: ps
 ps: ## Show service status
 	$(COMPOSE) ps
+
+.PHONY: verify format check
+
+verify:
+	docker exec -it -e PYTHONPATH=. sprintflow-ai-core uv run pytest tests/test_authorisation_sprint1.py -v
+
+format:
+	docker exec -it sprintflow-ai-core uv run ruff format .
+	docker exec -it sprintflow-ai-core uv run ruff check --fix .
