@@ -97,7 +97,8 @@ sprintflow/
 cp .env.example .env          # then set OPENAI_API_KEY + passwords
 make up                       # build and start everything
 make bootstrap                # admin, bot, lockdown, team, channels, branding
-make verify                   # every verification suite
+make verify                   # fast checks for every project feature
+make verify-live              # full Mattermost/LLM/Qdrant integration suite
 ```
 
 Then open <http://localhost:8065>, sign in with the credentials the bootstrap
@@ -112,6 +113,25 @@ internal network. The workspace comes up
 with **General**, **Announcements**, **Engineering**, **Helpdesk** and
 **Watercooler**, each with a header, and every new account is added to them
 automatically.
+
+### Feature verification
+
+Every major capability has an executable runner under `scripts/`:
+
+| Capability | Command | Coverage |
+|---|---|---|
+| Data model and migrations | `./scripts/verify_data_model.sh` | Required tables/columns and Alembic revision |
+| Multi-agent orchestration | `./scripts/verify_orchestration.sh` | Deterministic supervisor routing |
+| Authorisation and back office | `./scripts/verify_authorisation.sh` | Permissions, isolation, idempotency, and injection refusal |
+| Ceremony scheduling | `./scripts/verify_ceremony.sh` | Time validation, cohort checks, conflicts, schedule/amend/read |
+| Proactive onboarding | `./scripts/verify_onboarding_feature.sh` | Module validation; use `--live` for greeting and durable follow-up |
+| Platform integration | `./scripts/verify_platform.sh --live` | Mattermost-to-agent pipeline and Qdrant memory |
+
+Run all deterministic checks with `make verify`. Run the complete integration
+suite with `make verify-live`; live checks create temporary Mattermost users,
+teams, posts, and onboarding records, and the durable onboarding test restarts
+`ai-core`. The authorisation live suite also verifies that the authenticated
+Mattermost administrator maps to an administrator in SprintFlow's database.
 
 > This configuration is tuned for local development. See **Before a public
 > server** below — several defaults are deliberately open.

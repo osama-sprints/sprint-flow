@@ -41,7 +41,7 @@ async def resolve_role(mattermost_user_id: str) -> Optional[str]:
         stmt = (
             select(Role.name)
             .join(CohortMembership, CohortMembership.role_id == Role.id)
-            .where(CohortMembership.user_id == user.id , CohortMemebership.status == "active", )
+            .where(CohortMembership.user_id == user.id , CohortMembership.status == "active", )
             .order_by(col(CohortMembership.joined_at).desc())
         )
         return session.exec(stmt).first()

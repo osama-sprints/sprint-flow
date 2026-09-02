@@ -22,17 +22,12 @@ bootstrap: ## Create the admin, team, bot, token and outgoing webhook
 smoke: ## End-to-end test: post a message and wait for the bot's reply
 	./scripts/smoke_test.sh
 
-.PHONY: verify
-verify: ## Run every verification suite (takes several minutes)
-	@set -a; . ./.env; set +a; \
-	MSYS_NO_PATHCONV=1 $(COMPOSE) exec -T ai-core /app/.venv/bin/python - < ai-core/scripts/verify_schema.py && \
-	./scripts/smoke_test.sh && \
-	python3 scripts/verify_routing.py && \
-	python3 scripts/verify_threading.py && \
-	python3 scripts/verify_isolation.py && \
-	python3 scripts/verify_onboarding.py && \
-	python3 scripts/verify_admin_agent.py && \
-	python3 scripts/verify_memory.py
+.PHONY: verify verify-live
+verify: ## Run deterministic checks for every project feature
+	./scripts/verify_all_features.sh
+
+verify-live: ## Run every feature check, including live Mattermost/LLM/Qdrant tests
+	./scripts/verify_all_features.sh --live
 
 .PHONY: down
 down: ## Stop the stack (keeps data)
@@ -71,10 +66,7 @@ branding: ## Rasterise branding/logo.svg into the PNGs Mattermost accepts
 ps: ## Show service status
 	$(COMPOSE) ps
 
-.PHONY: verify format check
-
-verify:
-	docker exec -it -e PYTHONPATH=. sprintflow-ai-core uv run pytest tests/test_authorisation_sprint1.py -v
+.PHONY: format check
 
 format:
 	docker exec -it sprintflow-ai-core uv run ruff format .
