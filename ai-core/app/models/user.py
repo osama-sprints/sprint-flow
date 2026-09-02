@@ -35,6 +35,8 @@ class User(BaseModel, table=True):
     hashed_password: str
     username: Optional[str] = Field(default=None, index=False)
     sessions: List["Session"] = Relationship(back_populates="user")
+    mattermost_user_id: str | None = Field(default=None, unique=True,index=True,)
+    handle: str | None = Field(default=None,unique=True,index=True,)
 
     def verify_password(self, password: str) -> bool:
         """Verify if the provided password matches the hash."""
