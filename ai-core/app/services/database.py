@@ -1,6 +1,8 @@
 """This file contains the database service for the application."""
 
 from typing import (
+    Any,
+    Dict,
     List,
     Optional,
 )
@@ -20,14 +22,18 @@ from app.core.config import (
     settings,
 )
 from app.core.logging import logger
+from app.models.cohort import Cohort
+from app.models.cohort_membership import CohortMembership
+from app.models.role import Role
 from app.models.session import Session as ChatSession
+from app.models.sprint import Sprint
 from app.models.user import User
 
 
 class DatabaseService:
     """Service class for database operations.
 
-    This class handles all database operations for Users, Sessions, and Messages.
+    This class handles all database operations for Users, Sessions, Cohorts, Roles, and Sprints.
     It uses SQLModel for ORM operations and maintains a connection pool.
     """
 
@@ -66,17 +72,12 @@ class DatabaseService:
             if settings.ENVIRONMENT != Environment.PRODUCTION:
                 raise
 
+    # -------------------------------------------------------------------------
+    # USER & SESSION OPERATIONS
+    # -------------------------------------------------------------------------
+
     async def create_user(self, email: str, password: str, username: str | None = None) -> User:
-        """Create a new user.
-
-        Args:
-            email: User's email address
-            password: Hashed password
-            username: Optional display name
-
-        Returns:
-            User: The created user
-        """
+        """Create a new user."""
         with Session(self.engine) as session:
             user = User(email=email, hashed_password=password, username=username)
             session.add(user)
@@ -85,42 +86,21 @@ class DatabaseService:
             logger.info("user_created", email=email)
             return user
 
-    async def get_user(self, user_id: int) -> Optional[User]:
-        """Get a user by ID.
-
-        Args:
-            user_id: The ID of the user to retrieve
-
-        Returns:
-            Optional[User]: The user if found, None otherwise
-        """
+    async def get_user(self, user_id: int | str) -> Optional[User]:
+        """Get a user by ID."""
         with Session(self.engine) as session:
-            user = session.get(User, user_id)
+            user = session.get(User, str(user_id))
             return user
 
     async def get_user_by_email(self, email: str) -> Optional[User]:
-        """Get a user by email.
-
-        Args:
-            email: The email of the user to retrieve
-
-        Returns:
-            Optional[User]: The user if found, None otherwise
-        """
+        """Get a user by email."""
         with Session(self.engine) as session:
             statement = select(User).where(User.email == email)
             user = session.exec(statement).first()
             return user
 
     async def delete_user_by_email(self, email: str) -> bool:
-        """Delete a user by email.
-
-        Args:
-            email: The email of the user to delete
-
-        Returns:
-            bool: True if deletion was successful, False if user not found
-        """
+        """Delete a user by email."""
         with Session(self.engine) as session:
             user = session.exec(select(User).where(User.email == email)).first()
             if not user:
@@ -134,17 +114,7 @@ class DatabaseService:
     async def create_session(
         self, session_id: str, user_id: int, name: str = "", username: str | None = None
     ) -> ChatSession:
-        """Create a new chat session.
-
-        Args:
-            session_id: The ID for the new session
-            user_id: The ID of the user who owns the session
-            name: Optional name for the session (defaults to empty string)
-            username: Display name copied from the user for LLM personalization
-
-        Returns:
-            ChatSession: The created session
-        """
+        """Create a new chat session."""
         with Session(self.engine) as session:
             chat_session = ChatSession(id=session_id, user_id=user_id, name=name, username=username)
             session.add(chat_session)
@@ -154,14 +124,7 @@ class DatabaseService:
             return chat_session
 
     async def delete_session(self, session_id: str) -> bool:
-        """Delete a session by ID.
-
-        Args:
-            session_id: The ID of the session to delete
-
-        Returns:
-            bool: True if deletion was successful, False if session not found
-        """
+        """Delete a session by ID."""
         with Session(self.engine) as session:
             chat_session = session.get(ChatSession, session_id)
             if not chat_session:
@@ -173,27 +136,13 @@ class DatabaseService:
             return True
 
     async def get_session(self, session_id: str) -> Optional[ChatSession]:
-        """Get a session by ID.
-
-        Args:
-            session_id: The ID of the session to retrieve
-
-        Returns:
-            Optional[ChatSession]: The session if found, None otherwise
-        """
+        """Get a session by ID."""
         with Session(self.engine) as session:
             chat_session = session.get(ChatSession, session_id)
             return chat_session
 
     async def get_user_sessions(self, user_id: int) -> List[ChatSession]:
-        """Get all sessions for a user.
-
-        Args:
-            user_id: The ID of the user
-
-        Returns:
-            List[ChatSession]: List of user's sessions
-        """
+        """Get all sessions for a user."""
         with Session(self.engine) as session:
             statement = (
                 select(ChatSession).where(col(ChatSession.user_id) == user_id).order_by(col(ChatSession.created_at))
@@ -202,18 +151,7 @@ class DatabaseService:
             return list(sessions)
 
     async def update_session_name(self, session_id: str, name: str) -> ChatSession:
-        """Update a session's name.
-
-        Args:
-            session_id: The ID of the session to update
-            name: The new name for the session
-
-        Returns:
-            ChatSession: The updated session
-
-        Raises:
-            HTTPException: If session is not found
-        """
+        """Update a session's name."""
         with Session(self.engine) as session:
             chat_session = session.get(ChatSession, session_id)
             if not chat_session:
@@ -226,23 +164,148 @@ class DatabaseService:
             logger.info("session_name_updated", session_id=session_id, name=name)
             return chat_session
 
-    def get_session_maker(self):
-        """Get a session maker for creating database sessions.
+    # -------------------------------------------------------------------------
+    # AUTHORISATION & BACK-OFFICE ADMIN OPERATIONS
+    # -------------------------------------------------------------------------
 
-        Returns:
-            Session: A SQLModel session maker
-        """
+    def get_user_roles(
+        self, requester_id: str, cohort_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Queries user and cohort roles from PostgreSQL."""
+        with Session(self.engine) as session:
+            statement = select(User).where(
+                (User.mattermost_user_id == requester_id) | (User.id == requester_id)
+            )
+            user = session.exec(statement).first()
+
+            if not user:
+                return {"global": [], "cohort_roles": {}}
+
+            global_roles = ["admin"] if getattr(user, "username", "") == "admin" else []
+
+            cohort_roles: Dict[str, list] = {}
+            if cohort_id and user.id:
+                membership_stmt = select(CohortMembership).where(
+                    (CohortMembership.user_id == user.id)
+                    & (CohortMembership.cohort_id == cohort_id)
+                )
+                membership = session.exec(membership_stmt).first()
+                if membership:
+                    role_obj = session.get(Role, membership.role_id)
+                    if role_obj:
+                        cohort_roles[cohort_id] = [role_obj.name]
+
+            return {"global": global_roles, "cohort_roles": cohort_roles}
+
+    def get_cohort(self, cohort_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieves a cohort by ID."""
+        with Session(self.engine) as session:
+            cohort = session.get(Cohort, cohort_id)
+            if cohort:
+                return {"id": cohort.id, "name": cohort.name, "status": cohort.status}
+            return None
+
+    def create_cohort(self, cohort_id: str, name: str) -> Dict[str, Any]:
+        """Inserts a new cohort record."""
+        with Session(self.engine) as session:
+            cohort = Cohort(id=cohort_id, name=name, status="ACTIVE")
+            session.add(cohort)
+            session.commit()
+            session.refresh(cohort)
+            return {"id": cohort.id, "name": cohort.name, "status": cohort.status}
+
+    def check_user_has_role(self, user_id: str, role: str, cohort_id: str) -> bool:
+        """Checks if user holds a specific role in a cohort."""
+        with Session(self.engine) as session:
+            statement = select(User).where(
+                (User.id == user_id) | (User.mattermost_user_id == user_id)
+            )
+            user = session.exec(statement).first()
+            if not user or not user.id:
+                return False
+
+            role_obj = session.exec(select(Role).where(Role.name == role)).first()
+            if not role_obj or not role_obj.id:
+                return False
+
+            membership = session.exec(
+                select(CohortMembership).where(
+                    (CohortMembership.user_id == user.id)
+                    & (CohortMembership.cohort_id == cohort_id)
+                    & (CohortMembership.role_id == role_obj.id)
+                )
+            ).first()
+
+            return membership is not None
+
+    def add_user_role(self, user_id: str, role: str, cohort_id: str) -> Dict[str, Any]:
+        """Assigns a role to a user within a cohort via CohortMembership."""
+        with Session(self.engine) as session:
+            user = session.exec(
+                select(User).where((User.id == user_id) | (User.mattermost_user_id == user_id))
+            ).first()
+            if not user or not user.id:
+                raise ValueError(f"User '{user_id}' not found")
+
+            role_obj = session.exec(select(Role).where(Role.name == role)).first()
+            if not role_obj or not role_obj.id:
+                raise ValueError(f"Role '{role}' not found")
+
+            membership = CohortMembership(
+                user_id=user.id, cohort_id=cohort_id, role_id=role_obj.id
+            )
+            session.add(membership)
+            session.commit()
+            return {"user_id": user.id, "role": role, "cohort_id": cohort_id}
+
+    def get_sprint_status(self, cohort_id: str, sprint_id: str) -> Optional[str]:
+        """Queries sprint status."""
+        with Session(self.engine) as session:
+            sprint = session.exec(
+                select(Sprint).where(
+                    (Sprint.id == sprint_id) & (Sprint.cohort_id == cohort_id)
+                )
+            ).first()
+            return sprint.status if sprint else None
+
+    def set_sprint_status(
+        self, cohort_id: str, sprint_id: str, status: str
+    ) -> Dict[str, Any]:
+        """Updates or creates a sprint status."""
+        with Session(self.engine) as session:
+            sprint = session.exec(
+                select(Sprint).where(
+                    (Sprint.id == sprint_id) & (Sprint.cohort_id == cohort_id)
+                )
+            ).first()
+
+            if sprint:
+                sprint.status = status
+            else:
+                sprint = Sprint(
+                    id=sprint_id,
+                    cohort_id=cohort_id,
+                    name=f"Sprint {sprint_id}",
+                    status=status,
+                )
+                session.add(sprint)
+
+            session.commit()
+            session.refresh(sprint)
+            return {"id": sprint.id, "cohort_id": sprint.cohort_id, "status": sprint.status}
+
+    # -------------------------------------------------------------------------
+    # UTILITY METHODS
+    # -------------------------------------------------------------------------
+
+    def get_session_maker(self):
+        """Get a session maker for creating database sessions."""
         return Session(self.engine)
 
     async def health_check(self) -> bool:
-        """Check database connection health.
-
-        Returns:
-            bool: True if database is healthy, False otherwise
-        """
+        """Check database connection health."""
         try:
             with Session(self.engine) as session:
-                # Execute a simple query to check connection
                 session.exec(select(1)).first()
                 return True
         except Exception as e:
