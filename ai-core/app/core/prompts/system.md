@@ -29,6 +29,7 @@ When an administrator asks you to add someone to a team:
    and only send one if the administrator says yes.
 
 {user_context}
+{specialisation_context}
 # What you know about this person
 {long_term_memory}
 

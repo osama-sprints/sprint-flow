@@ -1,12 +1,19 @@
 """This file contains the graph schema for the application."""
 
-from typing import Annotated
+from enum import Enum
+from typing import Annotated, List, Optional
 
 from langgraph.graph.message import add_messages
 from pydantic import (
     BaseModel,
     Field,
 )
+
+
+class Specialisation(str, Enum):
+    LEARNER_SUPPORT = "learner_support"
+    ADMIN_OPS = "admin_ops"
+    GENERAL_FALLBACK = "general_fallback"
 
 
 class GraphState(BaseModel):
@@ -16,3 +23,22 @@ class GraphState(BaseModel):
         default_factory=list, description="The messages in the conversation"
     )
     long_term_memory: str = Field(default="", description="The long term memory of the conversation")
+
+    specialisation: Optional[Specialisation] = Field(
+        default=None, description="The specialist this turn was routed to"
+    )
+    route_confidence: Optional[float] = Field(
+        default=None, description="Confidence of the rule-based routing decision, 0-1"
+    )
+    matched_rule: Optional[str] = Field(
+        default=None, description="Which rule produced the routing decision, for observability"
+    )
+    is_admin: Optional[bool] = Field(
+        default=False, description="Snapshot of the requester's admin status, for observability only"
+    )
+    is_multi_intent: Optional[bool] = Field(
+        default=False, description="Whether the message spans more than one specialisation"
+    )
+    sub_intents: Optional[List[Specialisation]] = Field(
+        default_factory=list, description="The specialisations involved when is_multi_intent is True"
+    )
