@@ -25,6 +25,7 @@ smoke: ## End-to-end test: post a message and wait for the bot's reply
 .PHONY: verify
 verify: ## Run every verification suite (takes several minutes)
 	@set -a; . ./.env; set +a; \
+	MSYS_NO_PATHCONV=1 $(COMPOSE) exec -T ai-core /app/.venv/bin/python - < ai-core/scripts/verify_schema.py && \
 	./scripts/smoke_test.sh && \
 	python3 scripts/verify_routing.py && \
 	python3 scripts/verify_threading.py && \

@@ -16,6 +16,16 @@ from app.models.thread import Thread  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.onboarding import OnboardingState  # noqa: F401
 
+from app.models.ceremony import Ceremony  # noqa: F401
+from app.models.ceremony_type import CeremonyType  # noqa: F401
+from app.models.cohort import Cohort  # noqa: F401
+from app.models.cohort_membership import CohortMembership  # noqa: F401
+from app.models.daily_progress import DailyProgress  # noqa: F401
+from app.models.escalation import Escalation  # noqa: F401
+
+from app.models.role import Role  # noqa: F401
+from app.models.sprint import Sprint  # noqa: F401
+
 # Alembic Config object
 config = context.config
 
