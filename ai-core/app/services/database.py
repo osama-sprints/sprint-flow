@@ -14,6 +14,7 @@ from sqlmodel import (
     Session,
     col,
     create_engine,
+    or_,
     select,
 )
 
@@ -89,7 +90,11 @@ class DatabaseService:
     async def get_user(self, user_id: int | str) -> Optional[User]:
         """Get a user by ID."""
         with Session(self.engine) as session:
-            user = session.get(User, str(user_id))
+            if str(user_id).isdigit():
+                user = session.get(User, int(user_id))
+            else:
+                statement = select(User).where(User.mattermost_user_id == str(user_id))
+                user = session.exec(statement).first()
             return user
 
     async def get_user_by_email(self, email: str) -> Optional[User]:
@@ -169,25 +174,36 @@ class DatabaseService:
     # -------------------------------------------------------------------------
 
     def get_user_roles(
-        self, requester_id: str, cohort_id: Optional[str] = None
+        self, requester_id: Any, cohort_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Queries user and cohort roles from PostgreSQL."""
+        """Queries user and cohort roles from PostgreSQL safely handling dict, int, or str IDs."""
+        if isinstance(requester_id, dict):
+            requester_id = requester_id.get("user_id") or requester_id.get("id") or str(requester_id)
+
+        req_str = str(requester_id)
+
         with Session(self.engine) as session:
-            statement = select(User).where(
-                (User.mattermost_user_id == requester_id) | (User.id == requester_id)
-            )
+            conditions = [
+                (User.mattermost_user_id == req_str),
+                (User.username == req_str),
+            ]
+            if req_str.isdigit():
+                conditions.append(User.id == int(req_str))
+
+            statement = select(User).where(or_(*conditions))
             user = session.exec(statement).first()
 
             if not user:
                 return {"global": [], "cohort_roles": {}}
 
-            global_roles = ["admin"] if getattr(user, "username", "") == "admin" else []
+            is_admin = user.username == "admin" or user.email == "admin@sprintflow.ai"
+            global_roles = ["admin"] if is_admin else []
 
             cohort_roles: Dict[str, list] = {}
             if cohort_id and user.id:
                 membership_stmt = select(CohortMembership).where(
                     (CohortMembership.user_id == user.id)
-                    & (CohortMembership.cohort_id == cohort_id)
+                    & (CohortMembership.cohort_id == (int(cohort_id) if str(cohort_id).isdigit() else cohort_id))
                 )
                 membership = session.exec(membership_stmt).first()
                 if membership:
@@ -198,29 +214,38 @@ class DatabaseService:
             return {"global": global_roles, "cohort_roles": cohort_roles}
 
     def get_cohort(self, cohort_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a cohort by ID."""
+        """Retrieves a cohort by ID handling integer vs string primary keys."""
         with Session(self.engine) as session:
-            cohort = session.get(Cohort, cohort_id)
+            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
+            cohort = session.get(Cohort, c_id)
             if cohort:
-                return {"id": cohort.id, "name": cohort.name, "status": cohort.status}
+                return {"id": str(cohort.id), "name": cohort.name, "status": cohort.status}
             return None
 
     def create_cohort(self, cohort_id: str, name: str) -> Dict[str, Any]:
-        """Inserts a new cohort record."""
+        """Inserts a new cohort record handling integer vs string primary keys."""
         with Session(self.engine) as session:
-            cohort = Cohort(id=cohort_id, name=name, status="ACTIVE")
+            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
+            cohort = Cohort(id=c_id, name=name, status="ACTIVE")
             session.add(cohort)
             session.commit()
             session.refresh(cohort)
-            return {"id": cohort.id, "name": cohort.name, "status": cohort.status}
+            return {"id": str(cohort.id), "name": cohort.name, "status": cohort.status}
 
-    def check_user_has_role(self, user_id: str, role: str, cohort_id: str) -> bool:
+    def check_user_has_role(self, user_id: Any, role: str, cohort_id: str) -> bool:
         """Checks if user holds a specific role in a cohort."""
+        if isinstance(user_id, dict):
+            user_id = user_id.get("user_id") or user_id.get("id") or str(user_id)
+
+        u_str = str(user_id)
+        c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
+
         with Session(self.engine) as session:
-            statement = select(User).where(
-                (User.id == user_id) | (User.mattermost_user_id == user_id)
-            )
-            user = session.exec(statement).first()
+            conditions = [(User.mattermost_user_id == u_str), (User.username == u_str)]
+            if u_str.isdigit():
+                conditions.append(User.id == int(u_str))
+
+            user = session.exec(select(User).where(or_(*conditions))).first()
             if not user or not user.id:
                 return False
 
@@ -231,19 +256,27 @@ class DatabaseService:
             membership = session.exec(
                 select(CohortMembership).where(
                     (CohortMembership.user_id == user.id)
-                    & (CohortMembership.cohort_id == cohort_id)
+                    & (CohortMembership.cohort_id == c_id)
                     & (CohortMembership.role_id == role_obj.id)
                 )
             ).first()
 
             return membership is not None
 
-    def add_user_role(self, user_id: str, role: str, cohort_id: str) -> Dict[str, Any]:
+    def add_user_role(self, user_id: Any, role: str, cohort_id: str) -> Dict[str, Any]:
         """Assigns a role to a user within a cohort via CohortMembership."""
+        if isinstance(user_id, dict):
+            user_id = user_id.get("user_id") or user_id.get("id") or str(user_id)
+
+        u_str = str(user_id)
+        c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
+
         with Session(self.engine) as session:
-            user = session.exec(
-                select(User).where((User.id == user_id) | (User.mattermost_user_id == user_id))
-            ).first()
+            conditions = [(User.mattermost_user_id == u_str), (User.username == u_str)]
+            if u_str.isdigit():
+                conditions.append(User.id == int(u_str))
+
+            user = session.exec(select(User).where(or_(*conditions))).first()
             if not user or not user.id:
                 raise ValueError(f"User '{user_id}' not found")
 
@@ -252,18 +285,20 @@ class DatabaseService:
                 raise ValueError(f"Role '{role}' not found")
 
             membership = CohortMembership(
-                user_id=user.id, cohort_id=cohort_id, role_id=role_obj.id
+                user_id=user.id, cohort_id=c_id, role_id=role_obj.id
             )
             session.add(membership)
             session.commit()
             return {"user_id": user.id, "role": role, "cohort_id": cohort_id}
 
     def get_sprint_status(self, cohort_id: str, sprint_id: str) -> Optional[str]:
-        """Queries sprint status."""
+        """Queries sprint status handling integer vs string IDs."""
         with Session(self.engine) as session:
+            s_id = int(sprint_id) if str(sprint_id).isdigit() else sprint_id
+            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
             sprint = session.exec(
                 select(Sprint).where(
-                    (Sprint.id == sprint_id) & (Sprint.cohort_id == cohort_id)
+                    (Sprint.id == s_id) & (Sprint.cohort_id == c_id)
                 )
             ).first()
             return sprint.status if sprint else None
@@ -271,11 +306,14 @@ class DatabaseService:
     def set_sprint_status(
         self, cohort_id: str, sprint_id: str, status: str
     ) -> Dict[str, Any]:
-        """Updates or creates a sprint status."""
+        """Updates or creates a sprint status handling integer vs string IDs."""
         with Session(self.engine) as session:
+            s_id = int(sprint_id) if str(sprint_id).isdigit() else sprint_id
+            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
+
             sprint = session.exec(
                 select(Sprint).where(
-                    (Sprint.id == sprint_id) & (Sprint.cohort_id == cohort_id)
+                    (Sprint.id == s_id) & (Sprint.cohort_id == c_id)
                 )
             ).first()
 
@@ -283,8 +321,8 @@ class DatabaseService:
                 sprint.status = status
             else:
                 sprint = Sprint(
-                    id=sprint_id,
-                    cohort_id=cohort_id,
+                    id=s_id,
+                    cohort_id=c_id,
                     name=f"Sprint {sprint_id}",
                     status=status,
                 )
@@ -292,7 +330,7 @@ class DatabaseService:
 
             session.commit()
             session.refresh(sprint)
-            return {"id": sprint.id, "cohort_id": sprint.cohort_id, "status": sprint.status}
+            return {"id": str(sprint.id), "cohort_id": str(sprint.cohort_id), "status": sprint.status}
 
     # -------------------------------------------------------------------------
     # UTILITY METHODS
