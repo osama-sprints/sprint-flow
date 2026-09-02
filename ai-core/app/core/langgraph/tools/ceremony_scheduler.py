@@ -20,6 +20,7 @@ from sqlmodel import Session, select
 from app.core.logging import logger
 from app.models.ceremony import Ceremony
 from app.models.ceremony_type import CeremonyType
+from app.models.cohort import Cohort
 from app.services.database import database_service
 from app.services.admin_service import AdminService, AuthorisationRefusalError
 
@@ -61,7 +62,10 @@ def validate_and_parse_time(raw_time: str) -> tuple[datetime | None, str]:
     """
 
     # Step 1: Try to understand what time the user wrote
-    parsed = dateparser.parse(raw_time, settings={"RETURN_AS_TIMEZONE_AWARE": True})
+    # Do not force timezone awareness here. When the user omits a timezone,
+    # dateparser otherwise attaches the host's local timezone and makes an
+    # ambiguous input look explicit.
+    parsed = dateparser.parse(raw_time)
     if not parsed:
         return None, "Error: I couldn't understand that time. Ask the user to be more specific (e.g. 'Monday 9 AM UTC')."
 
@@ -159,6 +163,16 @@ def schedule_ceremony(
         return error_msg
 
     with Session(database_service.engine) as session:
+
+        # Fail gracefully before creating lookup data or attempting an insert.
+        # The ceremony table has a foreign key to cohort, so letting the
+        # database discover this would raise an IntegrityError and surface as a
+        # generic chat failure.
+        if session.get(Cohort, cohort_id) is None:
+            return (
+                f"Error: Cohort #{cohort_id} does not exist. "
+                "Ask the user to create it or choose an existing cohort."
+            )
 
         # Resolve ceremony type name → CeremonyType row (create if new)
         ctype = _get_or_create_ceremony_type(session, ceremony_type)
