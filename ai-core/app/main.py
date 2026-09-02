@@ -1,5 +1,5 @@
 """This file contains the main application entry point."""
-
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -80,10 +80,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("mattermost_ws_start_failed", error=str(e))
 
+    from app.services.onboarding import followup_poller
+    followup_task = asyncio.create_task(followup_poller(), name="onboarding-followup-poller")
     yield
 
     # Cleanup on shutdown
     await mattermost_ws_listener.stop()
+    followup_task.cancel()
     await cache_service.close()
     await mattermost_client.close()
     if agent._connection_pool:

@@ -331,12 +331,16 @@ class MattermostWebSocketListener:
             return
 
         added = await mattermost_client.add_user_to_team(team["id"], user_id)
+        from app.services.onboarding import handle_arrival
+        await handle_arrival(user_id)
         logger.info(
             "mattermost_user_onboarded",
             user_id=user_id,
             team=settings.MATTERMOST_DEFAULT_TEAM,
             added=added,
         )
+
+        
 
     async def _bot_is_in_thread(self, root_id: str) -> bool:
         """Return True when the bot already participates in a thread.

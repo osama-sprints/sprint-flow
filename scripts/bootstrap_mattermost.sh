@@ -45,7 +45,7 @@ try: print(eval(sys.argv[2]) or '')
 except Exception: print('')
 " "$1" "$2"; }
 
-mmctl() { docker compose exec -T mattermost "$MMCTL" --local "$@"; }
+mmctl() { MSYS_NO_PATHCONV=1 docker compose exec -T mattermost "$MMCTL" --local "$@"; }
 
 # ------------------------------------------------------------------ wait ----
 say "Waiting for Mattermost on port ${MM_PORT}"

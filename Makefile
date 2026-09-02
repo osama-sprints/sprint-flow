@@ -25,6 +25,7 @@ smoke: ## End-to-end test: post a message and wait for the bot's reply
 .PHONY: verify
 verify: ## Run every verification suite (takes several minutes)
 	@set -a; . ./.env; set +a; \
+	MSYS_NO_PATHCONV=1 $(COMPOSE) exec -T ai-core /app/.venv/bin/python - < ai-core/scripts/verify_schema.py && \
 	./scripts/smoke_test.sh && \
 	python3 scripts/verify_routing.py && \
 	python3 scripts/verify_threading.py && \
@@ -69,3 +70,12 @@ branding: ## Rasterise branding/logo.svg into the PNGs Mattermost accepts
 .PHONY: ps
 ps: ## Show service status
 	$(COMPOSE) ps
+
+.PHONY: verify format check
+
+verify:
+	docker exec -it -e PYTHONPATH=. sprintflow-ai-core uv run pytest tests/test_authorisation_sprint1.py -v
+
+format:
+	docker exec -it sprintflow-ai-core uv run ruff format .
+	docker exec -it sprintflow-ai-core uv run ruff check --fix .
