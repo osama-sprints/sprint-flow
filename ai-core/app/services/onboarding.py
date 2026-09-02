@@ -27,18 +27,22 @@ async def resolve_role(mattermost_user_id: str) -> Optional[str]:
     try:
         
         from app.models.cohort_membership import CohortMembership
-        from app.models.person import Person
         from app.models.role import Role
+        from app.services.identity import get_user_by_mattermost_id
     except ImportError:
         logger.warning("onboarding_role_models_unavailable", user_id=mattermost_user_id)
         return None
+
+    user = get_user_by_mattermost_id(mattermost_user_id)
+    if not user:
+        return None 
 
     with Session(database_service.engine) as session:
         stmt = (
             select(Role.name)
             .join(CohortMembership, CohortMembership.role_id == Role.id)
-            .join(Person, Person.id == CohortMembership.person_id)
-            .where(Person.mattermost_user_id == mattermost_user_id)
+            .where(CohortMembership.user_id == user.id , CohortMemebership.status == "active", )
+            .order_by(col(CohortMembership.joined_at).desc())
         )
         return session.exec(stmt).first()
 
