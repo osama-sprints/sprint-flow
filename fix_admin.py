@@ -6,7 +6,7 @@ from sqlmodel import Session
 def main():
     with Session(database_service.engine) as session:
         user = User(
-            mattermost_user_id="223101294",
+            mattermost_user_id="qrfawrhapfbgbdp87boh4cefsc",
             username="admin",
             email="admin@sprintflow.ai",
             hashed_password="placeholder"
