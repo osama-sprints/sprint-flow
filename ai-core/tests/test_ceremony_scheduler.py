@@ -9,6 +9,7 @@ from app.core.langgraph.tools.ceremony_scheduler import (
     amend_ceremony,
     read_ceremonies,
 )
+from app.models.cohort import Cohort
 from app.services.admin_service import AuthorisationRefusalError
 
 @pytest.fixture
@@ -73,6 +74,31 @@ def test_schedule_ceremony_unauthorized(mock_find, mock_admin, mock_session_cls,
     
     assert "Error: You don't have permission" in res
     mock_db_session.add.assert_not_called()
+
+
+@patch("app.core.langgraph.tools.ceremony_scheduler.Session")
+@patch("app.core.langgraph.tools.ceremony_scheduler.admin_service")
+@patch("app.core.langgraph.tools.ceremony_scheduler.find_conflict")
+def test_schedule_ceremony_missing_cohort(mock_find, mock_admin, mock_session_cls, mock_db_session):
+    mock_session_cls.return_value.__enter__.return_value = mock_db_session
+    mock_admin.evaluate_permission.return_value = None
+    mock_db_session.get.return_value = None
+
+    res = schedule_ceremony.invoke({
+        "cohort_id": 202,
+        "ceremony_type": "planning",
+        "raw_time": "tomorrow at 6 PM UTC",
+        "organizer_id": "admin_user",
+    })
+
+    assert res == (
+        "Error: Cohort #202 does not exist. "
+        "Ask the user to create it or choose an existing cohort."
+    )
+    mock_db_session.get.assert_called_once_with(Cohort, 202)
+    mock_db_session.add.assert_not_called()
+    mock_db_session.commit.assert_not_called()
+    mock_find.assert_not_called()
 
 
 @patch("app.core.langgraph.tools.ceremony_scheduler.Session")
