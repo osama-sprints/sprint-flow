@@ -73,9 +73,8 @@ class DatabaseService:
             if settings.ENVIRONMENT != Environment.PRODUCTION:
                 raise
 
-    # -------------------------------------------------------------------------
+    
     # USER & SESSION OPERATIONS
-    # -------------------------------------------------------------------------
 
     async def create_user(self, email: str, password: str, username: str | None = None) -> User:
         """Create a new user."""
@@ -169,9 +168,7 @@ class DatabaseService:
             logger.info("session_name_updated", session_id=session_id, name=name)
             return chat_session
 
-    # -------------------------------------------------------------------------
     # AUTHORISATION & BACK-OFFICE ADMIN OPERATIONS
-    # -------------------------------------------------------------------------
 
     def get_user_roles(
         self, requester_id: Any, cohort_id: Optional[str] = None
@@ -332,9 +329,8 @@ class DatabaseService:
             session.refresh(sprint)
             return {"id": str(sprint.id), "cohort_id": str(sprint.cohort_id), "status": sprint.status}
 
-    # -------------------------------------------------------------------------
+    
     # UTILITY METHODS
-    # -------------------------------------------------------------------------
 
     def get_session_maker(self):
         """Get a session maker for creating database sessions."""

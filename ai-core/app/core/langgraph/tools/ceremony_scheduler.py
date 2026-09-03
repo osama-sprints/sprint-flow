@@ -1,32 +1,6 @@
-"""Ceremony scheduling tools for LangGraph.
+"""Ceremony scheduling tools for LangGraph."""
 
-These tools let the AI agent schedule, amend, and read Agile ceremonies
-(standups, planning, retro, review, demo) for cohorts.
 
-Aligned with the team's data-model-migrations schema:
-  - Uses CeremonyType lookup table via `type_id` FK
-  - Uses `status` field ("scheduled"/"cancelled") instead of `is_active` bool
-  - Uses the shared domain service helpers where possible
-  - Uses `Session(database_service.engine)` pattern (team standard)
-
-Confirmation flow
------------------
-Both write tools (schedule_ceremony, amend_ceremony) enforce a two-step
-human-in-the-loop gate:
-
-  1. Ambiguous / unparseable time -> ask_human is called immediately so the
-     user can supply a corrected input.  The tool then returns a re-invoke
-     hint to the agent; no DB row is written.
-
-  2. Valid time -> ask_human echoes the parsed UTC time back to the user and
-     waits for an explicit "yes" before any DB write is attempted.  If the
-     user declines, the tool aborts cleanly.
-
-ask_human uses LangGraph's interrupt() under the hood, which suspends the
-graph node.  To avoid holding an open SQLModel session across that suspend,
-the DB read phase and DB write phase are kept in separate `with Session`
-blocks, with all ask_human calls in between.
-"""
 
 import dateparser
 from datetime import datetime, timedelta, timezone
@@ -49,9 +23,7 @@ from app.core.langgraph.tools.ask_human import ask_human  # noqa: F401
 # One shared instance — same pattern used by the admin tools
 admin_service = AdminService()
 
-# ---------------------------------------------------------------------------
 # Confirmation helpers
-# ---------------------------------------------------------------------------
 
 # Words that count as "yes" when the user responds to a confirmation prompt.
 _AFFIRMATIVE = frozenset(
@@ -64,9 +36,8 @@ def _is_affirmative(response: str) -> bool:
     return response.strip().lower() in _AFFIRMATIVE
 
 
-# ---------------------------------------------------------------------------
+
 # Internal helpers
-# ---------------------------------------------------------------------------
 
 def _get_or_create_ceremony_type(session: Session, name: str) -> CeremonyType:
     """Get an existing CeremonyType or create one on the fly.
@@ -87,6 +58,11 @@ def _get_or_create_ceremony_type(session: Session, name: str) -> CeremonyType:
     return ct
 
 
+
+
+
+
+
 def validate_and_parse_time(raw_time: str) -> tuple[datetime | None, str]:
     """
     Takes the time the user typed and turns it into a UTC datetime.
@@ -94,9 +70,7 @@ def validate_and_parse_time(raw_time: str) -> tuple[datetime | None, str]:
     """
 
     # Step 1: Try to understand what time the user wrote
-    # Do not force timezone awareness here. When the user omits a timezone,
-    # dateparser otherwise attaches the host's local timezone and makes an
-    # ambiguous input look explicit.
+    
     parsed = dateparser.parse(raw_time)
     if not parsed:
         return None, "Error: I couldn't understand that time. Ask the user to be more specific (e.g. 'Monday 9 AM UTC')."
@@ -155,9 +129,17 @@ def _ceremony_type_name(session: Session, type_id: int) -> str:
     return ct.name.upper() if ct else f"type#{type_id}"
 
 
-# ---------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
 # Tool 1: Schedule a new ceremony
-# ---------------------------------------------------------------------------
 
 @tool
 def schedule_ceremony(
@@ -172,18 +154,14 @@ def schedule_ceremony(
     Books a new ceremony for a cohort and saves it to the database.
 
     The tool enforces a two-step human gate before any DB write:
+
       1. If the time is ambiguous (missing timezone or AM/PM), ask_human
          is called immediately to collect a corrected input. No row is written.
+
+
       2. If the time is valid, ask_human echoes the parsed UTC time and waits
          for an explicit "yes" before proceeding.
 
-    Args:
-        cohort_id:      The ID of the cohort (from the cohort table).
-        ceremony_type:  Type of meeting: standup, planning, retro, review, demo...
-        raw_time:       The time the user typed (must have timezone + AM/PM).
-        organizer_id:   The user ID of the person making the booking.
-        agenda:         Optional meeting agenda or notes.
-        channel_id:     Optional Mattermost channel to post the reminder in.
     """
 
     # Check that the person has permission to schedule ceremonies
@@ -219,7 +197,7 @@ def schedule_ceremony(
         f"for a **{ceremony_type}** ceremony for cohort #{cohort_id}. "
         f"Shall I go ahead and book it? (yes / no)"
     )
-    if not _is_affirmative(confirmation):
+    if not _is_affirmative(confirmation):  
         return (
             "Booking cancelled — no changes were made. "
             "Let me know the correct details to try again."
@@ -227,10 +205,7 @@ def schedule_ceremony(
 
     with Session(database_service.engine) as session:
 
-        # Fail gracefully before creating lookup data or attempting an insert.
-        # The ceremony table has a foreign key to cohort, so letting the
-        # database discover this would raise an IntegrityError and surface as a
-        # generic chat failure.
+    
         if session.get(Cohort, cohort_id) is None:
             return (
                 f"Error: Cohort #{cohort_id} does not exist. "
@@ -268,9 +243,13 @@ def schedule_ceremony(
     return f"SUCCESS: {ctype.name} scheduled at {utc_dt.isoformat()} UTC. Ceremony ID is #{new_ceremony.id}."
 
 
-# ---------------------------------------------------------------------------
+
+
+
+
+
+
 # Tool 2: Update or cancel a ceremony
-# ---------------------------------------------------------------------------
 
 @tool
 def amend_ceremony(
@@ -303,7 +282,9 @@ def amend_ceremony(
 
     # --- Phase 1: Read ceremony and run all stateless guards ---
     # Open session only for reading. Close it before any ask_human call so
-    # no DB connection is held across a LangGraph interrupt.
+   
+
+
     with Session(database_service.engine) as session:
 
         ceremony = session.get(Ceremony, ceremony_id)
@@ -349,6 +330,12 @@ def amend_ceremony(
         logger.info(f"Ceremony #{ceremony_id} cancelled by {organizer_id}")
         return f"SUCCESS: Ceremony #{ceremony_id} has been cancelled."
 
+
+
+
+
+
+
     # --- Phase 2b: Reschedule path — validate time then confirm ---
     new_utc_dt: datetime | None = None
     if new_raw_time:
@@ -375,6 +362,11 @@ def amend_ceremony(
             return "Reschedule cancelled — no changes were made."
 
         new_utc_dt = utc_dt
+
+
+
+
+
 
     # --- Phase 3: Write the update ---
     with Session(database_service.engine) as session:
@@ -403,9 +395,15 @@ def amend_ceremony(
     return f"SUCCESS: Ceremony #{ceremony_id} has been updated."
 
 
-# ---------------------------------------------------------------------------
+
+
+
+
+
+
+
 # Tool 3: Read upcoming ceremonies for a cohort
-# ---------------------------------------------------------------------------
+
 
 @tool
 def read_ceremonies(cohort_id: int, include_inactive: bool = False) -> str:

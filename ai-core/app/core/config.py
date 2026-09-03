@@ -153,7 +153,14 @@ class Settings:
         )
         self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
-        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL for backwards compatibility
+        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        self.LANGFUSE_DEBUG = os.getenv("LANGFUSE_DEBUG", "false").lower() in ("true", "1", "t", "yes")
+        # Sample rate for traces (1.0 = 100%, reduce for high-volume apps to lower costs)
+        try:
+            self.LANGFUSE_SAMPLE_RATE = float(os.getenv("LANGFUSE_SAMPLE_RATE", "1.0"))
+        except ValueError:
+            self.LANGFUSE_SAMPLE_RATE = 1.0
 
         # LLM Configuration — ALL traffic goes through the LiteLLM proxy.
         # There are no direct provider SDKs or provider keys in this stack:

@@ -29,7 +29,7 @@ from app.core.middleware import (
     MetricsMiddleware,
     ProfilingMiddleware,
 )
-from app.core.observability import langfuse_init
+from app.core.observability import langfuse_init, shutdown_langfuse
 from app.services.database import database_service
 from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
@@ -92,6 +92,8 @@ async def lifespan(app: FastAPI):
     if agent._connection_pool:
         await agent._connection_pool.close()
         logger.info("connection_pool_closed")
+    # Flush pending Langfuse traces before shutdown
+    shutdown_langfuse()
     logger.info("application_shutdown")
 
 
