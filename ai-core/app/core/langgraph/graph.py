@@ -151,7 +151,7 @@ class LangGraphAgent:
         SYSTEM_PROMPT = load_system_prompt(
             username=username,
             long_term_memory=state.long_term_memory,
-            specialisation_context=describe_specialisation(state.specialisation),
+            specialisation_context=describe_specialisation(state.specialisation, state.sub_intents),
         )
 
         # Prepare messages with system prompt
