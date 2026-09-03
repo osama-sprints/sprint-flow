@@ -8,6 +8,24 @@ Aligned with the team's data-model-migrations schema:
   - Uses `status` field ("scheduled"/"cancelled") instead of `is_active` bool
   - Uses the shared domain service helpers where possible
   - Uses `Session(database_service.engine)` pattern (team standard)
+
+Confirmation flow
+-----------------
+Both write tools (schedule_ceremony, amend_ceremony) enforce a two-step
+human-in-the-loop gate:
+
+  1. Ambiguous / unparseable time -> ask_human is called immediately so the
+     user can supply a corrected input.  The tool then returns a re-invoke
+     hint to the agent; no DB row is written.
+
+  2. Valid time -> ask_human echoes the parsed UTC time back to the user and
+     waits for an explicit "yes" before any DB write is attempted.  If the
+     user declines, the tool aborts cleanly.
+
+ask_human uses LangGraph's interrupt() under the hood, which suspends the
+graph node.  To avoid holding an open SQLModel session across that suspend,
+the DB read phase and DB write phase are kept in separate `with Session`
+blocks, with all ask_human calls in between.
 """
 
 import dateparser
@@ -30,6 +48,20 @@ from app.core.langgraph.tools.ask_human import ask_human  # noqa: F401
 
 # One shared instance — same pattern used by the admin tools
 admin_service = AdminService()
+
+# ---------------------------------------------------------------------------
+# Confirmation helpers
+# ---------------------------------------------------------------------------
+
+# Words that count as "yes" when the user responds to a confirmation prompt.
+_AFFIRMATIVE = frozenset(
+    {"yes", "y", "ok", "sure", "go", "confirm", "confirmed", "go ahead", "yep", "yeah"}
+)
+
+
+def _is_affirmative(response: str) -> bool:
+    """Return True if the user's free-text response is a clear confirmation."""
+    return response.strip().lower() in _AFFIRMATIVE
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +155,9 @@ def _ceremony_type_name(session: Session, type_id: int) -> str:
     return ct.name.upper() if ct else f"type#{type_id}"
 
 
+# ---------------------------------------------------------------------------
 # Tool 1: Schedule a new ceremony
+# ---------------------------------------------------------------------------
 
 @tool
 def schedule_ceremony(
@@ -136,7 +170,12 @@ def schedule_ceremony(
 ) -> str:
     """
     Books a new ceremony for a cohort and saves it to the database.
-    You MUST confirm all the details with the user via ask_human before calling this.
+
+    The tool enforces a two-step human gate before any DB write:
+      1. If the time is ambiguous (missing timezone or AM/PM), ask_human
+         is called immediately to collect a corrected input. No row is written.
+      2. If the time is valid, ask_human echoes the parsed UTC time and waits
+         for an explicit "yes" before proceeding.
 
     Args:
         cohort_id:      The ID of the cohort (from the cohort table).
@@ -160,7 +199,31 @@ def schedule_ceremony(
     # Validate the time the user typed
     utc_dt, error_msg = validate_and_parse_time(raw_time)
     if error_msg:
-        return error_msg
+        # Time is ambiguous or unparseable — pause and collect a corrected input.
+        # ask_human uses LangGraph interrupt() to suspend graph execution until
+        # the user replies; we return the response as a re-invoke hint.
+        clarified = ask_human.invoke(
+            f"{error_msg}\n\n"
+            "Please type a corrected time including AM/PM and timezone "
+            "(e.g. 'Monday 9 AM UTC'):"
+        )
+        return (
+            f"The user has provided a corrected time: {clarified!r}. "
+            "Please call schedule_ceremony again with this updated time."
+        )
+
+    # Echo the parsed time and get explicit confirmation before touching the DB.
+    human_display = utc_dt.strftime("%A, %d %B %Y at %H:%M UTC")
+    confirmation = ask_human.invoke(
+        f"I've understood the time as **{human_display}** "
+        f"for a **{ceremony_type}** ceremony for cohort #{cohort_id}. "
+        f"Shall I go ahead and book it? (yes / no)"
+    )
+    if not _is_affirmative(confirmation):
+        return (
+            "Booking cancelled — no changes were made. "
+            "Let me know the correct details to try again."
+        )
 
     with Session(database_service.engine) as session:
 
@@ -174,7 +237,7 @@ def schedule_ceremony(
                 "Ask the user to create it or choose an existing cohort."
             )
 
-        # Resolve ceremony type name → CeremonyType row (create if new)
+        # Resolve ceremony type name -> CeremonyType row (create if new)
         ctype = _get_or_create_ceremony_type(session, ceremony_type)
 
         # Make sure there's no other meeting at the same time for this cohort
@@ -205,7 +268,9 @@ def schedule_ceremony(
     return f"SUCCESS: {ctype.name} scheduled at {utc_dt.isoformat()} UTC. Ceremony ID is #{new_ceremony.id}."
 
 
+# ---------------------------------------------------------------------------
 # Tool 2: Update or cancel a ceremony
+# ---------------------------------------------------------------------------
 
 @tool
 def amend_ceremony(
@@ -217,7 +282,16 @@ def amend_ceremony(
 ) -> str:
     """
     Changes the time or agenda of an existing ceremony, or cancels it.
-    Confirm the change with the user via ask_human before calling this.
+
+    Enforces:
+      - Ceremonies that have already passed cannot be edited or cancelled.
+      - Only the original organizer can make changes.
+      - Ambiguous new times pause for clarification via ask_human.
+      - Valid new times are confirmed with the user before writing.
+      - Cancellations require an explicit confirmation.
+
+    The DB read and DB write live in separate session blocks so that no
+    SQLModel session is held open across a LangGraph ask_human interrupt.
 
     Args:
         ceremony_id:    The ID of the ceremony to update.
@@ -227,9 +301,11 @@ def amend_ceremony(
         cancel:         Set to True to cancel the ceremony.
     """
 
+    # --- Phase 1: Read ceremony and run all stateless guards ---
+    # Open session only for reading. Close it before any ask_human call so
+    # no DB connection is held across a LangGraph interrupt.
     with Session(database_service.engine) as session:
 
-        # Find the ceremony in the database
         ceremony = session.get(Ceremony, ceremony_id)
 
         if not ceremony:
@@ -238,25 +314,75 @@ def amend_ceremony(
         if ceremony.status == "cancelled":
             return f"Error: Ceremony #{ceremony_id} is already cancelled."
 
+        # Guard: cannot edit or cancel a ceremony after it has already occurred.
+        if ceremony.scheduled_at <= datetime.now(timezone.utc):
+            return (
+                f"Error: Ceremony #{ceremony_id} has already passed "
+                "and cannot be edited or cancelled."
+            )
+
         # Only the original organizer can make changes
         if ceremony.organizer != organizer_id:
-            return f"Error: Only the original organizer ({ceremony.organizer}) can change this ceremony."
+            return (
+                f"Error: Only the original organizer ({ceremony.organizer}) "
+                "can change this ceremony."
+            )
 
-        # Handle cancellation
-        if cancel:
+        # Capture everything needed from the row before the session closes
+        cohort_id = ceremony.cohort_id
+        current_type_name = _ceremony_type_name(session, ceremony.type_id)
+
+    # --- Phase 2a: Cancellation path ---
+    if cancel:
+        confirmation = ask_human.invoke(
+            f"You're about to **cancel** ceremony #{ceremony_id} "
+            f"({current_type_name}). This cannot be undone. Confirm? (yes / no)"
+        )
+        if not _is_affirmative(confirmation):
+            return "Cancellation aborted — no changes were made."
+
+        with Session(database_service.engine) as session:
+            ceremony = session.get(Ceremony, ceremony_id)
             ceremony.status = "cancelled"
             session.commit()
-            logger.info(f"Ceremony #{ceremony_id} cancelled by {organizer_id}")
-            return f"SUCCESS: Ceremony #{ceremony_id} has been cancelled."
 
-        # Handle rescheduling
-        if new_raw_time:
-            utc_dt, error_msg = validate_and_parse_time(new_raw_time)
-            if error_msg:
-                return error_msg
+        logger.info(f"Ceremony #{ceremony_id} cancelled by {organizer_id}")
+        return f"SUCCESS: Ceremony #{ceremony_id} has been cancelled."
 
+    # --- Phase 2b: Reschedule path — validate time then confirm ---
+    new_utc_dt: datetime | None = None
+    if new_raw_time:
+        utc_dt, error_msg = validate_and_parse_time(new_raw_time)
+        if error_msg:
+            # Ambiguous or unparseable — pause and collect a corrected input.
+            clarified = ask_human.invoke(
+                f"{error_msg}\n\n"
+                "Please type a corrected time including AM/PM and timezone "
+                "(e.g. 'Monday 9 AM UTC'):"
+            )
+            return (
+                f"The user has provided a corrected time: {clarified!r}. "
+                "Please call amend_ceremony again with this updated time."
+            )
+
+        # Echo the parsed time and get explicit confirmation before writing.
+        human_display = utc_dt.strftime("%A, %d %B %Y at %H:%M UTC")
+        confirmation = ask_human.invoke(
+            f"I'll reschedule ceremony #{ceremony_id} ({current_type_name}) to "
+            f"**{human_display}**. Shall I go ahead? (yes / no)"
+        )
+        if not _is_affirmative(confirmation):
+            return "Reschedule cancelled — no changes were made."
+
+        new_utc_dt = utc_dt
+
+    # --- Phase 3: Write the update ---
+    with Session(database_service.engine) as session:
+        ceremony = session.get(Ceremony, ceremony_id)
+
+        if new_utc_dt is not None:
             # Make sure the new time doesn't clash with another ceremony
-            conflict = find_conflict(session, ceremony.cohort_id, utc_dt, exclude_id=ceremony_id)
+            conflict = find_conflict(session, cohort_id, new_utc_dt, exclude_id=ceremony_id)
             if conflict:
                 conflict_name = _ceremony_type_name(session, conflict.type_id)
                 return (
@@ -264,7 +390,7 @@ def amend_ceremony(
                     f"{conflict.scheduled_at.isoformat()} UTC (within 30 minutes)."
                 )
 
-            ceremony.scheduled_at = utc_dt
+            ceremony.scheduled_at = new_utc_dt
             ceremony.raw_input = new_raw_time
 
         # Handle agenda update
@@ -277,7 +403,9 @@ def amend_ceremony(
     return f"SUCCESS: Ceremony #{ceremony_id} has been updated."
 
 
+# ---------------------------------------------------------------------------
 # Tool 3: Read upcoming ceremonies for a cohort
+# ---------------------------------------------------------------------------
 
 @tool
 def read_ceremonies(cohort_id: int, include_inactive: bool = False) -> str:
