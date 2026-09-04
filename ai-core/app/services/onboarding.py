@@ -19,7 +19,45 @@ _FOLLOWUP_DELAY = timedelta(days=3)
 
 _MAX_FOLLOWUPS = 1
 
-_DEFAULT_ROLE = "member"
+#_DEFAULT_ROLE = "member"
+
+_ROLE_GREETINGS = {
+    "learner": (
+        "Welcome to SprintFlow! You're joining as a **learner** -- "
+        "expect daily standups, sprint ceremonies, and a mentor checking in "
+        "on your progress. I'll follow up in a few days to see how things "
+        "are going."
+    ),
+    "mentor": (
+        "Welcome to SprintFlow! You're joining as a **mentor** -- "
+        "you'll be guiding learners through their sprints and reviewing "
+        "their daily progress. I'll check in with you in a few days."
+    ),
+    "manager": (
+        "Welcome to SprintFlow! You're joining as a **manager** -- "
+        "you'll have visibility into cohort progress, sprints, and any "
+        "escalations that need attention. I'll follow up in a few days."
+    ),
+    "coordinator": (
+        "Welcome to SprintFlow! You're joining as a **coordinator** -- "
+        "you'll be helping schedule ceremonies and keep cohorts on track. "
+        "I'll check in with you in a few days."
+    ),
+}
+
+
+_ROLE_FOLLOWUPS = {
+    "learner": "Checking in -- how are your first sprints going? Any blockers I can help surface?",
+    "mentor": "Checking in -- how's mentoring going so far? Let me know if you need anything.",
+    "manager": "Checking in -- settling in okay? Let me know if you need a rundown of any cohort.",
+    "coordinator": "Checking in -- how's scheduling going so far? Let me know if you need anything.",
+}
+ 
+_GENERIC_GREETING = (
+    "Welcome to SprintFlow! Glad to have you here -- "
+    "I'll follow up shortly once your role is set up."
+)
+_GENERIC_FOLLOWUP = "Checking in -- how's it going so far? Let me know if you need anything."
 
 
 async def resolve_role(mattermost_user_id: str) -> Optional[str]:
@@ -46,7 +84,7 @@ async def resolve_role(mattermost_user_id: str) -> Optional[str]:
         )
         return session.exec(stmt).first()
 
-
+'''
 def _greeting_for(role: Optional[str]) -> str:
    
     if role:
@@ -58,7 +96,30 @@ def _greeting_for(role: Optional[str]) -> str:
         "Welcome to SprintFlow! Glad to have you here -- "
         "I'll follow up shortly once your role is set up."
     )
+'''
+def _greeting_for(role: Optional[str]) -> str:
+    """Compose the initial, role-specific greeting text.
+ 
+    Args:
+        role: The resolved role name, or None if not yet known.
+ 
+    Returns:
+        str: Markdown-rendered greeting text, tailored to the role when a
+            template for it exists, generic otherwise.
+    """
+    return _ROLE_GREETINGS.get(role, _GENERIC_GREETING) if role else _GENERIC_GREETING
 
+
+def _followup_text(role: Optional[str]) -> str:
+    """Compose the 3-day follow-up text, tailored by role when known.
+ 
+    Args:
+        role: The resolved role name, or None if still unknown.
+ 
+    Returns:
+        str: Markdown-rendered follow-up text.
+    """
+    return _ROLE_FOLLOWUPS.get(role, _GENERIC_FOLLOWUP) if role else _GENERIC_FOLLOWUP
 
 async def handle_arrival(mattermost_user_id: str) -> None:
 
@@ -71,7 +132,7 @@ async def handle_arrival(mattermost_user_id: str) -> None:
         role = await resolve_role(mattermost_user_id)
 
         state = state or OnboardingState(user_id=mattermost_user_id)
-        state.role = role or _DEFAULT_ROLE
+        state.role = role 
         state.greeted_at = datetime.now(UTC)
         
         state.next_followup_due_at = datetime.now(UTC) + _FOLLOWUP_DELAY
@@ -97,14 +158,10 @@ async def _send_followup(state: OnboardingState) -> None:
         logger.warning("onboarding_followup_dm_failed", user_id=state.user_id)
         return
 
-    text = (
-        f"Checking in -- how's it going so far as a **{role}**? Let me know if you need anything."
-        if role
-        else "Checking in -- how's it going so far? Let me know if you need anything."
-    )
-    await mattermost_client.create_post(channel["id"], text)
 
-    state.role = role or state.role
+    await mattermost_client.create_post(channel["id"], _followup_text(role))
+
+    state.role = role 
     state.followups_sent += 1
     state.next_followup_due_at = None
     logger.info("onboarding_followup_sent", user_id=state.user_id, role=role)

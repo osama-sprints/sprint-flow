@@ -145,6 +145,7 @@ services:
     volumes:
       - ./ai-core/app:/app/app
       - ./ai-core/alembic:/app/alembic
+      - ./ai-core/tests:/app/tests
       - ./ai-core/logs:/app/logs
     healthcheck:
       # python:3.13-slim has no curl. urlopen raises on 503, which is what we
