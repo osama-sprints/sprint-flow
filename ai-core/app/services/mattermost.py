@@ -205,6 +205,21 @@ class MattermostClient:
             logger.warning("mattermost_get_user_failed", user_id=user_id, error=str(e))
             return None
 
+    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Look up a user by handle.
+
+        Args:
+            username: The handle, without the leading ``@``.
+
+        Returns:
+            dict | None: The user, or None when no account has that handle.
+        """
+        try:
+            return await self._request("GET", f"/users/username/{username.strip().lstrip('@')}")
+        except Exception as e:
+            logger.info("mattermost_user_username_lookup_miss", username=username, error=str(e))
+            return None
+
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         """Look up a user by email address.
 
