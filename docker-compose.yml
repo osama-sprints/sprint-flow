@@ -83,6 +83,11 @@ services:
       # IP. The hostname must appear here VERBATIM; no wildcards, and the port
       # is stripped before comparison. Without it the webhook fails silently.
       MM_SERVICESETTINGS_ALLOWEDUNTRUSTEDINTERNALCONNECTIONS: "ai-core"
+      # Read by the rich-artifacts server plugin. The plugin process inherits
+      # the server's environment, so this configures it without a System
+      # Console visit; the plugin's own settings override these when set.
+      SPRINTFLOW_AICORE_URL: "http://ai-core:8000"
+      SPRINTFLOW_PLUGIN_TOKEN: ${RICH_MEDIA_PLUGIN_TOKEN:-}
 
       # Lets the bootstrap script drive mmctl over the local socket.
       MM_SERVICESETTINGS_ENABLELOCALMODE: "true"
@@ -145,6 +150,10 @@ services:
     volumes:
       - ./ai-core/app:/app/app
       - ./ai-core/alembic:/app/alembic
+      # Tests are mounted so `make test` runs the CURRENT checkout. Without
+      # this the container keeps the copy baked into the image and a test edit
+      # appears to have no effect until the image is rebuilt.
+      - ./ai-core/tests:/app/tests
       - ./ai-core/logs:/app/logs
     healthcheck:
       # python:3.13-slim has no curl. urlopen raises on 503, which is what we

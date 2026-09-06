@@ -61,6 +61,8 @@ sprintflow/
 │   └── init/01-create-databases.sh    # the second database (Mattermost)
 ├── mattermost/
 │   └── volumes/app/mattermost/{config,data,logs,plugins,client/plugins}
+├── plugins/rich-artifacts/       # Mattermost plugin: diagrams, charts, sandboxed
+│                                 #   React, images; `make dist && make deploy`
 ├── reports/                      # one report per Sprint 1 task (see "Sprint 1 capabilities")
 ├── scripts/                      # host-side, stdlib-only verifiers (make verify)
 │   ├── bootstrap_mattermost.sh   # admin, bot, lockdown, team, channels, branding
