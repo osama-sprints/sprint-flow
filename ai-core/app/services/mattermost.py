@@ -14,6 +14,7 @@ to open conversations on its own.
 from typing import (
     Any,
     Dict,
+    List,
     Optional,
 )
 
@@ -265,14 +266,26 @@ class MattermostClient:
         channel_id: str,
         message: str,
         root_id: Optional[str] = None,
+        *,
+        post_type: Optional[str] = None,
+        props: Optional[Dict[str, Any]] = None,
+        file_ids: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Post a message to a channel.
 
         Args:
             channel_id: Target channel id.
-            message: Message body (Markdown is rendered by Mattermost).
+            message: Message body (Markdown is rendered by Mattermost). This is
+                also the fallback every client without the plugin shows, so it
+                must read as a complete answer on its own.
             root_id: Root post id to reply under. Must be a thread ROOT —
                 Mattermost rejects a root_id that is itself a reply.
+            post_type: Custom post type for a plugin-rendered reply. Mattermost
+                stores this in a varchar(26) column and rejects anything longer
+                with a 500.
+            props: Post props. Kept small by contract — artifact references, not
+                artifact content.
+            file_ids: Ids returned by ``upload_file``, attached natively.
 
         Returns:
             dict | None: The created post, or None on failure.
@@ -280,6 +293,12 @@ class MattermostClient:
         payload: Dict[str, Any] = {"channel_id": channel_id, "message": message}
         if root_id:
             payload["root_id"] = root_id
+        if post_type:
+            payload["type"] = post_type
+        if props:
+            payload["props"] = props
+        if file_ids:
+            payload["file_ids"] = file_ids
 
         try:
             post = await self._request("POST", "/posts", json=payload)
@@ -287,7 +306,15 @@ class MattermostClient:
             logger.exception("mattermost_create_post_failed", channel_id=channel_id, error=str(e))
             return None
 
-        logger.info("mattermost_post_created", channel_id=channel_id, post_id=post.get("id"), root_id=root_id)
+        logger.info(
+            "mattermost_post_created",
+            channel_id=channel_id,
+            post_id=post.get("id"),
+            root_id=root_id,
+            post_type=post_type,
+            artifact_count=len(props.get("sf_artifacts", [])) if props else 0,
+            file_count=len(file_ids or []),
+        )
         return post
 
     async def reply_to_post(
@@ -295,6 +322,10 @@ class MattermostClient:
         channel_id: str,
         message: str,
         trigger_post_id: Optional[str],
+        *,
+        post_type: Optional[str] = None,
+        props: Optional[Dict[str, Any]] = None,
+        file_ids: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Reply in the same thread as the triggering post.
 
@@ -302,16 +333,24 @@ class MattermostClient:
         itself a reply, we resolve its root first; posting with a non-root
         root_id is rejected with a 400 and the user would see no answer at all.
 
+        The rich-media arguments are forwarded rather than dropped: forgetting
+        them here would make artifacts render in direct messages and silently
+        degrade to plain text in channels, which is exactly the transport
+        divergence this module exists to prevent.
+
         Args:
             channel_id: Target channel id.
             message: Message body.
             trigger_post_id: The post that triggered this reply, if any.
+            post_type: Custom post type, forwarded to ``create_post``.
+            props: Post props, forwarded to ``create_post``.
+            file_ids: Attachment ids, forwarded to ``create_post``.
 
         Returns:
             dict | None: The created post, or None on failure.
         """
         if not trigger_post_id:
-            return await self.create_post(channel_id, message)
+            return await self.create_post(channel_id, message, post_type=post_type, props=props, file_ids=file_ids)
 
         root_id = trigger_post_id
         post = await self.get_post(trigger_post_id)
@@ -319,7 +358,125 @@ class MattermostClient:
             # The trigger was already inside a thread — attach to that thread's root.
             root_id = post["root_id"]
 
-        return await self.create_post(channel_id, message, root_id=root_id)
+        return await self.create_post(
+            channel_id, message, root_id=root_id, post_type=post_type, props=props, file_ids=file_ids
+        )
+
+    async def update_post(
+        self,
+        post_id: str,
+        *,
+        message: Optional[str] = None,
+        props: Optional[Dict[str, Any]] = None,
+        file_ids: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Update an already-published post in place.
+
+        This is how a pending artifact becomes a finished one: the reply is
+        posted immediately with a loading card and the worker fills it in.
+
+        It is a PATCH, deliberately. ``PUT /posts/{id}`` REPLACES the post from
+        the body, so a body without ``channel_id`` updates the post with an
+        empty channel — and when that update attaches new ``file_ids``,
+        Mattermost stamps that empty channel onto each FileInfo row, erasing
+        the channel the upload had recorded. Every later read of the file then
+        answers 404 "Unable to find the existing channel", and the webapp can
+        only show its blurred mini-preview. That was the "pixelated images".
+        PATCH merges into the stored post, so the channel survives.
+
+        Args:
+            post_id: The post to update.
+            message: New message body, or None to keep the current one.
+            props: New props map, already merged by the caller.
+            file_ids: New attachment list, already merged by the caller.
+
+        Returns:
+            dict | None: The updated post, or None on failure.
+        """
+        payload: Dict[str, Any] = {}
+        if message is not None:
+            payload["message"] = message
+        if props is not None:
+            payload["props"] = props
+        if file_ids is not None:
+            payload["file_ids"] = file_ids
+
+        try:
+            post = await self._request("PUT", f"/posts/{post_id}/patch", json=payload)
+        except Exception as e:
+            logger.exception("mattermost_update_post_failed", post_id=post_id, error=str(e))
+            return None
+
+        logger.info("mattermost_post_updated", post_id=post_id, file_count=len(file_ids or []))
+        return post
+
+    async def upload_file(
+        self,
+        channel_id: str,
+        filename: str,
+        content: bytes,
+        mime_type: str = "application/octet-stream",
+    ) -> Optional[str]:
+        """Upload one file and return its id, ready to attach to a post.
+
+        This uses Mattermost's simple upload form — the channel and filename as
+        QUERY parameters with the raw bytes as the body — rather than multipart.
+        Multipart looks equivalent and is not: the server parses the parts in
+        order, and httpx writes the file part before the ``channel_id`` field,
+        so the FileInfo row was created with an EMPTY ChannelId. Such a file
+        uploads and attaches without error, and then every read of it answers
+        404 "Unable to find the existing channel" — so the webapp can never
+        fetch the real image and shows its blurred mini-preview placeholder
+        instead. That is what "the generated images are pixelated" was.
+
+        Args:
+            channel_id: Channel the file belongs to. The bot must be a member.
+            filename: Name shown in the attachment.
+            content: The bytes to upload.
+            mime_type: Content type of the bytes.
+
+        Returns:
+            str | None: The file id, or None on failure.
+        """
+        try:
+            result = await self._request(
+                "POST",
+                "/files",
+                params={"channel_id": channel_id, "filename": filename},
+                content=content,
+                headers={"Content-Type": mime_type},
+                timeout=settings.MATTERMOST_UPLOAD_TIMEOUT,
+            )
+        except Exception as e:
+            logger.exception("mattermost_upload_failed", channel_id=channel_id, filename=filename, error=str(e))
+            return None
+
+        infos = result.get("file_infos") or []
+        if not infos:
+            logger.warning("mattermost_upload_returned_no_file", channel_id=channel_id, filename=filename)
+            return None
+
+        info = infos[0]
+        file_id = info.get("id")
+        if not info.get("channel_id"):
+            # Refuse to attach a file the viewer will never be able to load.
+            logger.error(
+                "mattermost_upload_missing_channel",
+                file_id=file_id,
+                channel_id=channel_id,
+                filename=filename,
+            )
+            return None
+
+        logger.info(
+            "mattermost_file_uploaded",
+            channel_id=channel_id,
+            file_id=file_id,
+            size=len(content),
+            width=info.get("width"),
+            height=info.get("height"),
+        )
+        return file_id
 
     async def create_direct_channel(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Open (or fetch) the DM channel between the bot and a user.

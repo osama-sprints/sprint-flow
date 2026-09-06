@@ -355,9 +355,33 @@ class LangGraphAgent:
             messages = prepare_messages(state.messages, system_prompt)
             tool_group = list(self.tool_groups.get(spec.tool_group, ()))
 
+            # A composition specialist must call a tool on its first pass:
+            # answering in prose means the person asked for a diagram and got a
+            # description of one. Once a tool has run (the previous message is
+            # its result) the model is free to write the reply — forcing it
+            # again would loop.
+            last_message = state.messages[-1] if state.messages else None
+            returning_from_tool = isinstance(last_message, ToolMessage)
+            tool_choice = "any" if (spec.force_tool_use and tool_group and not returning_from_tool) else None
+
             try:
                 with llm_inference_duration_seconds.labels(model=model_name).time():
-                    response_message = await self.llm_service.call(dump_messages(messages), tools=tool_group)
+                    try:
+                        response_message = await self.llm_service.call(
+                            dump_messages(messages), tools=tool_group, tool_choice=tool_choice
+                        )
+                    except Exception as forced_error:
+                        if tool_choice is None:
+                            raise
+                        # Not every model behind the proxy accepts a forced tool
+                        # choice. Falling back to an unforced call keeps the turn
+                        # alive; the prompt still asks for the tool.
+                        logger.warning(
+                            "forced_tool_choice_rejected",
+                            specialist=spec.node_name,
+                            error=str(forced_error),
+                        )
+                        response_message = await self.llm_service.call(dump_messages(messages), tools=tool_group)
             except Exception as e:
                 logger.error(
                     "llm_call_failed_all_models",

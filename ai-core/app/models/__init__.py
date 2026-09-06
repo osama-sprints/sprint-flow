@@ -18,13 +18,15 @@ from app.models.domain_base import (
 )
 from app.models.escalation_ticket import EscalationTicket
 from app.models.onboarding_step import OnboardingStep
+from app.models.rich_artifact import RichArtifact
 from app.models.role import Role
 from app.models.sprint import Sprint
 from app.models.user import User
 
-# Every application-owned table, in dependency order. Verification scripts and
-# the migration compare against this list.
-DOMAIN_TABLES: tuple[str, ...] = (
+# The tables revision 0001 creates, in dependency order. Kept separate from
+# DOMAIN_TABLES because 0001's downgrade drops exactly these, and later
+# revisions add tables of their own.
+INITIAL_DOMAIN_TABLES: tuple[str, ...] = (
     "users",
     "roles",
     "ceremony_types",
@@ -38,8 +40,17 @@ DOMAIN_TABLES: tuple[str, ...] = (
     "onboarding_steps",
 )
 
+# Tables added after 0001, newest revision last.
+LATER_DOMAIN_TABLES: tuple[str, ...] = ("rich_artifacts",)
+
+# Every application-owned table, in dependency order. Verification scripts
+# compare against this list.
+DOMAIN_TABLES: tuple[str, ...] = INITIAL_DOMAIN_TABLES + LATER_DOMAIN_TABLES
+
 __all__ = [
     "DOMAIN_TABLES",
+    "INITIAL_DOMAIN_TABLES",
+    "LATER_DOMAIN_TABLES",
     "Ceremony",
     "CeremonyAmendment",
     "CeremonyType",
@@ -49,6 +60,7 @@ __all__ = [
     "DomainBase",
     "EscalationTicket",
     "OnboardingStep",
+    "RichArtifact",
     "Role",
     "Sprint",
     "User",

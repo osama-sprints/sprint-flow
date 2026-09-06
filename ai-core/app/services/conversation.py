@@ -20,6 +20,11 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.requester import current_requester
 from app.schemas.chat import Message
+from app.schemas.rich_media import (
+    RICH_MEDIA_POST_TYPE,
+    ReplyEnvelope,
+)
+from app.services import rich_media
 from app.services.agent import agent
 from app.services.identity import resolve_requester
 from app.services.mattermost import mattermost_client
@@ -161,6 +166,18 @@ async def answer_and_reply(message: IncomingMessage) -> None:
     )
     current_requester.set(requester)
 
+    # Visual output is staged against THIS turn. A resumed conversation opens a
+    # new turn id, so artifacts staged before an interrupt can never be
+    # published a second time by the turn that answers it.
+    turn = rich_media.begin_turn(
+        channel_id=channel_id,
+        root_id=message.root_id,
+        requester_user_id=requester.user_id,
+        mattermost_user_id=message.user_id,
+        session_id=session_id,
+    )
+    envelope = ReplyEnvelope()
+
     try:
         result = await agent.get_response(
             [Message(role="user", content=message.text)],
@@ -182,17 +199,25 @@ async def answer_and_reply(message: IncomingMessage) -> None:
         if not reply:
             logger.warning("mattermost_agent_returned_empty", session_id=session_id, source=source)
             reply = FALLBACK_REPLY
+        envelope = await rich_media.collect(turn.turn_id)
     except Exception as e:
         logger.exception("mattermost_agent_turn_failed", session_id=session_id, source=source, error=str(e))
         reply = FALLBACK_REPLY
     finally:
         current_requester.set(None)
+        rich_media.end_turn()
 
-    await _deliver(message, reply)
-    logger.info("mattermost_agent_turn_completed", session_id=session_id, source=source)
+    await _deliver(message, reply, envelope)
+    logger.info(
+        "mattermost_agent_turn_completed",
+        session_id=session_id,
+        source=source,
+        turn_id=turn.turn_id,
+        artifact_count=len(envelope.artifacts),
+    )
 
 
-async def _deliver(message: IncomingMessage, reply: str) -> None:
+async def _deliver(message: IncomingMessage, reply: str, envelope: ReplyEnvelope | None = None) -> None:
     """Post the reply with the threading shape that suits the channel.
 
     Three cases, in priority order:
@@ -205,19 +230,101 @@ async def _deliver(message: IncomingMessage, reply: str) -> None:
     3. Direct or group message — reply as a plain message. A 1-on-1 has nothing
        to disambiguate from, and threading every answer reads as clutter.
 
+    Publication happens exactly once, here. Tools stage artifacts; they never
+    post, so there is no path by which one turn produces two replies.
+
     Args:
         message: The message being answered.
-        reply: The agent's answer.
+        reply: The agent's answer. Always a complete answer on its own.
+        envelope: Staged artifacts, when the turn produced any.
+    """
+    rich = envelope is not None and not envelope.is_empty()
+
+    # Reconciliation, not a lease: creating the post and recording that we
+    # created it are two steps, and a crash between them would publish the reply
+    # twice. The turn id is stamped into the post's props, so a retry finds the
+    # published post and adopts it instead of posting again.
+    if rich and envelope is not None:
+        existing = await rich_media.already_published(envelope.turn_id)
+        if existing:
+            logger.info(
+                "reply_already_published",
+                turn_id=envelope.turn_id,
+                post_id=existing,
+                channel_id=message.channel_id,
+            )
+            return
+    post_type = RICH_MEDIA_POST_TYPE if rich else None
+    props = envelope.to_props() if rich and envelope else None
+    file_ids = list(envelope.file_ids) if rich and envelope else None
+
+    posted = await _publish(message, reply, post_type, props, file_ids)
+
+    if posted is None and rich:
+        # The artifacts are decoration; the answer is not. A props map the
+        # server rejects must never cost the person their reply, so fall back to
+        # the same text with nothing attached.
+        logger.warning(
+            "rich_reply_rejected_falling_back_to_text",
+            channel_id=message.channel_id,
+            artifact_count=len(envelope.artifacts) if envelope else 0,
+        )
+        posted = await _publish(message, reply, None, None, None)
+
+    if posted is None:
+        logger.error("reply_delivery_failed", channel_id=message.channel_id, source=message.source)
+        return
+
+    if rich and envelope is not None:
+        await rich_media.record_publication(envelope.turn_id, posted["id"], file_ids=list(envelope.file_ids))
+
+
+async def _publish(
+    message: IncomingMessage,
+    reply: str,
+    post_type: str | None,
+    props: dict | None,
+    file_ids: list[str] | None,
+) -> dict | None:
+    """Create the reply post with the right threading for this message.
+
+    Args:
+        message: The message being answered.
+        reply: The answer text.
+        post_type: Custom post type, when the reply carries artifacts.
+        props: Post props, when the reply carries artifacts.
+        file_ids: Native attachments, when the reply carries any.
+
+    Returns:
+        dict | None: The created post, or None when Mattermost refused it.
     """
     if message.root_id:
-        await mattermost_client.create_post(message.channel_id, reply, root_id=message.root_id)
-        return
+        return await mattermost_client.create_post(
+            message.channel_id,
+            reply,
+            root_id=message.root_id,
+            post_type=post_type,
+            props=props,
+            file_ids=file_ids,
+        )
 
     if message.threads_by_default:
         # reply_to_post resolves the true thread root first: Mattermost rejects
         # a root_id that is itself a reply, and swallows the error, so the
         # person would see no answer at all.
-        await mattermost_client.reply_to_post(message.channel_id, reply, message.post_id)
-        return
+        return await mattermost_client.reply_to_post(
+            message.channel_id,
+            reply,
+            message.post_id,
+            post_type=post_type,
+            props=props,
+            file_ids=file_ids,
+        )
 
-    await mattermost_client.create_post(message.channel_id, reply)
+    return await mattermost_client.create_post(
+        message.channel_id,
+        reply,
+        post_type=post_type,
+        props=props,
+        file_ids=file_ids,
+    )

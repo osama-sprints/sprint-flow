@@ -38,6 +38,11 @@ class Specialist:
         tools_node_name: Graph node that executes ONLY this specialist's tool group.
         tool_group: Key into ``TOOL_GROUPS`` — the only tools this specialist can use.
         prompt_context: The ``# Routing`` text appended to the system prompt.
+        force_tool_use: Require a tool call on this specialist's FIRST model call
+            of a turn. For a specialist whose whole job is to produce an
+            artifact, a prose answer is a silent failure — the person asked for
+            a diagram and received a description of one — and instructions alone
+            did not reliably prevent it.
     """
 
     route: CapabilityRoute
@@ -45,6 +50,7 @@ class Specialist:
     tools_node_name: str
     tool_group: str
     prompt_context: str
+    force_tool_use: bool = False
 
 
 _LEARNER_SUPPORT_CONTEXT = (
@@ -58,6 +64,12 @@ _LEARNER_SUPPORT_CONTEXT = (
     "for a new cohort) and suggest they ask that person; do not attempt it and do not "
     "promise to do it later.\n"
     "If a tool answers with [AUTHORISATION_REFUSED], relay the refusal sentence exactly."
+    "\nWhen the person asks about something the system stores — their cohorts, "
+    "members, sprints, ceremonies or schedule — CALL the read tool that has it and "
+    "answer from what it returns. Never ask them to supply data you can look up "
+    "yourself, and never state a figure you have not read from a tool. If a tool "
+    "returns nothing, say plainly that there is nothing recorded rather than "
+    "inventing an example."
 )
 
 _BACK_OFFICE_CONTEXT = (
@@ -72,6 +84,35 @@ _BACK_OFFICE_CONTEXT = (
     "Report exactly what the tool result says. If it answers with [AUTHORISATION_REFUSED], "
     "relay the refusal sentence exactly and do not try another route; if it answers with "
     "[VALIDATION_ERROR], explain what was wrong so the person can correct it."
+    "\nWhen the person asks about something the system stores — their cohorts, "
+    "members, sprints, ceremonies or schedule — CALL the read tool that has it and "
+    "answer from what it returns. Never ask them to supply data you can look up "
+    "yourself, and never state a figure you have not read from a tool. If a tool "
+    "returns nothing, say plainly that there is nothing recorded rather than "
+    "inventing an example."
+)
+
+_RICH_MEDIA_CONTEXT = (
+    "You are composing the VISUAL part of this reply. You MUST call exactly one of your "
+    "tools before you answer. Writing the diagram source, the chart specification or the "
+    "component code into the message instead of calling the tool is a failure: the person "
+    "sees raw text and no visual at all.\n"
+    "Pick the tool by what was asked: send_mermaid_diagram for a flow, process, sequence or "
+    "hierarchy; send_chart for measurements you already have; send_react_artifact when the "
+    "person needs to try values themselves (a calculator, an estimator, a what-if); "
+    "generate_and_send_image only when an illustration itself is the point.\n"
+    "Do not deliberate in the reply and do not show your working. Call the tool with your "
+    "best attempt; if it answers [VALIDATION_ERROR] fix exactly what it names and call it "
+    "again.\n"
+    "Never invent business numbers. If a chart needs figures nobody gave you and no tool of "
+    "yours can read them, say which figures you need — do not estimate them.\n"
+    "For an interface, build it only from the 'sprintflow/ui' design system the tool "
+    "describes — no CSS, no style attributes, no other packages.\n"
+    "Language: use the language of the person's LATEST message for the reply, the artifact "
+    "title and every label inside it — English for an English message, Arabic for an Arabic "
+    "one — regardless of the language of earlier messages, memories or this channel.\n"
+    "After the tool succeeds, write ONE short sentence. The visual is attached to your reply "
+    "automatically."
 )
 
 _GENERAL_CONTEXT = (
@@ -93,6 +134,14 @@ SPECIALISTS: Dict[str, Specialist] = {
         tools_node_name="back_office_tools",
         tool_group="back_office",
         prompt_context=_BACK_OFFICE_CONTEXT,
+    ),
+    CapabilityRoute.RICH_MEDIA.value: Specialist(
+        route=CapabilityRoute.RICH_MEDIA,
+        node_name="rich_media",
+        tools_node_name="rich_media_tools",
+        tool_group="rich_media",
+        prompt_context=_RICH_MEDIA_CONTEXT,
+        force_tool_use=True,
     ),
     CapabilityRoute.GENERAL.value: Specialist(
         route=CapabilityRoute.GENERAL,

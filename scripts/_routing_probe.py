@@ -64,6 +64,16 @@ EXPECTED_NODES = {
     "learner_support_tools",
     "back_office",
     "back_office_tools",
+    "rich_media",
+    "rich_media_tools",
+}
+
+# Shared by every group on purpose: they stage visual output and write nothing.
+RICH_MEDIA_TOOL_NAMES = {
+    "send_mermaid_diagram",
+    "send_chart",
+    "send_react_artifact",
+    "generate_and_send_image",
 }
 LATENCY_MIN_SAMPLES = 1000
 LATENCY_P95_BUDGET_MS = 2.0
@@ -142,7 +152,7 @@ def probe_tool_groups() -> None:
     """Assert the tool groups genuinely differ and contain no forbidden names."""
     print("==> tool groups")
     names = {group: {t.name for t in members} for group, members in TOOL_GROUPS.items()}
-    for group in ("general", "learner_support", "back_office"):
+    for group in ("general", "learner_support", "back_office", "rich_media"):
         check(f"tool group '{group}' exists", group in names)
     learner = names.get("learner_support", set())
     back_office = names.get("back_office", set())
@@ -155,6 +165,15 @@ def probe_tool_groups() -> None:
     leaked = sorted(n for n in back_office if n == "duckduckgo_search" or n.startswith("mattermost_"))
     check("back_office holds no web-search or workspace tool", not leaked, f"leaked: {leaked}")
     check("learner_support and back_office are different capability sets", learner != back_office)
+
+    # Shared rendering must reach every specialist, and must not smuggle
+    # business capability into the composition specialist.
+    for group in ("general", "learner_support", "back_office", "rich_media"):
+        missing = sorted(RICH_MEDIA_TOOL_NAMES - names.get(group, set()))
+        check(f"tool group '{group}' has every shared rich-media tool", not missing, f"missing: {missing}")
+    rich = names.get("rich_media", set())
+    leaked = sorted(n for n in rich if n not in RICH_MEDIA_TOOL_NAMES and n != "ask_human")
+    check("rich_media holds nothing but rendering and clarification", not leaked, f"leaked: {leaked}")
     check("every specialist maps to an existing tool group", all(s.tool_group in names for s in SPECIALISTS.values()))
     check(
         f"ROUTING_MAX_ROUTES_PER_TURN = {settings.ROUTING_MAX_ROUTES_PER_TURN} (>= 2 for multi-intent)",

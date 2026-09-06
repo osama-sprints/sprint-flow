@@ -12,6 +12,7 @@ from types import MappingProxyType
 import pytest
 
 from app.core.langgraph.routing_examples import (
+    RICH_MEDIA,
     BACK_OFFICE,
     GENERAL,
     LEARNER,
@@ -32,7 +33,7 @@ from app.schemas.graph import CapabilityRoute
 
 MIN_LABELLED_SENTENCES = 40
 # The exact corpus size, quoted in reports/orchestration_report.md.
-LABELLED_SENTENCES = 85
+LABELLED_SENTENCES = 95
 LATENCY_P95_BUDGET_MS = 2.0
 LATENCY_MIN_SAMPLES = 1000
 
@@ -60,7 +61,7 @@ def test_corpus_is_large_enough_and_covers_every_rule_and_route():
     assert expected_rules <= seen_rules, f"rules without a labelled sentence: {expected_rules - seen_rules}"
     assert {FALLBACK_RULE} <= {ex.rule for ex in ROUTING_EXAMPLES if ex.rule}
     seen_routes = {route for ex in ROUTING_EXAMPLES for route in ex.routes}
-    assert seen_routes == {LEARNER, BACK_OFFICE, GENERAL}
+    assert seen_routes == {LEARNER, BACK_OFFICE, GENERAL, RICH_MEDIA}
     assert any(len(ex.routes) > 1 for ex in ROUTING_EXAMPLES), "no multi-intent sentence in the corpus"
     assert any(ex.hard for ex in ROUTING_EXAMPLES), "no deliberately ambiguous sentence in the corpus"
     assert any(ex.rule and ex.rule.endswith(DENIED_SUFFIX) for ex in ROUTING_EXAMPLES)

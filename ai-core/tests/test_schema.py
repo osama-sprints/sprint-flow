@@ -26,6 +26,8 @@ from sqlmodel import SQLModel
 import app.models  # noqa: F401  (populates the metadata)
 from app.models import (
     DOMAIN_TABLES,
+    INITIAL_DOMAIN_TABLES,
+    LATER_DOMAIN_TABLES,
     Ceremony,
     require_aware,
 )
@@ -46,11 +48,21 @@ from app.services.database import (
 from app.services.domain.ceremonies import AMENDABLE_FIELDS
 from app.services.domain.escalations import format_ticket_ref
 
-MIGRATION_FILE = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0001_sprintflow_domain_schema.py"
+VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+MIGRATION_FILE = VERSIONS / "0001_sprintflow_domain_schema.py"
 
 
-def load_migration() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("migration_0001", MIGRATION_FILE)
+def load_migration(filename: str | None = None) -> ModuleType:
+    """Import one migration module without running Alembic.
+
+    Args:
+        filename: Revision file to load; the initial schema by default.
+
+    Returns:
+        ModuleType: The imported migration.
+    """
+    path = VERSIONS / filename if filename else MIGRATION_FILE
+    spec = importlib.util.spec_from_file_location(f"migration_{path.stem}", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -62,6 +74,15 @@ class RecordingOp:
 
     def __init__(self) -> None:
         self.dropped: list[str] = []
+        self.dropped_indexes: list[str] = []
+
+    def drop_index(self, name: str, table_name: str | None = None, **kwargs: object) -> None:
+        """Record an index drop.
+
+        Later revisions drop indexes before tables, and some pass alembic
+        options such as ``if_exists``; they are recorded, not interpreted.
+        """
+        self.dropped_indexes.append(name)
 
     def drop_table(self, name: str) -> None:
         self.dropped.append(name)
@@ -105,11 +126,30 @@ def test_every_domain_table_carries_audit_columns():
 
 
 def test_migration_downgrade_drops_exactly_the_domain_tables_in_reverse_order():
+    """0001 drops exactly the tables it created, youngest first.
+
+    Tables added by later revisions are dropped by those revisions, so this
+    compares against the initial set rather than every table that exists now.
+    """
     migration = load_migration()
     op = RecordingOp()
     migration.op = op
     migration.downgrade()
-    assert op.dropped == list(reversed(DOMAIN_TABLES))
+    assert op.dropped == list(reversed(INITIAL_DOMAIN_TABLES))
+
+
+def test_every_later_table_is_dropped_by_the_revision_that_added_it():
+    """No table may outlive a full downgrade of the migrations that made it."""
+    dropped: set[str] = set()
+    for path in sorted(VERSIONS.glob("0*.py")):
+        if path.name.startswith("0001"):
+            continue
+        migration = load_migration(path.name)
+        op = RecordingOp()
+        migration.op = op
+        migration.downgrade()
+        dropped.update(op.dropped)
+    assert set(LATER_DOMAIN_TABLES) <= dropped
 
 
 def test_migration_head_revision_id():

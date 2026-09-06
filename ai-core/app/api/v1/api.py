@@ -7,6 +7,7 @@ through Mattermost.
 
 from fastapi import APIRouter
 
+from app.api.v1.artifacts import router as artifacts_router
 from app.api.v1.mattermost import router as mattermost_router
 from app.core.logging import logger
 
@@ -21,6 +22,11 @@ api_router = APIRouter()
 # migration is ever run here. Leaving them registered meant an unauthenticated
 # route answering 500 on a published port.
 api_router.include_router(mattermost_router, prefix="/mattermost", tags=["Mattermost"])
+
+# Read-only artifact access for the Mattermost server plugin. Authenticated by
+# a shared secret; the VIEWER's permission is checked by the plugin, which is
+# the only component that can see a Mattermost session.
+api_router.include_router(artifacts_router, prefix="/artifacts", tags=["Artifacts"])
 
 
 @api_router.get("/health")

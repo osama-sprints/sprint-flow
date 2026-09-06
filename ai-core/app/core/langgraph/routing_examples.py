@@ -31,6 +31,7 @@ from app.schemas.graph import CapabilityRoute
 LEARNER = CapabilityRoute.LEARNER_SUPPORT.value
 BACK_OFFICE = CapabilityRoute.BACK_OFFICE.value
 GENERAL = CapabilityRoute.GENERAL.value
+RICH_MEDIA = CapabilityRoute.RICH_MEDIA.value
 
 
 class RoutingExample(NamedTuple):
@@ -283,7 +284,46 @@ ROUTING_EXAMPLES: Tuple[RoutingExample, ...] = (
         hard=True,
         note="a question about a past action is a read",
     ),
+    # ---- rich media: visual composition, in both languages ---------------------------
+    RoutingExample("draw me a flowchart of the registration process", "learner", (RICH_MEDIA,), "rich_media"),
+    RoutingExample("ارسملي flow لتسجيل طالب جديد", "learner", (RICH_MEDIA,), "rich_media"),
+    RoutingExample(
+        "ارسم مخطط لدورة السبرنت",
+        "learner",
+        (LEARNER, RICH_MEDIA),
+        "learner_support",
+        note="names the sprint, so the explanation is read first and the diagram composes the reply",
+    ),
+    RoutingExample("عايز رسمة توضيحية للعملية دي", "learner", (RICH_MEDIA,), "rich_media"),
+    RoutingExample("اعمل حاسبة تكلفة تفاعلية بـReact فيها sliders", "learner", (RICH_MEDIA,), "rich_media"),
+    RoutingExample("ولّد صورة توضيحية للفريق", "learner", (RICH_MEDIA,), "rich_media"),
+    RoutingExample("visualise the sprint timeline as a gantt", "authority", (RICH_MEDIA,), "rich_media"),
+    # Data first, picture second: the reader must be authorised and the numbers
+    # real before anything is drawn, so learner_support leads and rich_media
+    # composes the final reply.
+    RoutingExample(
+        "اعرض إنجاز السبرنت في chart",
+        "learner",
+        (LEARNER, RICH_MEDIA),
+        "learner_support",
+        note="reads the sprint data first, then composes the chart",
+    ),
+    RoutingExample(
+        "show my cohort's ceremonies this week and draw them as a timeline",
+        "learner",
+        (LEARNER, RICH_MEDIA),
+        "learner_calendar",
+        note="calendar read leads; the visual is the continuation",
+    ),
+    RoutingExample(
+        "بصورة عامة إيه سياسة الغياب؟",
+        "learner",
+        (LEARNER,),
+        "learner_support",
+        hard=True,
+        note="'بصورة' is 'in a manner', not a request for a picture",
+    ),
 )
 
 
-__all__ = ["BACK_OFFICE", "GENERAL", "LEARNER", "REQUESTERS", "ROUTING_EXAMPLES", "RoutingExample"]
+__all__ = ["BACK_OFFICE", "GENERAL", "LEARNER", "REQUESTERS", "RICH_MEDIA", "ROUTING_EXAMPLES", "RoutingExample"]

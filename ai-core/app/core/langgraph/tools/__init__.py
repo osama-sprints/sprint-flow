@@ -8,6 +8,11 @@ do, so keep the groups honest — the orchestration probe asserts that the
 learner group holds no mutating tool and the back-office group no web search
 or workspace-administration tool.
 
+The rich-media tools are the deliberate exception to "groups differ": every
+group holds them. They stage visual output onto the turn's reply envelope and
+write nothing — no Mattermost call, no database write — so sharing them widens
+what a reply can LOOK like without widening what any specialist can DO.
+
 Every privileged tool re-checks authorisation in code at call time from the
 ``current_requester`` ContextVar; group membership is capability scoping, not
 the security boundary.
@@ -29,6 +34,7 @@ from .mattermost_admin import (
     mattermost_find_or_create_team,
     mattermost_send_welcome_dm,
 )
+from .rich_media import RICH_MEDIA_TOOLS
 
 # The general route keeps exactly the pre-Sprint-1 tool set, so falling back to
 # it is falling back to the behaviour that already worked.
@@ -38,6 +44,7 @@ GENERAL_TOOLS: list[BaseTool] = [
     mattermost_find_or_create_team,
     mattermost_add_user_to_team,
     mattermost_send_welcome_dm,
+    *RICH_MEDIA_TOOLS,
 ]
 
 # Learner-facing support: clarification, web search and READ-ONLY cohort
@@ -49,6 +56,7 @@ LEARNER_SUPPORT_TOOLS: list[BaseTool] = [
     list_ceremonies,
     list_cohorts,
     list_cohort_members,
+    *RICH_MEDIA_TOOLS,
 ]
 
 # Back office: cohort, role, sprint administration (s1e2) and ceremony
@@ -57,12 +65,21 @@ BACK_OFFICE_TOOLS: list[BaseTool] = [
     ask_human,
     *BACK_OFFICE_ADMIN_TOOLS,
     *CEREMONY_TOOLS,
+    *RICH_MEDIA_TOOLS,
+]
+
+# The composition specialist: rendering, plus the clarification tool. It holds
+# no business tool at all, so routing a turn here can never reach a mutation.
+RICH_MEDIA_ONLY_TOOLS: list[BaseTool] = [
+    ask_human,
+    *RICH_MEDIA_TOOLS,
 ]
 
 TOOL_GROUPS: dict[str, list[BaseTool]] = {
     "general": GENERAL_TOOLS,
     "learner_support": LEARNER_SUPPORT_TOOLS,
     "back_office": BACK_OFFICE_TOOLS,
+    "rich_media": RICH_MEDIA_ONLY_TOOLS,
 }
 
 
@@ -78,12 +95,14 @@ def _union(*groups: list[BaseTool]) -> list[BaseTool]:
     return ordered
 
 
-tools: list[BaseTool] = _union(GENERAL_TOOLS, LEARNER_SUPPORT_TOOLS, BACK_OFFICE_TOOLS)
+tools: list[BaseTool] = _union(GENERAL_TOOLS, LEARNER_SUPPORT_TOOLS, BACK_OFFICE_TOOLS, RICH_MEDIA_ONLY_TOOLS)
 
 __all__ = [
     "BACK_OFFICE_TOOLS",
     "GENERAL_TOOLS",
     "LEARNER_SUPPORT_TOOLS",
+    "RICH_MEDIA_ONLY_TOOLS",
+    "RICH_MEDIA_TOOLS",
     "TOOL_GROUPS",
     "tools",
 ]

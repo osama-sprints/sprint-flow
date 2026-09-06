@@ -213,6 +213,21 @@ ROUTING_RULES: List[Rule] = [
             r"can\s+i\s+get\s+help)\b",
             r"\b(?:what\s+is|what\s+are|what'?s|explain|meaning\s+of)\b.{0,30}\b(?:a\s+|an\s+|the\s+)?"
             r"(?:sprints?|stand-?ups?|retros?|retrospectives?|ceremon(?:y|ies)|cohorts?|scrum|plannings?|reviews?)\b",
+            # Arabic. Routing that only knows English sends every Arabic
+            # question to the general fallback, which has no cohort tools at
+            # all — so the same vocabulary is matched in both languages.
+            #
+            # These patterns carry no \b anchors on purpose. Arabic attaches
+            # its article and conjunctions to the front of a word and its
+            # plurals to the back, so "الكوهورتس" is one token with no boundary
+            # around the stem: \bكوهورت\b does not match it, which is exactly
+            # how a request for cohort data first reached the renderer with no
+            # data tools bound.
+            r"(?:سبرنت|سبرينت|ستاندب|ريترو|اجتماع|سيشن|محاضر|كوهورت|دفعة|دفعات|فريقي|فريقنا|مهامي|مهمتي)",
+            r"(?:سياس|غياب|إجاز|اجاز|تأخير|حضور)",
+            r"(?:واجب|تسليم|تقييم|درج|امتحان|مشروع)",
+            r"(?:إنجاز|انجاز|تقدم)",
+            r"(?:عالق|متعطل|مشكلة|ساعدني|إزاي|ازاي|كيف|ليه|فين|إمتى|امتى)",
         ),
         confidence=0.85,
     ),
@@ -227,6 +242,36 @@ ROUTING_RULES: List[Rule] = [
             r"\b(?:remove|kick)\b.{0,40}\b(?:from\s+(?:the\s+)?team|user)\b",
         ),
         confidence=0.9,
+    ),
+    # ---- Rich media: LAST on purpose ---------------------------------------------
+    # Rule order is precedence: the first match runs first and later matches
+    # become the plan. A request like "show the sprint's ceremonies as a chart"
+    # must read the data BEFORE it can draw it, so this rule sits at the end and
+    # composition runs as the continuation that writes the final reply.
+    Rule(
+        name="rich_media",
+        route=CapabilityRoute.RICH_MEDIA,
+        patterns=_compile(
+            # English
+            r"\b(?:draw|sketch|diagram|flow-?chart|chart|graph|plot|visuali[sz]e|mind-?map|"
+            r"timeline|gantt|burn-?down|infographic)\b",
+            r"\b(?:generate|create|make|render|design)\b.{0,24}\b(?:an?\s+)?"
+            r"(?:image|picture|illustration|poster|logo|avatar)\b",
+            r"\b(?:interactive|calculator|simulator|estimator)\b",
+            # Arabic. No \b anchors: the article and conjunctions attach to the
+            # front of the word ("والرسمة") and plurals to the back.
+            r"(?:^|\s|و|ف)(?:ا|إ|أ)رسم(?:لي|لنا|ها|ه)?",
+            r"رسم(?:ة|ه|ات|ي)?\s*(?:بياني|توضيحي)?",
+            r"(?:مخطط|تشارت|شارت|جراف|إنفوجرافيك)",
+            r"(?:خريطة|خارطة)\s*(?:ذهنية|طريق)",
+            r"(?:جدول|خط)\s*زمني",
+            # Gated behind a generation verb so "بصورة عامة" ("generally") does
+            # not read as a request for a picture.
+            r"(?:ولّد|ولد|اعمل|إعمل|أنشئ|انشئ|صمم|صمّم|ارسم)\s+(?:لي\s+|لنا\s+)?(?:صورة|صوره)",
+            r"صورة\s*(?:توضيحية|تعبيرية)",
+            r"(?:حاسبة|آلة\s*حاسبة|واجهة تفاعلية|تفاعلي)",
+        ),
+        confidence=0.85,
     ),
 ]
 

@@ -248,6 +248,9 @@ class Settings:
             # Mattermost outgoing webhook: one call per triggering message, so
             # this bounds a busy channel rather than a single user.
             "mattermost_webhook": ["120 per minute"],
+            # One call per artifact per viewer per render; a busy channel with
+            # several readers is the load this bounds.
+            "artifacts": ["600 per minute"],
         }
 
         # Update rate limit endpoints from environment variables
@@ -257,6 +260,27 @@ class Settings:
             value = parse_list_from_env(env_key)
             if value:
                 self.RATE_LIMIT_ENDPOINTS[endpoint] = value
+
+        # Rich media (diagrams, charts, generated interfaces and images).
+        # These bound what one reply may carry; the renderer enforces the same
+        # ceilings client-side, so raising one here alone changes nothing.
+        self.RICH_MEDIA_ENABLED = os.getenv("RICH_MEDIA_ENABLED", "true").lower() == "true"
+        self.RICH_MEDIA_MAX_IMAGES_PER_TURN = int(os.getenv("RICH_MEDIA_MAX_IMAGES_PER_TURN", "1"))
+        self.RICH_MEDIA_MAX_CHART_ROWS = int(os.getenv("RICH_MEDIA_MAX_CHART_ROWS", "500"))
+        self.RICH_MEDIA_MAX_REACT_CHARS = int(os.getenv("RICH_MEDIA_MAX_REACT_CHARS", "20000"))
+
+        # Image generation goes through the same LiteLLM proxy as every other
+        # model call. Disabled by default: it is metered, and the durable job
+        # path must be deployed before a turn can promise a picture.
+        self.IMAGE_GENERATION_ENABLED = os.getenv("IMAGE_GENERATION_ENABLED", "false").lower() == "true"
+        self.IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gemini/nano-banana-pro-preview")
+        self.IMAGE_TIMEOUT = int(os.getenv("IMAGE_TIMEOUT", "120"))
+        # A metered call: attempts are bounded rather than retried until success.
+        self.IMAGE_MAX_ATTEMPTS = int(os.getenv("IMAGE_MAX_ATTEMPTS", "2"))
+
+        # Shared secret the Mattermost server plugin presents when reading an
+        # artifact. Empty means artifact reads are refused outright.
+        self.RICH_MEDIA_PLUGIN_TOKEN = os.getenv("RICH_MEDIA_PLUGIN_TOKEN", "")
 
         # Evaluation Configuration
         self.EVALUATION_LLM = os.getenv("EVALUATION_LLM", "gemini/gemini-3.5-flash")
@@ -274,6 +298,7 @@ class Settings:
         # Shared secret Mattermost puts in the outgoing-webhook request body.
         self.MATTERMOST_OUTGOING_WEBHOOK_TOKEN = os.getenv("MATTERMOST_OUTGOING_WEBHOOK_TOKEN", "")
         self.MATTERMOST_BOT_USERNAME = os.getenv("MATTERMOST_BOT_USERNAME", "sprintflow-assistant")
+        self.MATTERMOST_UPLOAD_TIMEOUT = int(os.getenv("MATTERMOST_UPLOAD_TIMEOUT", "120"))
         self.MATTERMOST_HTTP_TIMEOUT = float(os.getenv("MATTERMOST_HTTP_TIMEOUT", "30"))
 
         # WebSocket listener — the only way to receive direct messages, since

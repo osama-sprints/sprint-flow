@@ -25,6 +25,7 @@ class CapabilityRoute(str, Enum):
 
     LEARNER_SUPPORT = "learner_support"
     BACK_OFFICE = "back_office"
+    RICH_MEDIA = "rich_media"
     GENERAL = "general"
 
 
