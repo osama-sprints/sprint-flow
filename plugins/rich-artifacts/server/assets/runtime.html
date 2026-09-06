@@ -1,0 +1,317 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  The isolated runtime for agent-generated React.
+
+  This document is loaded into an iframe with sandbox="allow-scripts" and
+  WITHOUT allow-same-origin, so it runs on an opaque origin: no cookies, no
+  Mattermost session, no access to the parent DOM, no reachable Mattermost API.
+  It is served by the plugin with its own Content-Security-Policy response
+  header, so the generated code may be evaluated here without any change to the
+  Content-Security-Policy Mattermost applies to its own page.
+
+  Nothing is fetched. React is inlined into this document at build time, and the
+  component's compiled code arrives by postMessage rather than in the URL.
+-->
+<style>
+  /* Design tokens. The host passes theme=light|dark, dir and lang in the
+     query string so generated interfaces match the reader's Mattermost. */
+  :root {
+    --sf-bg: #ffffff; --sf-surface: #f7f8fa; --sf-fg: #1f2329; --sf-muted: #5f6772;
+    --sf-border: #d9dde3; --sf-accent: #1c58d9; --sf-accent-fg: #ffffff; --sf-accent-soft: #e8efff;
+    --sf-success: #1f8a4c; --sf-warning: #b26a00; --sf-danger: #c7333a;
+    --sf-radius: 8px; --sf-radius-sm: 6px; --sf-space-1: 4px; --sf-space-2: 8px; --sf-space-3: 12px;
+    --sf-space-4: 16px; --sf-space-5: 24px; --sf-font: "Open Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --sf-mono: ui-monospace, SFMono-Regular, Menlo, monospace; --sf-shadow: 0 1px 2px rgba(0,0,0,.06);
+  }
+  [data-theme="dark"] {
+    --sf-bg: #1b1d22; --sf-surface: #23262d; --sf-fg: #e9ebef; --sf-muted: #a4abb7;
+    --sf-border: #3a3f49; --sf-accent: #6f9cff; --sf-accent-fg: #0f1a33; --sf-accent-soft: #263453;
+    --sf-success: #4bc17a; --sf-warning: #e0a33b; --sf-danger: #ff6b70; --sf-shadow: none;
+  }
+  html, body { margin: 0; padding: 0; background: var(--sf-bg); color: var(--sf-fg);
+    font: 14px/1.5 var(--sf-font); text-align: start; -webkit-font-smoothing: antialiased; }
+  #root { padding: var(--sf-space-3); }
+  * { box-sizing: border-box; }
+  h1, h2, h3 { margin: 0; line-height: 1.3; }
+  h1 { font-size: 18px; font-weight: 600; } h2 { font-size: 15px; font-weight: 600; } h3 { font-size: 13px; font-weight: 600; color: var(--sf-muted); text-transform: uppercase; letter-spacing: .02em; }
+  p { margin: 0; }
+  code { font-family: var(--sf-mono); font-size: 12px; direction: ltr; unicode-bidi: isolate; }
+  .sf-runtime-error { color: var(--sf-danger); padding: var(--sf-space-3); white-space: pre-wrap; font-family: var(--sf-mono); font-size: 12px; }
+
+  /* Component kit */
+  .sf-card { background: var(--sf-surface); border: 1px solid var(--sf-border); border-radius: var(--sf-radius); box-shadow: var(--sf-shadow); }
+  .sf-card__header { padding: var(--sf-space-3) var(--sf-space-4); border-bottom: 1px solid var(--sf-border); display: flex; flex-direction: column; gap: 2px; }
+  .sf-card__subtitle { color: var(--sf-muted); font-size: 12px; }
+  .sf-card__body { padding: var(--sf-space-4); }
+  .sf-card__footer { padding: var(--sf-space-3) var(--sf-space-4); border-top: 1px solid var(--sf-border); color: var(--sf-muted); font-size: 12px; }
+  .sf-stack { display: flex; flex-direction: column; }
+  .sf-row { display: flex; align-items: center; }
+  .sf-grid { display: grid; gap: var(--sf-space-3); grid-template-columns: repeat(auto-fit, minmax(var(--sf-grid-min, 180px), 1fr)); }
+  .sf-field { display: flex; flex-direction: column; gap: var(--sf-space-1); }
+  .sf-field__label { font-size: 13px; font-weight: 600; display: flex; justify-content: space-between; gap: var(--sf-space-2); }
+  .sf-field__value { font-variant-numeric: tabular-nums; color: var(--sf-accent); font-weight: 600; }
+  .sf-field__hint { color: var(--sf-muted); font-size: 12px; }
+  .sf-field__error { color: var(--sf-danger); font-size: 12px; }
+  .sf-field--invalid .sf-input, .sf-field--invalid .sf-select { border-color: var(--sf-danger); }
+  .sf-range { width: 100%; accent-color: var(--sf-accent); height: 28px; margin: 0; }
+  .sf-range__scale { display: flex; justify-content: space-between; color: var(--sf-muted); font-size: 11px; }
+  .sf-input, .sf-select { width: 100%; font: inherit; color: var(--sf-fg); background: var(--sf-bg); border: 1px solid var(--sf-border);
+    border-radius: var(--sf-radius-sm); padding: 7px 10px; min-height: 36px; }
+  .sf-input:focus, .sf-select:focus, .sf-range:focus-visible, .sf-button:focus-visible, .sf-segmented button:focus-visible {
+    outline: 2px solid var(--sf-accent); outline-offset: 1px; }
+  .sf-input-wrap { display: flex; align-items: center; gap: var(--sf-space-2); }
+  .sf-input-wrap .sf-input { flex: 1; }
+  .sf-suffix { color: var(--sf-muted); font-size: 12px; white-space: nowrap; }
+  .sf-segmented { display: inline-flex; border: 1px solid var(--sf-border); border-radius: var(--sf-radius-sm); overflow: hidden; background: var(--sf-bg); }
+  .sf-segmented button { font: inherit; border: 0; background: transparent; color: var(--sf-fg); padding: 7px 12px; cursor: pointer; }
+  .sf-segmented button + button { border-inline-start: 1px solid var(--sf-border); }
+  .sf-segmented button[aria-pressed="true"] { background: var(--sf-accent); color: var(--sf-accent-fg); }
+  .sf-button { font: inherit; font-weight: 600; border: 1px solid var(--sf-border); background: var(--sf-bg); color: var(--sf-fg);
+    border-radius: var(--sf-radius-sm); padding: 7px 14px; min-height: 36px; cursor: pointer; }
+  .sf-button--primary { background: var(--sf-accent); border-color: var(--sf-accent); color: var(--sf-accent-fg); }
+  .sf-button:disabled { opacity: .5; cursor: not-allowed; }
+  .sf-stat { background: var(--sf-bg); border: 1px solid var(--sf-border); border-radius: var(--sf-radius); padding: var(--sf-space-3) var(--sf-space-4); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .sf-stat__label { color: var(--sf-muted); font-size: 12px; }
+  .sf-stat__value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; overflow-wrap: anywhere; }
+  .sf-stat--primary { background: var(--sf-accent-soft); border-color: transparent; }
+  .sf-stat--primary .sf-stat__value { color: var(--sf-accent); }
+  .sf-stat__hint { color: var(--sf-muted); font-size: 12px; }
+  .sf-alert { border-radius: var(--sf-radius-sm); padding: var(--sf-space-2) var(--sf-space-3); font-size: 13px; border: 1px solid; border-inline-start-width: 4px; }
+  .sf-alert--info { border-color: var(--sf-accent); background: var(--sf-accent-soft); }
+  .sf-alert--success { border-color: var(--sf-success); background: color-mix(in srgb, var(--sf-success) 12%, var(--sf-bg)); }
+  .sf-alert--warning { border-color: var(--sf-warning); background: color-mix(in srgb, var(--sf-warning) 12%, var(--sf-bg)); }
+  .sf-alert--danger { border-color: var(--sf-danger); background: color-mix(in srgb, var(--sf-danger) 12%, var(--sf-bg)); }
+  .sf-empty { text-align: center; color: var(--sf-muted); padding: var(--sf-space-5); border: 1px dashed var(--sf-border); border-radius: var(--sf-radius); }
+  .sf-empty__title { color: var(--sf-fg); font-weight: 600; margin-bottom: var(--sf-space-1); }
+  .sf-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .sf-table th, .sf-table td { text-align: start; padding: 8px 10px; border-bottom: 1px solid var(--sf-border); }
+  .sf-table th { color: var(--sf-muted); font-size: 12px; font-weight: 600; }
+  .sf-table td.num, .sf-table th.num { text-align: end; }
+  .sf-divider { border: 0; border-top: 1px solid var(--sf-border); margin: 0; }
+  @media (max-width: 480px) { #root { padding: var(--sf-space-2); } .sf-stat__value { font-size: 18px; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>/*__REACT__*/</script>
+<script>/*__REACT_DOM__*/</script>
+<script>/*__BABEL__*/</script>
+<script>
+(function () {
+    'use strict';
+
+    var params = new URLSearchParams(location.search);
+    var NONCE = params.get('nonce') || '';
+    var PARENT_ORIGIN = params.get('origin') || '';
+    var THEME = params.get('theme') === 'dark' ? 'dark' : 'light';
+    var DIR = params.get('dir') === 'rtl' ? 'rtl' : 'ltr';
+    var LANG = params.get('lang') || 'en';
+    var mounted = false;
+
+    document.documentElement.setAttribute('data-theme', THEME);
+    document.documentElement.setAttribute('dir', DIR);
+    document.documentElement.setAttribute('lang', LANG);
+
+    /**
+     * The artifact design system, exposed to generated code as
+     * `import {Card, Slider, Stat, ...} from 'sprintflow/ui'`. Every control
+     * is a plain function component over the token stylesheet above, so a
+     * generated interface inherits theme, direction, spacing and focus styles
+     * instead of inventing them. Kept small on purpose: enough for inputs,
+     * results and layout, not a general UI framework.
+     */
+    function buildKit(React) {
+        var h = React.createElement;
+        function cx() { return Array.prototype.slice.call(arguments).filter(Boolean).join(' '); }
+        function num(n, digits) { return new Intl.NumberFormat(LANG, {maximumFractionDigits: digits == null ? 2 : digits}).format(Number(n) || 0); }
+        var format = {
+            number: num,
+            currency: function (n, code) { try { return new Intl.NumberFormat(LANG, {style: 'currency', currency: code || 'USD', maximumFractionDigits: 0}).format(Number(n) || 0); } catch (e) { return num(n, 0) + ' ' + (code || ''); } },
+            percent: function (n, digits) { return new Intl.NumberFormat(LANG, {style: 'percent', maximumFractionDigits: digits == null ? 0 : digits}).format(Number(n) || 0); }
+        };
+        var Card = function (p) { return h('section', {className: cx('sf-card', p.className)},
+            (p.title || p.subtitle) ? h('header', {className: 'sf-card__header'}, p.title ? h('h1', null, p.title) : null, p.subtitle ? h('div', {className: 'sf-card__subtitle'}, p.subtitle) : null) : null,
+            h('div', {className: 'sf-card__body'}, p.children),
+            p.footer ? h('footer', {className: 'sf-card__footer'}, p.footer) : null); };
+        var Stack = function (p) { return h('div', {className: cx('sf-stack', p.className), style: {gap: (p.gap == null ? 12 : p.gap) + 'px'}}, p.children); };
+        var Row = function (p) { return h('div', {className: cx('sf-row', p.className), style: {gap: (p.gap == null ? 12 : p.gap) + 'px', flexWrap: p.wrap === false ? 'nowrap' : 'wrap', justifyContent: p.justify || 'flex-start', alignItems: p.align || 'center'}}, p.children); };
+        var Grid = function (p) { return h('div', {className: cx('sf-grid', p.className), style: {'--sf-grid-min': (p.min || 180) + 'px'}}, p.children); };
+        var Section = function (p) { return h('div', {className: 'sf-stack', style: {gap: '8px'}}, p.title ? h('h3', null, p.title) : null, p.children); };
+        var Field = function (p) { return h('div', {className: cx('sf-field', p.error && 'sf-field--invalid')},
+            (p.label || p.value != null) ? h('label', {className: 'sf-field__label', htmlFor: p.htmlFor}, h('span', null, p.label), p.value != null ? h('span', {className: 'sf-field__value'}, p.value) : null) : null,
+            p.children,
+            p.error ? h('div', {className: 'sf-field__error', role: 'alert'}, p.error) : (p.hint ? h('div', {className: 'sf-field__hint'}, p.hint) : null)); };
+        var uid = 0;
+        var Slider = function (p) {
+            var id = React.useMemo(function () { return 'sf-slider-' + (++uid); }, []);
+            var shown = p.format ? p.format(p.value) : num(p.value);
+            return h(Field, {label: p.label, value: shown, hint: p.hint, error: p.error, htmlFor: id},
+                h('input', {id: id, className: 'sf-range', type: 'range', min: p.min == null ? 0 : p.min, max: p.max == null ? 100 : p.max, step: p.step == null ? 1 : p.step, value: p.value,
+                    'aria-valuetext': shown, onChange: function (e) { p.onChange(Number(e.target.value)); }}),
+                h('div', {className: 'sf-range__scale'}, h('span', null, p.format ? p.format(p.min == null ? 0 : p.min) : num(p.min == null ? 0 : p.min)), h('span', null, p.format ? p.format(p.max == null ? 100 : p.max) : num(p.max == null ? 100 : p.max)))); };
+        var NumberInput = function (p) {
+            var id = React.useMemo(function () { return 'sf-number-' + (++uid); }, []);
+            var invalid = (p.min != null && p.value < p.min) || (p.max != null && p.value > p.max);
+            var error = p.error || (invalid ? ((p.min != null && p.max != null) ? (num(p.min) + ' – ' + num(p.max)) : 'Out of range') : null);
+            return h(Field, {label: p.label, hint: p.hint, error: error, htmlFor: id},
+                h('div', {className: 'sf-input-wrap'},
+                    h('input', {id: id, className: 'sf-input', type: 'number', inputMode: 'decimal', min: p.min, max: p.max, step: p.step == null ? 1 : p.step, value: p.value,
+                        onChange: function (e) { var v = e.target.value === '' ? '' : Number(e.target.value); p.onChange(v); }}),
+                    p.suffix ? h('span', {className: 'sf-suffix'}, p.suffix) : null)); };
+        var Select = function (p) {
+            var id = React.useMemo(function () { return 'sf-select-' + (++uid); }, []);
+            return h(Field, {label: p.label, hint: p.hint, error: p.error, htmlFor: id},
+                h('select', {id: id, className: 'sf-select', value: p.value, onChange: function (e) { p.onChange(e.target.value); }},
+                    (p.options || []).map(function (o) { return h('option', {key: String(o.value), value: o.value}, o.label == null ? o.value : o.label); }))); };
+        var Segmented = function (p) { return h('div', {className: 'sf-segmented', role: 'group', 'aria-label': p.label},
+            (p.options || []).map(function (o) { return h('button', {key: String(o.value), type: 'button', 'aria-pressed': String(o.value === p.value), onClick: function () { p.onChange(o.value); }}, o.label == null ? o.value : o.label); })); };
+        var Button = function (p) { return h('button', {type: 'button', className: cx('sf-button', p.primary && 'sf-button--primary'), disabled: !!p.disabled, onClick: p.onClick}, p.children); };
+        var Stat = function (p) { return h('div', {className: cx('sf-stat', p.primary && 'sf-stat--primary')},
+            h('div', {className: 'sf-stat__label'}, p.label), h('div', {className: 'sf-stat__value'}, p.value), p.hint ? h('div', {className: 'sf-stat__hint'}, p.hint) : null); };
+        var Alert = function (p) { return h('div', {className: 'sf-alert sf-alert--' + (p.tone || 'info'), role: p.tone === 'danger' ? 'alert' : 'status'}, p.children); };
+        var Empty = function (p) { return h('div', {className: 'sf-empty'}, h('div', {className: 'sf-empty__title'}, p.title || '—'), p.hint ? h('div', null, p.hint) : null); };
+        var Table = function (p) { return h('table', {className: 'sf-table'},
+            h('thead', null, h('tr', null, (p.columns || []).map(function (c) { return h('th', {key: c.key, className: c.numeric ? 'num' : undefined}, c.label); }))),
+            h('tbody', null, (p.rows || []).map(function (r, i) { return h('tr', {key: i}, (p.columns || []).map(function (c) { return h('td', {key: c.key, className: c.numeric ? 'num' : undefined}, c.render ? c.render(r[c.key], r) : r[c.key]); })); }))); };
+        var Divider = function () { return h('hr', {className: 'sf-divider'}); };
+        return {Card: Card, Stack: Stack, Row: Row, Grid: Grid, Section: Section, Field: Field, Slider: Slider, NumberInput: NumberInput, Select: Select,
+            Segmented: Segmented, Button: Button, Stat: Stat, Alert: Alert, Empty: Empty, Table: Table, Divider: Divider, format: format, theme: THEME, dir: DIR, lang: LANG};
+    }
+    window.SF = buildKit(window.React);
+
+    /**
+     * Post one message back to the host. The host cannot check our origin —
+     * a sandboxed frame reports "null" — so the nonce is what identifies us,
+     * alongside the host's own check that the message came from this frame.
+     */
+    function tell(type, payload) {
+        var message = {source: 'sprintflow-runtime', nonce: NONCE, type: type};
+        if (payload) { message.payload = payload; }
+        parent.postMessage(message, PARENT_ORIGIN || '*');
+    }
+
+    function showError(text) {
+        var root = document.getElementById('root');
+        root.textContent = '';
+        var pre = document.createElement('div');
+        pre.className = 'sf-runtime-error';
+        pre.textContent = String(text);
+        root.appendChild(pre);
+        tell('error', {message: String(text)});
+    }
+
+    /** Only these specifiers resolve; everything else is a hard failure. */
+    function requireShim(name) {
+        if (name === 'react') { return window.React; }
+        if (name === 'react-dom') { return window.ReactDOM; }
+        if (name === 'sprintflow/ui') { return window.SF; }
+        throw new Error('Import of "' + name + '" is not available in this sandbox.');
+    }
+
+    /**
+     * Babel plugin: bound every loop. A runaway `while (true)` in generated
+     * code does NOT stay inside this frame — Chrome runs a same-site sandboxed
+     * iframe on the parent's thread, so the whole chat page freezes with it.
+     * Each loop gets its own counter and throws past one million iterations,
+     * which turns a frozen tab into an error card. Recursion and long
+     * synchronous work are not covered; see the plugin documentation.
+     */
+    function loopProtect(api) {
+        var t = api.types;
+        var n = 0;
+        function guard(path) {
+            var id = path.scope.generateUidIdentifier('sfLoop' + (n++));
+            path.insertBefore(t.variableDeclaration('var', [t.variableDeclarator(id, t.numericLiteral(0))]));
+            var check = t.ifStatement(
+                t.binaryExpression('>', t.updateExpression('++', id, true), t.numericLiteral(1000000)),
+                t.throwStatement(t.newExpression(t.identifier('Error'), [t.stringLiteral('A loop ran past the sandbox budget (1,000,000 iterations) and was stopped.')]))
+            );
+            var body = path.get('body');
+            if (body.isBlockStatement()) { body.unshiftContainer('body', check); }
+            else { body.replaceWith(t.blockStatement([check, body.node])); }
+        }
+        return {visitor: {WhileStatement: guard, DoWhileStatement: guard, ForStatement: guard, ForInStatement: guard, ForOfStatement: guard}};
+    }
+
+    /** Compile TSX to CommonJS here, in the sandbox, with the loop guard. */
+    function compile(source) {
+        if (source.length > 20000) { throw new Error('This component is too large to run.'); }
+        var out = window.Babel.transform(source, {
+            filename: 'artifact.tsx',
+            presets: [['react', {runtime: 'classic'}], 'typescript'],
+            plugins: [loopProtect, ['transform-modules-commonjs', {strictNamespace: false}]],
+            sourceMaps: false,
+            compact: false
+        });
+        if (!out || !out.code) { throw new Error('The component produced no code.'); }
+        return out.code;
+    }
+
+    function mount(source, data) {
+        if (mounted) { return; }
+        mounted = true;
+        try {
+            var code = compile(String(source));
+            var module = {exports: {}};
+            // Evaluated with no access to anything but React and its data.
+            var factory = new Function('require', 'module', 'exports', 'React', 'ReactDOM', code);
+            factory(requireShim, module, module.exports, window.React, window.ReactDOM);
+
+            var Component = module.exports && (module.exports.default || module.exports);
+            if (typeof Component !== 'function') {
+                throw new Error('The component must have a default export that is a function.');
+            }
+
+            window.ReactDOM.render(
+                window.React.createElement(Component, {data: data}),
+                document.getElementById('root')
+            );
+        } catch (e) {
+            showError((e && e.message) || e);
+            return;
+        }
+        report();
+    }
+
+    /** Tell the host how tall we are so the card can size itself. */
+    function report() {
+        // documentElement.scrollHeight is never smaller than the frame, so a
+        // frame measured that way can grow but never shrink. Measure the root
+        // element instead and add the body padding.
+        var root = document.getElementById('root');
+        var content = root ? root.getBoundingClientRect().height : 0;
+        var height = Math.min(2000, Math.max(56, Math.ceil(content) + 2));
+        tell('height', {height: height});
+    }
+
+    window.addEventListener('message', function (event) {
+        // The host is the only permitted sender: same window reference, right
+        // origin, right nonce. Any of the three failing means ignore it.
+        if (event.source !== parent) { return; }
+        if (PARENT_ORIGIN && event.origin !== PARENT_ORIGIN) { return; }
+        var data = event.data;
+        if (!data || data.source !== 'sprintflow-host' || data.nonce !== NONCE) { return; }
+
+        if (data.type === 'mount') {
+            mount(String(data.code || ''), data.data || {});
+        }
+    });
+
+    window.addEventListener('error', function (e) { showError(e.message); });
+    window.addEventListener('unhandledrejection', function (e) {
+        showError((e.reason && e.reason.message) || 'Unhandled rejection');
+    });
+
+    if (window.ResizeObserver) {
+        new ResizeObserver(report).observe(document.documentElement);
+    }
+
+    tell('ready');
+})();
+</script>
+</body>
+</html>

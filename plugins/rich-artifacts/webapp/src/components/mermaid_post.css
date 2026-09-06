@@ -1,0 +1,71 @@
+/* Colours come from Mattermost's theme variables so the card follows the
+   user's chosen theme without the plugin knowing which one is active. */
+.sprintflow-mermaid {
+    border: 1px solid rgba(var(--center-channel-color-rgb), 0.16);
+    border-radius: 4px;
+    margin: 4px 0;
+    max-width: 800px;
+    overflow: hidden;
+}
+
+.sprintflow-mermaid__header {
+    align-items: center;
+    background: rgba(var(--center-channel-color-rgb), 0.04);
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    padding: 6px 10px;
+}
+
+.sprintflow-mermaid__title {
+    font-weight: 600;
+}
+
+.sprintflow-mermaid__actions {
+    display: flex;
+    gap: 6px;
+}
+
+.sprintflow-mermaid__button {
+    background: transparent;
+    border: 1px solid rgba(var(--center-channel-color-rgb), 0.24);
+    border-radius: 4px;
+    color: var(--button-bg);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 8px;
+}
+
+.sprintflow-mermaid__button:hover {
+    background: rgba(var(--button-bg-rgb), 0.08);
+}
+
+.sprintflow-mermaid__canvas {
+    overflow-x: auto;
+    padding: 10px;
+}
+
+.sprintflow-mermaid__canvas svg {
+    max-width: 100%;
+}
+
+.sprintflow-mermaid__source,
+.sprintflow-mermaid__error pre {
+    background: rgba(var(--center-channel-color-rgb), 0.04);
+    border-radius: 4px;
+    margin: 10px;
+    overflow-x: auto;
+    padding: 8px;
+    white-space: pre;
+}
+
+.sprintflow-mermaid__error {
+    color: var(--error-text);
+    padding: 6px 0;
+}
+
+.sprintflow-mermaid__caption {
+    color: rgba(var(--center-channel-color-rgb), 0.72);
+    font-size: 12px;
+    padding: 0 10px 8px;
+}
