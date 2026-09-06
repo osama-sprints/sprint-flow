@@ -1,0 +1,36 @@
+{
+    "id": "com.sprintflow.mermaid",
+    "name": "SprintFlow Rich Artifacts",
+    "description": "Renders agent-authored rich artifacts — Mermaid diagrams, charts, sandboxed React interfaces and images — as custom post types in the chat stream.",
+    "homepage_url": "https://github.com/sprintflow/skill-sync",
+    "support_url": "https://github.com/sprintflow/skill-sync/issues",
+    "version": "0.3.0",
+    "min_server_version": "9.5.0",
+    "webapp": {
+        "bundle_path": "webapp/dist/main.js"
+    },
+    "server": {
+        "executables": {
+            "linux-amd64": "server/dist/plugin-linux-amd64"
+        }
+    },
+    "settings_schema": {
+        "header": "Authenticated access to SprintFlow artifacts. The browser cannot reach ai-core directly, so this plugin forwards artifact reads after checking that the viewer may read the channel and post the artifact was published in.",
+        "settings": [
+            {
+                "key": "AiCoreURL",
+                "display_name": "ai-core base URL",
+                "type": "text",
+                "help_text": "Internal URL of ai-core, e.g. http://ai-core:8000. Falls back to SPRINTFLOW_AICORE_URL.",
+                "default": ""
+            },
+            {
+                "key": "SharedToken",
+                "display_name": "Shared token",
+                "type": "text",
+                "help_text": "Must equal RICH_MEDIA_PLUGIN_TOKEN in ai-core. Falls back to SPRINTFLOW_PLUGIN_TOKEN.",
+                "default": ""
+            }
+        ]
+    }
+}

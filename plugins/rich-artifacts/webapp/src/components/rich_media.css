@@ -1,0 +1,220 @@
+/* Themed with Mattermost's own CSS variables so artifacts follow the viewer's
+   theme without the plugin knowing which one is active. Everything is scoped
+   under .sf-rich-media / .sf-artifact — no app chrome is touched. */
+
+.sf-rich-media {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 2px 0;
+    max-width: 900px;
+}
+
+.sf-rich-media__message p,
+.sf-rich-media__message ul,
+.sf-rich-media__message ol {
+    margin: 0 0 6px;
+}
+
+.sf-rich-media__message p:last-child,
+.sf-rich-media__message ul:last-child,
+.sf-rich-media__message ol:last-child {
+    margin-bottom: 0;
+}
+
+.sf-rich-media__message ul,
+.sf-rich-media__message ol {
+    padding-inline-start: 22px;
+}
+
+.sf-artifact {
+    border: 1px solid rgba(var(--center-channel-color-rgb), 0.16);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.sf-artifact__header {
+    align-items: center;
+    background: rgba(var(--center-channel-color-rgb), 0.04);
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    padding: 6px 10px;
+}
+
+.sf-artifact__title {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sf-artifact__actions {
+    display: flex;
+    flex-shrink: 0;
+    gap: 6px;
+}
+
+.sf-artifact__button {
+    background: transparent;
+    border: 1px solid rgba(var(--center-channel-color-rgb), 0.24);
+    border-radius: 4px;
+    color: var(--button-bg);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 8px;
+}
+
+.sf-artifact__button:hover {
+    background: rgba(var(--button-bg-rgb), 0.08);
+}
+
+.sf-artifact__body {
+    overflow-x: auto;
+    padding: 10px;
+}
+
+.sf-artifact__body--expanded {
+    padding: 4px;
+}
+
+.sf-artifact__body svg {
+    max-width: 100%;
+}
+
+.sf-artifact__caption {
+    color: rgba(var(--center-channel-color-rgb), 0.72);
+    font-size: 12px;
+    padding: 0 10px 8px;
+}
+
+.sf-artifact__source {
+    background: rgba(var(--center-channel-color-rgb), 0.04);
+    border-radius: 4px;
+    margin: 10px;
+    overflow-x: auto;
+    padding: 8px;
+    white-space: pre;
+}
+
+.sf-artifact__error {
+    color: var(--error-text);
+    padding: 10px;
+}
+
+.sf-artifact__notice {
+    color: rgba(var(--center-channel-color-rgb), 0.72);
+    padding: 10px;
+}
+
+.sf-artifact__loading {
+    align-items: center;
+    color: rgba(var(--center-channel-color-rgb), 0.72);
+    display: flex;
+    gap: 8px;
+    padding: 14px;
+}
+
+.sf-artifact__spinner {
+    animation: sf-spin 900ms linear infinite;
+    border: 2px solid rgba(var(--center-channel-color-rgb), 0.24);
+    border-radius: 50%;
+    border-top-color: var(--button-bg);
+    display: inline-block;
+    height: 14px;
+    width: 14px;
+}
+
+@keyframes sf-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Expanded view */
+
+.sf-artifact__overlay {
+    align-items: center;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    position: fixed;
+    z-index: 1200;
+}
+
+.sf-artifact__dialog {
+    background: var(--center-channel-bg);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    max-height: 88vh;
+    max-width: 92vw;
+    min-width: min(680px, 92vw);
+}
+
+.sf-artifact__dialog-header {
+    align-items: center;
+    border-bottom: 1px solid rgba(var(--center-channel-color-rgb), 0.16);
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 10px 14px;
+}
+
+.sf-artifact__dialog-body {
+    overflow: auto;
+    padding: 12px;
+}
+
+.sf-artifact__dialog-body svg {
+    height: auto;
+    max-width: 100%;
+}
+
+@media (max-width: 768px) {
+    .sf-artifact__dialog {
+        max-width: 96vw;
+        min-width: 96vw;
+    }
+}
+
+.sf-artifact__chart {
+    min-height: 200px;
+    width: 100%;
+}
+
+/* vega-embed injects its own wrapper; keep it inside the card. */
+.sf-artifact__chart .vega-embed {
+    width: 100%;
+}
+
+.sf-artifact__chart .vega-embed summary {
+    display: none;
+}
+
+.sf-artifact__sandbox {
+    background: #fff;
+    border: 0;
+    display: block;
+    width: 100%;
+}
+
+/* Inline video for bare video links (registerPostWillRenderEmbedComponent). */
+.sf-video {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 6px 0;
+    max-width: 640px;
+}
+
+.sf-video__player {
+    background: #000;
+    border-radius: 4px;
+    display: block;
+    max-height: 60vh;
+    width: 100%;
+}
+
+.sf-video__link {
+    font-size: 12px;
+}

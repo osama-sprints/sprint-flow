@@ -1,0 +1,93 @@
+/*
+ * Bidi corrections, scoped to message bodies and artifact containers.
+ *
+ * Three upstream rules cause the inconsistency this fixes (Mattermost 11.7.10):
+ *
+ *   .post-message__text        { text-align: left; }   physical, inherited by every block
+ *   .post-message__text[dir=auto]                      direction decided ONCE per post
+ *   .post-message__text > ul   { direction: ltr; }     <ul> pinned LTR, <ol> left to inherit
+ *   ul, ol                     { padding-left: 22px; } physical padding, ignores direction
+ *
+ * so an Arabic post renders its paragraphs left-aligned, its numbered list on
+ * the right and its bulleted list on the left. Nothing here touches text, the
+ * post header, avatars, timestamps or app chrome.
+ */
+
+/* Alignment follows the block's own direction instead of being pinned left.
+ * `start` resolves against the element's `direction` PROPERTY, which is why the
+ * controller sets an explicit dir on each block rather than relying on
+ * `unicode-bidi: plaintext` — plaintext fixes glyph order but leaves
+ * `text-align: start` resolving against the inherited direction. */
+.post-message__text,
+.sf-artifact__prose {
+    text-align: start;
+}
+
+/* Undo the LTR pin so a bulleted list follows the direction the controller
+ * resolved for it, exactly as an ordered list already does. The attribute
+ * selector is load-order-proof: `.post-message__text > ul` and a bare
+ * `direction: inherit` have equal specificity, so which one wins would depend
+ * on stylesheet order. Matching the controller's own attribute raises
+ * specificity and settles it. */
+.post-message__text > ul[data-sf-dir='rtl'],
+.post-message__text ol[data-sf-dir='rtl'] {
+    direction: rtl;
+}
+
+.post-message__text > ul[data-sf-dir='ltr'],
+.post-message__text ol[data-sf-dir='ltr'] {
+    direction: ltr;
+}
+
+/* Mattermost lays an <ol> out as `display: table`, which is a shrink-to-fit box
+ * placed at the inline start of its CONTAINING block — the post body, whose
+ * direction is the per-post `dir="auto"` result, not the list's own. So a
+ * correctly-RTL numbered list still lands on the left. Auto margins resolved
+ * against the list's OWN direction put the box on the side its content reads
+ * from: margin-inline-end:auto is margin-left:auto in RTL. */
+.post-message__text ol[data-sf-dir] {
+    margin-inline-start: 0;
+    margin-inline-end: auto;
+}
+
+/* Logical padding so markers sit on the start side in both directions. */
+.post-message__text ul,
+.post-message__text ol {
+    padding-left: 0;
+    padding-right: 0;
+    padding-inline-start: 22px;
+}
+
+/* Opposite-direction inline runs are isolated, which is what <bdi> does
+ * (`bdi { unicode-bidi: isolate }` in the HTML spec). Without this, a trailing
+ * Latin path or link inside Arabic prose drags the sentence's punctuation. */
+.post-message__text code,
+.post-message__text a,
+.post-message__text .mention-link,
+.post-message__text [data-mention],
+.sf-artifact__prose code,
+.sf-artifact__prose a {
+    unicode-bidi: isolate;
+}
+
+/* Code is never bidi content: keep it LTR and left-aligned whatever the prose
+ * around it does. Inline code needs this as much as a fenced block: a path like
+ * app/services/mattermost.py inherits RTL from the Arabic sentence carrying it
+ * and its slashes and extension reorder. */
+.post-message__text code,
+.sf-artifact__prose code,
+.post-message__text pre,
+.post-message__text .post-code,
+.post-message__text .hljs,
+.sf-artifact__source {
+    direction: ltr;
+    text-align: left;
+    unicode-bidi: isolate;
+}
+
+/* Blocks the controller has decided on. Isolate rather than plaintext: the
+ * decision is already made and must not be re-derived from first-strong. */
+.post-message__text [data-sf-dir],
+.sf-artifact [data-sf-dir] {
+    unicode-bidi: isolate;
+}

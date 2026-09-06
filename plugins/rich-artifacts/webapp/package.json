@@ -1,0 +1,36 @@
+{
+    "name": "sprintflow-rich-media-webapp",
+    "version": "0.2.0",
+    "private": true,
+    "description": "Webapp bundle for the SprintFlow rich-media Mattermost plugin.",
+    "scripts": {
+        "build": "webpack --mode=production",
+        "debug": "webpack --mode=development",
+        "check-types": "tsc --noEmit"
+    },
+    "dependencies": {
+        "mermaid": "11.4.1",
+        "react-markdown": "^8.0.7",
+        "react-modal": "^3.16.1",
+        "vega": "^5.30.0",
+        "vega-embed": "^6.26.0",
+        "vega-interpreter": "^1.0.5",
+        "vega-lite": "^5.21.0"
+    },
+    "devDependencies": {
+        "@babel/core": "7.26.0",
+        "@babel/preset-env": "7.26.0",
+        "@babel/preset-react": "7.26.3",
+        "@babel/preset-typescript": "7.26.0",
+        "@babel/standalone": "^7.26.4",
+        "@types/react": "17.0.83",
+        "@types/react-dom": "17.0.25",
+        "@types/react-modal": "^3.16.3",
+        "babel-loader": "9.2.1",
+        "css-loader": "7.1.2",
+        "style-loader": "4.0.0",
+        "typescript": "5.6.3",
+        "webpack": "5.97.1",
+        "webpack-cli": "5.1.4"
+    }
+}

@@ -35,3 +35,21 @@ tasks/
 
 # Agent worktrees created during development sessions
 .claude/worktrees/
+
+# Webapp plugin dependencies (lockfile and sources stay tracked)
+node_modules/
+plugins/*/dist/
+plugins/*/webapp/dist/
+plugins/*/server/dist/
+# React UMD builds are copied from node_modules at build time (pinned in
+# package.json) and embedded into the Go binary; they are build inputs, not source.
+plugins/*/server/assets/react.js
+plugins/*/server/assets/react-dom.js
+plugins/*/server/assets/babel.js
+plugins/*/server/assets/chunks/
+
+# Generated browser evidence (screenshots, recordings, DOM/CSS diagnostics).
+# Harness scripts under scripts/rtl_lab/ stay tracked; their output does not.
+reports/rich-media/
+reports/**/*.webm
+reports/**/diag-*.json
