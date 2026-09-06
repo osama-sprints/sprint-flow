@@ -37,6 +37,7 @@ from app.services.domain.reference_data import seed_reference_data
 from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
 from app.services.memory import memory_service
+from app.workers.artifact_dispatcher import artifact_dispatcher
 from app.workers.onboarding_dispatcher import onboarding_dispatcher
 
 # Load environment variables
@@ -103,10 +104,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("onboarding_dispatcher_start_failed", error=str(e))
 
+    # Finishes artifacts whose work outlives their reply (generated images).
+    # Starting it is a no-op when image generation is switched off.
+    try:
+        artifact_dispatcher.start()
+    except Exception as e:
+        logger.exception("artifact_dispatcher_start_failed", error=str(e))
+
     yield
 
     # Cleanup on shutdown
     await onboarding_dispatcher.stop()
+    await artifact_dispatcher.stop()
     await mattermost_ws_listener.stop()
     await cache_service.close()
     await mattermost_client.close()
@@ -231,6 +240,7 @@ async def health_check(request: Request) -> JSONResponse:
             "database": "healthy" if db_healthy else "unhealthy",
             "domain_schema": "healthy" if schema_present else "missing",
             "onboarding_dispatcher": onboarding_dispatcher.status(),
+            "artifact_dispatcher": artifact_dispatcher.status(),
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }

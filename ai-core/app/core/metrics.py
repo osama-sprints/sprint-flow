@@ -88,3 +88,11 @@ def setup_metrics(app):
 
     # Add metrics endpoint
     app.add_route("/metrics", metrics)
+
+
+# Outcomes of the artifact jobs that finish after their reply is published.
+rich_media_jobs_total = Counter(
+    "sprintflow_rich_media_jobs_total",
+    "Rich-media artifact jobs by kind and outcome",
+    ["kind", "outcome"],
+)
