@@ -29,3 +29,9 @@ ai-core/evals/reports/
 .vscode/
 .DS_Store
 *.swp
+
+# Internal sprint planning — deliberately NOT published to GitHub.
+tasks/
+
+# Agent worktrees created during development sessions
+.claude/worktrees/

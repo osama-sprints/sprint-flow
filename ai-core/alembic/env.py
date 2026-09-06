@@ -1,103 +1,94 @@
-"""Alembic environment configuration.
+"""Alembic environment.
 
-Loads the database URL from the application's settings so migrations
-stay in sync with the running app configuration.
+The database URL comes from the application's settings so migrations always
+target the same database the running service uses. Every application-owned
+model is imported through ``app.models`` so the metadata is complete, and the
+tables owned by other systems (the LangGraph checkpointer, mem0) are excluded
+from every comparison so Alembic can never try to drop or alter them.
 """
 
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import (
+    engine_from_config,
+    pool,
+)
 from sqlmodel import SQLModel
 
+import app.models  # noqa: F401  (populates SQLModel.metadata)
 from alembic import context
-from app.core.config import settings
-from app.models.session import Session  # noqa: F401
-from app.models.thread import Thread  # noqa: F401
-from app.models.user import User  # noqa: F401
-from app.models.onboarding import OnboardingState  # noqa: F401
+from app.services.database import (
+    EXTERNALLY_OWNED_TABLES,
+    database_url,
+    is_externally_owned,
+)
 
-from app.models.ceremony import Ceremony  # noqa: F401
-from app.models.ceremony_type import CeremonyType  # noqa: F401
-from app.models.cohort import Cohort  # noqa: F401
-from app.models.cohort_membership import CohortMembership  # noqa: F401
-from app.models.daily_progress import DailyProgress  # noqa: F401
-from app.models.escalation import Escalation  # noqa: F401
-
-from app.models.role import Role  # noqa: F401
-from app.models.sprint import Sprint  # noqa: F401
-
-# Alembic Config object
 config = context.config
 
-# Set up Python logging from the ini file
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Build the database URL from app settings
-DATABASE_URL = (
-    f"postgresql://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
-    f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
-)
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+config.set_main_option("sqlalchemy.url", database_url().replace("%", "%%"))
 
-# Point Alembic at our SQLModel metadata for autogenerate support
 target_metadata = SQLModel.metadata
 
-# Tables managed by external systems (the LangGraph checkpointer)
-# that Alembic should never touch.
-EXCLUDE_TABLES = {
-    "checkpoint_blobs",
-    "checkpoint_writes",
-    "checkpoint_migrations",
-    "checkpoints",
-    "longterm_memory",
-    "mem0migrations",
-}
+# Tables Alembic must never touch: the LangGraph checkpointer's own schema and
+# anything mem0 may create. The list lives next to the engine in
+# ``app.services.database`` so it is importable (and unit-tested) without
+# executing this file. Reflected tables with these names are ignored so
+# autogenerate never proposes dropping them.
+EXCLUDED_TABLES = EXTERNALLY_OWNED_TABLES
 
 
-def include_object(object, name, type_, reflected, compare_to):
-    """Filter out tables managed by external systems."""
-    if type_ == "table" and name in EXCLUDE_TABLES:
+def include_object(obj, name, type_, reflected, compare_to) -> bool:  # noqa: D417
+    """Keep externally owned tables out of every migration comparison.
+
+    Args:
+        obj: The schema object under consideration.
+        name: Its name.
+        type_: ``"table"``, ``"column"``, ``"index"`` and so on.
+        reflected: Whether it came from the live database.
+        compare_to: The metadata object it is being compared with, if any.
+
+    Returns:
+        bool: False for excluded tables and anything belonging to them.
+    """
+    if type_ == "table" and is_externally_owned(name):
+        return False
+    table = getattr(obj, "table", None)
+    if table is not None and is_externally_owned(getattr(table, "name", None)):
         return False
     return True
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode.
-
-    Emits SQL to stdout instead of executing against the database.
-    """
-    url = config.get_main_option("sqlalchemy.url")
+    """Emit SQL to stdout instead of executing it."""
     context.configure(
-        url=url,
+        url=config.get_main_option("sqlalchemy.url"),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         include_object=include_object,
+        compare_type=True,
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode.
-
-    Creates an engine and runs migrations against the live database.
-    """
+    """Run migrations against the live database."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
-
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             include_object=include_object,
+            compare_type=True,
         )
-
         with context.begin_transaction():
             context.run_migrations()
 

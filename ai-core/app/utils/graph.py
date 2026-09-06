@@ -135,4 +135,9 @@ def prepare_messages(messages: list[Message], system_prompt: str) -> list[Messag
         else:
             raise
 
-    return [Message(role="system", content=system_prompt)] + trimmed_messages
+    # The system prompt is authored by us, not typed by a person, so the
+    # 3000-character user-input cap on Message.content must not apply to it:
+    # routing context plus long-term memory routinely exceeds it, and a
+    # validation error here would fail every turn of the conversation.
+    system_message = Message.model_construct(role="system", content=system_prompt)
+    return [system_message] + trimmed_messages

@@ -1,107 +1,113 @@
-"""Rule-based supervisor node — routes each turn to a specialisation without
-ever calling a model. See routing_rules.py for the matching table.
+"""Rule-based supervisor node: decides which specialist handles a turn without calling a model.
+
+The supervisor reads the requester from the ``current_requester`` ContextVar
+(the same one the tools trust) and the last human message, consults the
+routing table, and writes an observable decision into the graph state. It is
+deliberately synchronous and I/O-free: the whole decision is a few regular
+expressions, measured and exported as Prometheus metrics.
+
+It never consults a model. ``sprintflow_routing_model_calls_total`` exists so
+the escalation rate can be read off the metrics endpoint; this module has no
+code path that increments it, and that is the design, not an omission.
+
+The prompt text each specialist receives lives with the specialist
+(``specialists.py``); ``describe_route`` is re-exported here for callers that
+knew it under this module.
 """
 
 import time
-from typing import Any, Dict, Optional
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+)
 
 from langchain_core.runnables import RunnableConfig
 
-from app.core.langgraph.routing_rules import classify_text
-from app.core.langgraph.tools.mattermost_admin import current_requester
+from app.core.config import settings
+from app.core.langgraph.routing_rules import detect_intents
+from app.core.langgraph.specialists import describe_route
 from app.core.logging import logger
-from app.schemas.graph import GraphState, Specialisation
+from app.core.metrics import (
+    routing_decisions_total,
+    routing_latency_seconds,
+)
+from app.core.requester import current_requester
+from app.schemas.graph import (
+    CapabilityRoute,
+    GraphState,
+)
 
-_SPECIALISATION_CONTEXT = {
-    Specialisation.ADMIN_OPS: (
-        "# Routing\n"
-        "This request was routed to Admin Operations — the requester has been "
-        "verified as an authorised administrator. Consider the administrative "
-        "tools available to you for this request."
-    ),
-    Specialisation.LEARNER_SUPPORT: (
-        "# Routing\n"
-        "This request was routed to Learner Support — focus on course, "
-        "assignment, and academic-support topics. Administrative actions "
-        "(team/user management) are out of scope for this turn."
-    ),
-    Specialisation.GENERAL_FALLBACK: (
-        "# Routing\n"
-        "This request did not clearly match a specific specialisation, or the "
-        "action implied needs permissions the requester does not have. Respond "
-        "helpfully as a general assistant; if the request appears to need "
-        "administrative rights the requester lacks, say so plainly rather than "
-        "attempting it."
-    ),
-}
+FALLBACK_NO_MESSAGES = "fallback_no_messages"
 
 
-def describe_specialisation(specialisation: Optional[Specialisation]) -> str:
-    """Return the prompt text explaining this turn's routing to the model.
-
-    Purely a behavioural nudge for the LLM — it does not change which tools
-    are bound. The actual security boundary for admin actions remains the
-    ADMIN_EMAILS check inside the admin tools themselves.
-    """
-    if specialisation is None:
-        return ""
-    return _SPECIALISATION_CONTEXT.get(specialisation, "")
-
-
-def _extract_last_text(state: GraphState) -> Optional[str]:
+def _last_human_text(state: GraphState) -> Optional[str]:
     """Pull the text of the most recent message out of the graph state."""
     if not state.messages:
         return None
-
-    last_msg = state.messages[-1]
-    text = getattr(last_msg, "content", None)
-    if not text and isinstance(last_msg, dict):
-        text = last_msg.get("content")
-
+    last = state.messages[-1]
+    text = getattr(last, "content", None)
+    if text is None and isinstance(last, dict):
+        text = last.get("content")
+    if isinstance(text, list):
+        text = " ".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in text)
     return str(text) if text else None
 
 
 def supervisor_node(state: GraphState, config: RunnableConfig) -> Dict[str, Any]:
     """Classify the current turn and record the routing decision.
 
-    is_admin is read from `current_requester`, the same ContextVar the admin
-    tools already trust — never from `state`, since nothing populates that
-    field and a model-influenced state value would defeat the point of
-    checking authorisation in code.
+    Args:
+        state: The graph state; only the last message is inspected.
+        config: The runnable configuration, for the session id in logs.
+
+    Returns:
+        dict: State update with ``route``, ``route_plan``, ``route_confidence``,
+        ``matched_rule`` and ``is_multi_intent``.
     """
-    start_time = time.perf_counter()
+    started = time.perf_counter()
     thread_id = (config or {}).get("configurable", {}).get("thread_id")
-
     requester = current_requester.get()
-    is_admin = bool(requester and requester.get("is_admin"))
-
-    text = _extract_last_text(state)
+    text = _last_human_text(state)
 
     if not text:
-        result_update = {
-            "specialisation": Specialisation.GENERAL_FALLBACK,
-            "route_confidence": 0.0,
-            "matched_rule": "fallback_no_messages",
-            "is_admin": is_admin,
-        }
+        primary_route = CapabilityRoute.GENERAL.value
+        plan: List[str] = []
+        confidence = 0.0
+        matched_rule = FALLBACK_NO_MESSAGES
     else:
-        result = classify_text(text, is_admin=is_admin)
-        result_update = {
-            "specialisation": result.specialisation,
-            "route_confidence": result.confidence,
-            "matched_rule": result.matched_rule,
-            "is_admin": is_admin,
-        }
+        intents = detect_intents(text, requester)[: max(1, settings.ROUTING_MAX_ROUTES_PER_TURN)]
+        primary = intents[0]
+        primary_route = primary.route.value
+        plan = [result.route.value for result in intents[1:]]
+        confidence = primary.confidence
+        matched_rule = primary.matched_rule
 
-    latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+    is_multi = bool(plan)
+    latency = time.perf_counter() - started
+    routing_decisions_total.labels(route=primary_route, matched_rule=matched_rule, multi_intent=str(is_multi)).inc()
+    routing_latency_seconds.observe(latency)
     logger.info(
         "routing_decision_made",
         session_id=thread_id,
-        specialisation=result_update["specialisation"].value,
-        route_confidence=result_update["route_confidence"],
-        matched_rule=result_update["matched_rule"],
-        is_admin=is_admin,
-        latency_ms=latency_ms,
+        route=primary_route,
+        route_plan=plan,
+        matched_rule=matched_rule,
+        route_confidence=confidence,
+        is_multi_intent=is_multi,
+        requester=requester.describe() if requester else None,
+        input_length=len(text) if text else 0,
+        latency_ms=round(latency * 1000, 3),
+        model_call=False,
     )
+    return {
+        "route": primary_route,
+        "route_plan": plan,
+        "route_confidence": confidence,
+        "matched_rule": matched_rule,
+        "is_multi_intent": is_multi,
+    }
 
-    return result_update
+
+__all__ = ["FALLBACK_NO_MESSAGES", "describe_route", "supervisor_node"]

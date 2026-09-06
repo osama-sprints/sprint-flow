@@ -20,7 +20,7 @@ graph TB
     subgraph Services["Services"]
         LLM["LLM Service\n(fallback + retry)"]
         Memory["Memory Service\n(mem0 + cache)"]
-        Tools["Tools\n(concurrent execution)"]
+        Tools["Tools\n(sequential execution)"]
     end
 
     subgraph Storage["Storage"]
@@ -73,7 +73,7 @@ sequenceDiagram
     L-->>G: response with tool_calls?
 
     alt has tool calls
-        G->>T: execute tools concurrently
+        G->>T: execute tool calls one at a time
         T-->>G: tool results
         G->>L: chat node again with tool results
         L-->>G: final response
@@ -97,14 +97,14 @@ graph LR
 ```
 
 - **`chat` node** — builds the system prompt, calls the LLM, returns a `Command` routing to `tool_call` or `END`
-- **`tool_call` node** — executes all tool calls concurrently, feeds results back to `chat`
+- **`tool_call` node** — executes the turn's tool calls one at a time, feeds results back to `chat`
 - **Checkpointer** — `AsyncPostgresSaver` persists the full `GraphState` per `thread_id` (session), enabling resume on interrupts and multi-turn memory
 
 ## Key design decisions
 
 **Memory search and state check run concurrently.** On every non-resumed request, `aget_state` (to check for interrupts) and `memory.search` (to fetch relevant memories) run in parallel with `asyncio.gather`, saving 200–500ms per request.
 
-**Tool calls execute concurrently.** When the LLM returns multiple tool calls in one response, they all execute in parallel via `asyncio.gather`.
+**Tool calls execute sequentially.** When the LLM returns several tool calls in one response they run in order, not in parallel. A confirming tool pauses the whole turn with `interrupt()`, and LangGraph matches the person's answer to the pending interrupt **by position**; running two confirmations concurrently would let one answer resume the wrong call. On resume the node replays in the same order, so each answer reaches the call it was asked for.
 
 **System prompt cached at module load.** `system.md` is read once at startup. Per-request cost is only `.format()` with the user's name, current datetime, and retrieved memories — no file I/O.
 

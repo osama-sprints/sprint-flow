@@ -38,12 +38,14 @@ from app.core.cache import (
 )
 from app.core.config import settings
 from app.core.logging import logger
+from app.services import onboarding
 from app.services.conversation import (
     IncomingMessage,
     answer_and_reply,
     clean_text,
     is_own_post,
 )
+from app.services.identity import sync_mattermost_user
 from app.services.mattermost import mattermost_client
 
 # Reconnect backoff: double on each consecutive failure, capped. Reset to the
@@ -310,15 +312,31 @@ class MattermostWebSocketListener:
         Args:
             data: The event's data object, carrying `user_id`.
         """
-        if not settings.MATTERMOST_AUTO_ONBOARD:
-            return
-
         user_id = str(data.get("user_id") or "")
         if not user_id:
             return
 
         bot_user_id = await mattermost_client.get_bot_user_id()
         if bot_user_id and user_id == bot_user_id:
+            return
+
+        # Sprint 1 / onboarding: record the arrival durably FIRST, independent
+        # of the team join below, and let the dispatcher deliver the welcome.
+        # Nothing is sent from the event loop, and a replayed event finds the
+        # journey already recorded. Failures here must never take the listener
+        # down; a person whose profile could not be read is logged at error
+        # level because the event is not redelivered by itself.
+        if settings.ONBOARDING_ENABLED:
+            try:
+                user = await sync_mattermost_user(user_id)
+                if user is None:
+                    logger.error("onboarding_arrival_lost_profile_unreadable", user_id=user_id)
+                else:
+                    await onboarding.start_journey(user)
+            except Exception as e:
+                logger.exception("onboarding_arrival_failed", user_id=user_id, error=str(e))
+
+        if not settings.MATTERMOST_AUTO_ONBOARD:
             return
 
         team = await mattermost_client.get_team_by_name(settings.MATTERMOST_DEFAULT_TEAM)
@@ -331,16 +349,12 @@ class MattermostWebSocketListener:
             return
 
         added = await mattermost_client.add_user_to_team(team["id"], user_id)
-        from app.services.onboarding import handle_arrival
-        await handle_arrival(user_id)
         logger.info(
             "mattermost_user_onboarded",
             user_id=user_id,
             team=settings.MATTERMOST_DEFAULT_TEAM,
             added=added,
         )
-
-        
 
     async def _bot_is_in_thread(self, root_id: str) -> bool:
         """Return True when the bot already participates in a thread.

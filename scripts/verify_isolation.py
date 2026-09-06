@@ -19,6 +19,7 @@ BOT = os.environ["MATTERMOST_BOT_USERNAME"]
 
 
 def req(method, path, body=None, token=None):
+    """Call the Mattermost API and return (decoded body, headers)."""
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(API + path, data=data, method=method)
     r.add_header("Content-Type", "application/json")
@@ -28,16 +29,18 @@ def req(method, path, body=None, token=None):
         return json.loads(resp.read() or b"{}"), dict(resp.headers)
 
 
-_, h = req("POST", "/users/login", {"login_id": os.environ["MM_ADMIN_USERNAME"],
-                                    "password": os.environ["MM_ADMIN_PASSWORD"]})
+_, h = req(
+    "POST", "/users/login", {"login_id": os.environ["MM_ADMIN_USERNAME"], "password": os.environ["MM_ADMIN_PASSWORD"]}
+)
 T = h["Token"]
 bot, _ = req("GET", "/users/username/" + BOT, token=T)
 team, _ = req("GET", "/teams/name/" + os.environ["MM_TEAM_NAME"], token=T)
-ch, _ = req("GET", f"/teams/{team['id']}/channels/name/{os.environ.get('MM_BOT_CHANNEL','town-square')}", token=T)
+ch, _ = req("GET", f"/teams/{team['id']}/channels/name/{os.environ.get('MM_BOT_CHANNEL', 'town-square')}", token=T)
 CH = ch["id"]
 
 
 def send(msg, root_id=""):
+    """Post a message in the test channel as the admin."""
     body = {"channel_id": CH, "message": msg}
     if root_id:
         body["root_id"] = root_id
@@ -46,14 +49,19 @@ def send(msg, root_id=""):
 
 
 def wait_reply(after_ts, root_id=None, timeout=120):
+    """Wait for a bot reply after ``after_ts``, optionally inside one thread."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(3)
         d, _ = req("GET", f"/channels/{CH}/posts?per_page=60", token=T)
-        hits = [p for p in d["posts"].values()
-                if p["user_id"] == bot["id"] and p["create_at"] > after_ts
-                and not str(p.get("type") or "").startswith("system_")
-                and (root_id is None or p.get("root_id") == root_id)]
+        hits = [
+            p
+            for p in d["posts"].values()
+            if p["user_id"] == bot["id"]
+            and p["create_at"] > after_ts
+            and not str(p.get("type") or "").startswith("system_")
+            and (root_id is None or p.get("root_id") == root_id)
+        ]
         if hits:
             hits.sort(key=lambda p: p["create_at"])
             return hits[-1]
@@ -66,12 +74,12 @@ MARK_B = "WALRUS-BETA"
 print("==> Thread A")
 a = send(f"@{BOT} Reply with exactly this token: {MARK_A}")
 ra = wait_reply(a["create_at"], root_id=a["id"])
-print(f"    A: {(ra or {}).get('message','<none>')[:50]!r}")
+print(f"    A: {(ra or {}).get('message', '<none>')[:50]!r}")
 
 print("==> Thread B (separate thread, same channel)")
 b = send(f"@{BOT} Reply with exactly this token: {MARK_B}")
 rb = wait_reply(b["create_at"], root_id=b["id"])
-print(f"    B: {(rb or {}).get('message','<none>')[:50]!r}")
+print(f"    B: {(rb or {}).get('message', '<none>')[:50]!r}")
 
 # Ground truth: inspect what each session actually holds in the checkpointer.
 # This is the precise meaning of "context isolation" — thread B's conversation
@@ -90,7 +98,10 @@ def session_text(session_id):
     with open(os.path.join(ROOT, "scripts", "_dump_session.py"), "rb") as helper:
         out = subprocess.run(
             ["docker", "compose", "exec", "-T", "ai-core", "/app/.venv/bin/python", "-", session_id],
-            stdin=helper, capture_output=True, text=True, cwd=ROOT,
+            stdin=helper,
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
         )
     if out.returncode != 0:
         raise SystemExit(f"could not read session {session_id}: {out.stderr.strip()[:300]}")
@@ -98,16 +109,17 @@ def session_text(session_id):
         raise SystemExit(f"session {session_id} came back empty — the checkpointer holds nothing for it")
     return out.stdout
 
+
 sa = session_text(f"{CH}:{a['id']}")
 sb = session_text(f"{CH}:{b['id']}")
 
 print()
 print("=" * 78)
 checks = [
-    ("thread A state holds its own token",      MARK_A in sa),
-    ("thread B state holds its own token",      MARK_B in sb),
-    ("thread A state does NOT contain B",       MARK_B not in sa),
-    ("thread B state does NOT contain A",       MARK_A not in sb),
+    ("thread A state holds its own token", MARK_A in sa),
+    ("thread B state holds its own token", MARK_B in sb),
+    ("thread A state does NOT contain B", MARK_B not in sa),
+    ("thread B state does NOT contain A", MARK_A not in sb),
 ]
 ok = all(v for _, v in checks)
 for label, v in checks:

@@ -1,4 +1,4 @@
-"""LLM service with retries, circular fallback, and optional structured output."""
+"""LLM service with retries, circular fallback, per-call tool binding and optional structured output."""
 
 import asyncio
 import logging
@@ -7,6 +7,7 @@ from typing import (
     Callable,
     List,
     Optional,
+    Sequence,
     Type,
     TypeVar,
     Union,
@@ -40,27 +41,31 @@ T = TypeVar("T", bound=BaseModel)
 class LLMService:
     """Service for managing LLM calls with retries and circular fallback.
 
-    Two distinct execution paths:
+    Three execution paths:
 
-    - **Default path** (no model_name / response_format / model_kwargs): uses
-      ``self._llm`` which is the tool-bound agent model. Circular fallback
-      updates ``self._llm`` so tool bindings are preserved across retries.
+    - **Default path** (no overrides, no ``tools``): uses ``self._llm``, the
+      model with the default tool set bound. Circular fallback re-binds the
+      default tools on the next model so bindings survive a switch.
 
-    - **One-off path** (any override provided): resolves a fresh, local
-      ``Runnable`` for the call without ever touching ``self._llm``, so
-      concurrent default-path calls are never affected.
+    - **Specialist path** (``tools`` given): binds exactly that tool subset to
+      the current base model for this call only. This is how each supervisor
+      route gets a genuinely different capability set without a second service.
+
+    - **One-off path** (any of model_name / response_format / model_kwargs):
+      resolves a fresh, local ``Runnable`` without touching ``self._llm``.
     """
 
     def __init__(self):
         """Initialize the LLM service with the configured default model."""
-        self._llm: Any = None  # BaseChatModel pre-bind_tools, Runnable after
+        self._base_llm: Any = None  # the current model, never tool-bound
+        self._llm: Any = None  # the current model with the default tools bound
         self._current_model_index: int = 0
         self._bound_tools: List = []
 
         all_names = LLMRegistry.get_all_names()
         try:
             self._current_model_index = all_names.index(settings.DEFAULT_LLM_MODEL)
-            self._llm = LLMRegistry.get(settings.DEFAULT_LLM_MODEL)
+            self._base_llm = LLMRegistry.get(settings.DEFAULT_LLM_MODEL)
             logger.info(
                 "llm_service_initialized",
                 default_model=settings.DEFAULT_LLM_MODEL,
@@ -70,13 +75,14 @@ class LLMService:
             )
         except Exception as e:
             self._current_model_index = 0
-            self._llm = LLMRegistry.LLMS[0]["llm"]
+            self._base_llm = LLMRegistry.LLMS[0]["llm"]
             logger.warning(
                 "default_model_not_found_using_first",
                 requested=settings.DEFAULT_LLM_MODEL,
                 using=all_names[0] if all_names else "none",
                 error=str(e),
             )
+        self._llm = self._base_llm
 
     # ------------------------------------------------------------------
     # Public API
@@ -88,6 +94,8 @@ class LLMService:
         messages: LanguageModelInput,
         model_name: Optional[str] = ...,
         response_format: None = ...,
+        *,
+        tools: Optional[Sequence[Any]] = ...,
         **model_kwargs: Any,
     ) -> BaseMessage: ...
 
@@ -98,6 +106,7 @@ class LLMService:
         model_name: Optional[str] = ...,
         *,
         response_format: Type[T],
+        tools: Optional[Sequence[Any]] = ...,
         **model_kwargs: Any,
     ) -> T: ...
 
@@ -106,6 +115,8 @@ class LLMService:
         messages: LanguageModelInput,
         model_name: Optional[str] = None,
         response_format: Optional[Type[BaseModel]] = None,
+        *,
+        tools: Optional[Sequence[Any]] = None,
         **model_kwargs: Any,
     ) -> Union[BaseMessage, BaseModel]:
         """Call the LLM with retries and circular fallback.
@@ -117,9 +128,11 @@ class LLMService:
                 provided the call chains ``.with_structured_output(schema)``
                 and returns a validated instance of that schema instead of a
                 raw ``BaseMessage``.
+            tools: Bind exactly these tools for this call (the specialist path).
+                ``None`` uses the default binding from ``bind_tools``.
             **model_kwargs: Extra kwargs forwarded to ``LLMRegistry.get`` when
                 constructing a one-off model instance (e.g. ``temperature``,
-                ``max_tokens``, ``reasoning``).
+                ``max_tokens``).
 
         Returns:
             ``BaseMessage`` when ``response_format`` is ``None``, otherwise a
@@ -131,7 +144,7 @@ class LLMService:
         """
         try:
             return await asyncio.wait_for(
-                self._call_with_fallback(messages, model_name, response_format, model_kwargs),
+                self._call_with_fallback(messages, model_name, response_format, model_kwargs, tools),
                 timeout=settings.LLM_TOTAL_TIMEOUT,
             )
         except asyncio.TimeoutError:
@@ -142,7 +155,7 @@ class LLMService:
             raise RuntimeError(f"llm call timed out after {settings.LLM_TOTAL_TIMEOUT}s total budget")
 
     def get_llm(self) -> Any:
-        """Return the current tool-bound default LLM instance.
+        """Return the current default LLM instance (with default tools bound).
 
         Returns:
             Current ``BaseChatModel`` instance or ``None`` if not initialised.
@@ -150,7 +163,7 @@ class LLMService:
         return self._llm
 
     def bind_tools(self, tools: List) -> "LLMService":
-        """Bind tools to the default LLM instance.
+        """Bind the default tool set to the current model.
 
         Args:
             tools: List of tools to bind.
@@ -158,10 +171,10 @@ class LLMService:
         Returns:
             Self for method chaining.
         """
-        if self._llm:
-            self._bound_tools = tools
-            self._llm = self._llm.bind_tools(tools)
-            logger.debug("tools_bound_to_llm", tool_count=len(tools))
+        if self._base_llm is not None:
+            self._bound_tools = list(tools)
+            self._llm = self._base_llm.bind_tools(self._bound_tools) if self._bound_tools else self._base_llm
+            logger.debug("tools_bound_to_llm", tool_count=len(self._bound_tools))
         return self
 
     # ------------------------------------------------------------------
@@ -211,8 +224,8 @@ class LLMService:
     def _switch_to_next_model(self) -> bool:
         """Advance the default model to the next entry in the registry (circular).
 
-        Mutates ``self._llm`` and ``self._current_model_index`` so tool bindings
-        survive model switches on the default agent path.
+        Mutates ``self._base_llm``, ``self._llm`` and ``self._current_model_index``
+        so both the default binding and later per-call bindings use the new model.
 
         Returns:
             ``True`` on success, ``False`` if the switch failed.
@@ -227,9 +240,8 @@ class LLMService:
                 to_model=next_entry["name"],
             )
             self._current_model_index = next_index
-            self._llm = next_entry["llm"]
-            if self._bound_tools:
-                self._llm = self._llm.bind_tools(self._bound_tools)
+            self._base_llm = next_entry["llm"]
+            self._llm = self._base_llm.bind_tools(self._bound_tools) if self._bound_tools else self._base_llm
             logger.info("model_switched", new_model=next_entry["name"], new_index=next_index)
             return True
         except Exception as e:
@@ -242,6 +254,7 @@ class LLMService:
         model_name: Optional[str],
         response_format: Optional[Type[BaseModel]],
         model_kwargs: dict,
+        tools: Optional[Sequence[Any]],
     ) -> Union[BaseMessage, BaseModel]:
         """Build path-specific strategies and delegate to the shared fallback loop.
 
@@ -249,17 +262,22 @@ class LLMService:
             ``get_target`` builds a fresh registry instance each attempt.
             ``advance`` increments a local index — ``self._llm`` is never touched.
 
-        Default path (no overrides):
-            ``get_target`` returns ``self._llm`` (tool-bound).
+        Default / specialist path (no overrides):
+            ``get_target`` returns ``self._llm`` (default tools) or the base
+            model with ``tools`` bound for this call.
             ``advance`` calls ``_switch_to_next_model`` so bindings persist.
         """
 
         def _override_target(idx: int) -> Any:
             base = LLMRegistry.get(LLMRegistry.LLMS[idx]["name"], **model_kwargs)
-            return base.with_structured_output(response_format) if response_format else base
+            if response_format:
+                return base.with_structured_output(response_format)
+            return base.bind_tools(list(tools)) if tools else base
 
         def _default_target(_: int) -> Any:
-            return self._llm
+            if tools is None:
+                return self._llm
+            return self._base_llm.bind_tools(list(tools)) if tools else self._base_llm
 
         def _default_advance(_: int) -> Optional[int]:
             return self._current_model_index if self._switch_to_next_model() else None

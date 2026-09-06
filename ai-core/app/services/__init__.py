@@ -1,9 +1,7 @@
-"""This file contains the services for the application."""
+"""Service layer.
 
-from app.services.database import database_service
-from app.services.llm import (
-    LLMRegistry,
-    llm_service,
-)
-
-__all__ = ["database_service", "LLMRegistry", "llm_service"]
+Import the module you need directly (``app.services.database``,
+``app.services.llm``, ``app.services.domain.cohorts`` ...). This package
+deliberately re-exports nothing, so importing the database service for a
+seed or verification script does not also construct the LLM clients.
+"""

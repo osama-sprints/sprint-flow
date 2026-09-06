@@ -1,53 +1,44 @@
-"""This file contains the user model for the application."""
+"""The single identity concept: a person, joined to Mattermost by ``mattermost_user_id``.
 
-from typing import (
-    TYPE_CHECKING,
-    List,
-    Optional,
+Rows are created and refreshed by ``app.services.identity`` from the Mattermost
+profile on every inbound event, so downstream code can rely on one existing for
+anyone who has ever spoken to the assistant or registered while it was listening.
+No global role lives here: authority is always a cohort membership. The one
+platform-level flag, ``is_superadmin``, is synced from the ``ADMIN_EMAILS``
+allowlist so that authorisation decisions read stored data, never the message.
+"""
+
+from datetime import datetime
+
+from sqlmodel import Field
+
+from app.models.domain_base import (
+    TZ_DATETIME,
+    DomainBase,
 )
 
-import bcrypt
-from sqlmodel import (
-    Field,
-    Relationship,
-)
 
-from app.models.base import BaseModel
-
-if TYPE_CHECKING:
-    from app.models.session import Session
-
-
-class User(BaseModel, table=True):
-    """User model for storing user accounts.
+class User(DomainBase, table=True):
+    """A person known to SprintFlow.
 
     Attributes:
-        id: The primary key
-        email: User's email (unique)
-        hashed_password: Bcrypt hashed password
-        username: Optional display name for the user
-        created_at: When the user was created
-        sessions: Relationship to user's chat sessions
+        id: Internal integer primary key. Foreign keys always point here.
+        mattermost_user_id: The Mattermost user id carried on every inbound event.
+        username: Mattermost handle at the time of the last sync.
+        email: Mattermost email at the time of the last sync.
+        display_name: Friendly name for messages.
+        is_superadmin: Platform administrator, synced from ``ADMIN_EMAILS``.
+        timezone: IANA zone from the Mattermost profile, used to interpret spoken times.
+        last_synced_at: When the Mattermost profile was last copied in.
     """
 
-    id: int = Field(default=None, primary_key=True)
-    email: str = Field(unique=True, index=True)
-    hashed_password: str
-    username: Optional[str] = Field(default=None, index=False)
-    sessions: List["Session"] = Relationship(back_populates="user")
-    mattermost_user_id: str | None = Field(default=None, unique=True,index=True,)
-    handle: str | None = Field(default=None,unique=True,index=True,)
+    __tablename__ = "users"  # pyright: ignore[reportAssignmentType]
 
-    def verify_password(self, password: str) -> bool:
-        """Verify if the provided password matches the hash."""
-        return bcrypt.checkpw(password.encode("utf-8"), self.hashed_password.encode("utf-8"))
-
-    @staticmethod
-    def hash_password(password: str) -> str:
-        """Hash a password using bcrypt."""
-        salt = bcrypt.gensalt()
-        return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
-
-
-# Avoid circular imports
-from app.models.session import Session  # noqa: E402
+    id: int | None = Field(default=None, primary_key=True)
+    mattermost_user_id: str = Field(unique=True, index=True, max_length=64)
+    username: str = Field(index=True, max_length=128)
+    email: str | None = Field(default=None, index=True, max_length=320)
+    display_name: str | None = Field(default=None, max_length=256)
+    is_superadmin: bool = Field(default=False, nullable=False)
+    timezone: str | None = Field(default=None, max_length=64)
+    last_synced_at: datetime | None = Field(default=None, sa_type=TZ_DATETIME)
