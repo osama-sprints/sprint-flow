@@ -28,6 +28,7 @@ NEEDLE = "tuesday"
 
 
 def mm(method, path, body=None, token=None):
+    """Call the Mattermost API and return (decoded body, headers)."""
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(API + path, data=data, method=method)
     r.add_header("Content-Type", "application/json")
@@ -38,6 +39,7 @@ def mm(method, path, body=None, token=None):
 
 
 def qdrant(method, path, body=None):
+    """Call the Qdrant REST API and return the decoded body."""
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(QURL + path, data=data, method=method)
     r.add_header("Content-Type", "application/json")
@@ -46,29 +48,36 @@ def qdrant(method, path, body=None):
         return json.loads(resp.read() or b"{}")
 
 
-_, h = mm("POST", "/users/login", {"login_id": os.environ["MM_ADMIN_USERNAME"],
-                                   "password": os.environ["MM_ADMIN_PASSWORD"]})
+_, h = mm(
+    "POST", "/users/login", {"login_id": os.environ["MM_ADMIN_USERNAME"], "password": os.environ["MM_ADMIN_PASSWORD"]}
+)
 T = h["Token"]
 me, _ = mm("GET", "/users/me", token=T)
 bot, _ = mm("GET", "/users/username/" + BOT, token=T)
 team, _ = mm("GET", "/teams/name/" + os.environ["MM_TEAM_NAME"], token=T)
-pub, _ = mm("GET", f"/teams/{team['id']}/channels/name/{os.environ.get('MM_BOT_CHANNEL','town-square')}", token=T)
+pub, _ = mm("GET", f"/teams/{team['id']}/channels/name/{os.environ.get('MM_BOT_CHANNEL', 'town-square')}", token=T)
 dm, _ = mm("POST", "/channels/direct", [me["id"], bot["id"]], token=T)
 
 
 def send(channel_id, message):
+    """Post a message as the admin."""
     p, _ = mm("POST", "/posts", {"channel_id": channel_id, "message": message}, token=T)
     return p
 
 
 def wait_reply(channel_id, after_ts, timeout=150):
+    """Wait for the bot's reply in a channel after ``after_ts``."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(3)
         d, _ = mm("GET", f"/channels/{channel_id}/posts?per_page=40", token=T)
-        hits = [p for p in d["posts"].values()
-                if p["user_id"] == bot["id"] and p["create_at"] > after_ts
-                and not str(p.get("type") or "").startswith("system_")]
+        hits = [
+            p
+            for p in d["posts"].values()
+            if p["user_id"] == bot["id"]
+            and p["create_at"] > after_ts
+            and not str(p.get("type") or "").startswith("system_")
+        ]
         if hits:
             hits.sort(key=lambda p: p["create_at"])
             return hits[-1]["message"]
@@ -78,8 +87,7 @@ def wait_reply(channel_id, after_ts, timeout=150):
 def memories_in_qdrant():
     """Every stored memory string in the collection."""
     try:
-        res = qdrant("POST", f"/collections/{COLLECTION}/points/scroll",
-                     {"limit": 200, "with_payload": True})
+        res = qdrant("POST", f"/collections/{COLLECTION}/points/scroll", {"limit": 200, "with_payload": True})
     except Exception as e:
         print(f"    qdrant scroll failed: {e}")
         return []

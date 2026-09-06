@@ -1,11 +1,15 @@
 """READ-ONLY helper: print the message list held for one LangGraph session."""
-import asyncio, os, sys
+
+import asyncio
+import os
+import sys
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 DSN = (
     f"postgresql://{os.environ['POSTGRES_USER']}:{os.environ['POSTGRES_PASSWORD']}"
     f"@{os.environ['POSTGRES_HOST']}:{os.environ['POSTGRES_PORT']}/{os.environ['POSTGRES_DB']}"
 )
+
 
 async def main():
     async with AsyncPostgresSaver.from_conn_string(DSN) as saver:
@@ -19,5 +23,6 @@ async def main():
             c = " ".join(str(c).split())
             if c:
                 print(f"{type(m).__name__}: {c}")
+
 
 asyncio.run(main())

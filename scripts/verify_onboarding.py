@@ -21,6 +21,7 @@ WANT_CHANNELS = ["town-square"] + os.environ.get("MM_DEFAULT_CHANNELS", "qa supp
 
 
 def req(method, path, body=None, token=None):
+    """Call the Mattermost API and return (decoded body, headers)."""
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(API + path, data=data, method=method)
     r.add_header("Content-Type", "application/json")
@@ -30,8 +31,9 @@ def req(method, path, body=None, token=None):
         return json.loads(resp.read() or b"{}"), dict(resp.headers)
 
 
-_, h = req("POST", "/users/login", {"login_id": os.environ["MM_ADMIN_USERNAME"],
-                                    "password": os.environ["MM_ADMIN_PASSWORD"]})
+_, h = req(
+    "POST", "/users/login", {"login_id": os.environ["MM_ADMIN_USERNAME"], "password": os.environ["MM_ADMIN_PASSWORD"]}
+)
 ADMIN = h["Token"]
 team, _ = req("GET", f"/teams/name/{TEAM}", token=ADMIN)
 
