@@ -218,3 +218,8 @@
 .sf-video__link {
     font-size: 12px;
 }
+
+/* Player mounted under a message whose video link Mattermost did not embed. */
+.sf-video-fallback {
+    margin: 4px 0 2px;
+}

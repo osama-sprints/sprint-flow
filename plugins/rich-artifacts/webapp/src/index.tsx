@@ -2,6 +2,7 @@ import type {ElementType} from 'react';
 
 import MermaidPost from './components/mermaid_post';
 import VideoEmbed, {isVideoEmbed} from './components/video_embed';
+import {startVideoLinkFallback} from './components/video_links';
 import RichMediaPost from './components/rich_media_post';
 import {startBidiController} from './bidi/controller';
 import {MERMAID_POST_TYPE, RICH_MEDIA_POST_TYPE} from './types';
@@ -52,6 +53,7 @@ class Plugin {
     private componentIds: string[] = [];
     private embedComponentId?: string;
     private stopBidi?: () => void;
+    private stopVideoFallback?: () => void;
 
     /**
      * @param registry Plugin registration API.
@@ -73,6 +75,11 @@ class Plugin {
         // message and its clickable link are untouched.
         this.embedComponentId = registry.registerPostWillRenderEmbedComponent(isVideoEmbed, VideoEmbed, true);
 
+        // Mattermost embeds only BARE urls; a Markdown video link gets no embed
+        // and so never reaches the hook above. This mounts the same player
+        // under such messages.
+        this.stopVideoFallback = startVideoLinkFallback();
+
         // Ordinary posts are not custom post types, so no component hook can
         // reach them; the bidi controller is what corrects their direction.
         this.stopBidi = startBidiController();
@@ -83,6 +90,8 @@ class Plugin {
     public uninitialize(): void {
         this.stopBidi?.();
         delete this.stopBidi;
+        this.stopVideoFallback?.();
+        delete this.stopVideoFallback;
 
         if (this.registry) {
             for (const id of this.componentIds) {

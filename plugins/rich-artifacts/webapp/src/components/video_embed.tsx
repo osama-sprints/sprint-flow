@@ -21,20 +21,42 @@ import React, {useState} from 'react';
  * that cannot play the file still has a click-through.
  */
 
-const VIDEO_URL = /^https?:\/\/[^\s]+\.(mp4|webm|m4v|ogv)(\?[^\s]*)?$/i;
+const VIDEO_EXTENSIONS = /\.(mp4|webm|m4v|ogv)$/i;
 
 export type EmbedProps = {
     embed: {type: string; url: string; data?: unknown};
 };
 
 /**
+ * Decide whether a URL points at a browser-playable video file.
+ *
+ * The decision is made on the parsed PATH, so a query string or fragment
+ * (`…/final.mp4?t=5#intro`) neither breaks the match nor gets stripped from
+ * the URL the player is given.
+ *
+ * @param url Any string.
+ * @returns True for an http(s) URL whose path ends in a playable container.
+ */
+export const isVideoUrl = (url: unknown): boolean => {
+    if (typeof url !== 'string') {
+        return false;
+    }
+    try {
+        const parsed = new URL(url);
+        return (parsed.protocol === 'https:' || parsed.protocol === 'http:') && VIDEO_EXTENSIONS.test(parsed.pathname);
+    } catch (e) {
+        return false;
+    }
+};
+
+/**
  * Decide whether an embed is a direct video link.
  *
  * @param embed The embed Mattermost derived for a post.
- * @returns True for an http(s) URL ending in a browser-playable container.
+ * @returns True for a link embed whose URL is a playable video file.
  */
 export const isVideoEmbed = (embed: {type?: string; url?: string}): boolean =>
-    embed.type === 'link' && typeof embed.url === 'string' && VIDEO_URL.test(embed.url);
+    embed.type === 'link' && isVideoUrl(embed.url);
 
 const VideoEmbed = ({embed}: EmbedProps) => {
     const [failed, setFailed] = useState(false);
