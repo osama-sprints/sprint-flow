@@ -322,9 +322,23 @@ works like a reader, through three tools scoped to the conversation:
   pages that have none; `text` never transcribes; `vision` renders and
   transcribes even where text exists (scans, tables, screenshots, diagrams).
 
-Pages are rendered with PDFium (`pypdfium2`) at a bounded size and transcribed
-one page per call by `PDF_OCR_MODEL` through the LiteLLM proxy — transcription
-only, never answering: the prompt demands a faithful copy in the original
+- `ask_pdf_pages(id, question, start, end)` — a question about what one to
+  four pages *look like* (a diagram, chart, screenshot, stamp, signature,
+  layout), answered by `FILE_INPUT_VISION_MODEL` from the page images with
+  the pages it relied on; an interpretation, kept apart from transcription.
+
+For a scanned document the agent learns the structure first (`inspect_pdf`,
+the contents page), then calls `search_pdf` with `transcribe_missing=true`,
+which transcribes the untranscribed pages of the window in page order within
+the turn's budget, searches them, and reports exactly which pages were
+searched, transcribed, and left — an unsearched page is never reported as a
+page without the phrase.
+
+Pages are rendered with PDFium (`pypdfium2`) at a bounded size — the scale is
+decided from the page's dimensions before any bitmap exists, so no page can
+exceed the edge or area ceilings — and transcribed one page per call by
+`PDF_OCR_MODEL` through the LiteLLM proxy — transcription only, never
+answering: the prompt demands a faithful copy in the original
 language, tables as Markdown, `[unreadable]` where it cannot read, and no
 summary or invention. Each transcription is cached per document revision,
 page, model and rendering settings, with its token usage, cost (when the proxy
@@ -359,10 +373,27 @@ have policy defaults (no migration needed; a value left in `.env` is ignored):
 transfer timeout is `MATTERMOST_UPLOAD_TIMEOUT`) and
 `FILE_INPUT_RETENTION_SWEEP_SECONDS`.
 
+What the person reads — the notices above a reply, the error and "Stopped"
+replies, the answers to a typed cancel or retry — follows their language:
+Arabic when at least three letters in ten of their message are Arabic, their
+Mattermost locale when the message has no letters, English otherwise. Tool
+results stay English; they are protocol, not prose. PDFium returns some
+producers' Arabic text layers in visual order (the words read backwards); such
+a page is treated as having no usable text and is transcribed instead.
+
+Two settings govern how much a reply may say. `MAX_HISTORY_TOKENS` trims the
+conversation *before* the current turn; the person's latest message and this
+turn's tool results are never trimmed, whatever their size. `MAX_TOKENS` is the
+completion ceiling; thinking models spend part of it on reasoning, so it must
+be sized for reasoning plus the visible answer (the default is 8,192 — at
+2,000, a book summary came back as sixty visible tokens). A reply that still
+stops at the ceiling is retried once with a wider one.
+
 Limits worth knowing: images are not stored, so a later turn cannot look at
-them again; the search covers only text that exists (the text layer and pages
-already transcribed) and says so; and the refusal notices are written in
-English whatever the language of the conversation.
+them again; `ask_pdf_pages` answers are not cached; the search covers only text
+that exists (the text layer and pages already transcribed) and says so; and
+the reversed-Arabic probe relies on common function words, so a page made only
+of names and numbers is left as it is.
 
 ## Things that will bite you
 
