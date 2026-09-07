@@ -288,6 +288,35 @@ async def test_priming_reads_a_thread_once_and_only_on_the_first_turn(monkeypatc
     assert "QUOTED DATA" in messages[0]["content"]
 
 
+async def test_priming_does_not_hide_the_thread_from_retrieval(monkeypatch):
+    """Context read before the turn must stay readable, or the sub-agent goes blind.
+
+    Priming and retrieval share one seen-set. When priming marked the thread as
+    already read, the sub-agent's first look at that thread came back empty and
+    it answered from the surrounding channel instead — about a different
+    conversation entirely.
+    """
+    world = _world(monkeypatch, root_id="root-1")
+    world.post("root-1", user_id="u-sara", message="split the QA team?", create_at=1000)
+    world.post(
+        "reply-1", user_id="u-omar", message="a trial week, no permanent split", create_at=1001, root_id="root-1"
+    )
+    world.post("noise-1", user_id="u-omar", message="unrelated channel chatter", create_at=1002)
+    world.post(TRIGGER, user_id="u-asker", message="what did we agree?", create_at=2000, root_id="root-1")
+
+    primed = await discussion.prime_thread(first_turn=True)
+    after_priming = await retrieval.thread_messages()
+    turn = discussion.require_turn()
+
+    assert primed == 2
+    assert [record.text for record in after_priming.records] == [
+        "split the QA team?",
+        "a trial week, no permanent split",
+    ]
+    # Priming is context for the model, not a spend against the turn's reading.
+    assert turn.records_used == len(after_priming.records)
+
+
 async def test_priming_leaves_an_untouched_message_list_alone(monkeypatch):
     """With nothing primed, the call is byte-for-byte what it was."""
     _world(monkeypatch)
@@ -549,6 +578,51 @@ async def test_the_last_step_can_only_report(monkeypatch):
     assert digest.steps == POLICY.max_steps
     assert llm.tools[-1] == [sub_agent.REPORT_TOOL]
     assert set(llm.tools[0]) == {tool.name for tool in sub_agent.SUB_AGENT_TOOLS}
+
+
+async def test_a_second_run_can_still_see_what_the_first_one_read(monkeypatch):
+    """Dedupe is per run. Carried across runs it blinds the follow-up question.
+
+    The second run holds none of the first run's pages, so telling it "already
+    read" leaves it with nothing at all — which is how a follow-up came back
+    reporting that the channel could not be read.
+    """
+    world = _world(monkeypatch)
+    world.post("post-a", user_id="u-sara", message="ship on the 12th", create_at=1000)
+    world.post(TRIGGER, user_id="u-asker", message="what did we agree?", create_at=2000)
+    monkeypatch.setattr(
+        "app.services.llm.llm_service",
+        ScriptedLLM([_read(), _report("first", ["post-a"]), _read(), _report("second", ["post-a"])]),
+    )
+
+    first = await discussion.investigate("what did we agree?")
+    second = await discussion.investigate("and who agreed to it?")
+
+    assert first.messages_read == 1
+    assert second.messages_read == 1
+    # The page the second run was shown carries the message, not a dedupe note.
+    assert "ship on the 12th" in str(llm_seen_last(monkeypatch))
+
+
+def llm_seen_last(monkeypatch):
+    """The last tool result the scripted model was shown."""
+    from app.services.llm import llm_service
+
+    return llm_service.seen[-1][-1].content  # type: ignore[attr-defined]
+
+
+async def test_the_last_step_is_told_to_report_what_it_read(monkeypatch):
+    """One tool bound is not an instruction to stop reading and answer."""
+    world = _world(monkeypatch)
+    _discussion(world)
+    llm = ScriptedLLM([_read(), _read(), _read(), _report("Read as much as allowed.", [])])
+    monkeypatch.setattr("app.services.llm.llm_service", llm)
+
+    await discussion.investigate("summarise")
+
+    final_prompt = str(llm.seen[-1][-1].content)
+    assert "This is your last step" in final_prompt
+    assert "summarise them rather than describing the reading" in final_prompt
 
 
 async def test_retrieval_stops_after_its_allowance_of_runs(monkeypatch):

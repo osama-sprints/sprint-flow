@@ -69,6 +69,18 @@ class DiscussionTurn:
     users: Dict[str, Any] = field(default_factory=dict)
     teams: Dict[str, str] = field(default_factory=dict)
 
+    def begin_run(self) -> None:
+        """Start a fresh retrieval run.
+
+        The seen-set is per RUN, not per turn. It exists so one run does not
+        hand itself the same message twice; carried across runs it becomes a
+        blindfold, because the second run holds none of the first run's pages
+        and would be told there was nothing to read. The BUDGET is what spans
+        the turn, and it is what actually bounds the work.
+        """
+        self.runs += 1
+        self.seen = set()
+
     @property
     def budget_remaining(self) -> int:
         """Messages this turn may still take back from retrieval.
@@ -78,16 +90,25 @@ class DiscussionTurn:
         """
         return max(0, POLICY.max_records_per_turn - self.records_used)
 
-    def remember(self, records: List[Any]) -> None:
-        """Record what was returned, so it is not returned twice and can be cited.
+    def remember(self, records: List[Any], *, spend: bool = True) -> None:
+        """Record what was returned, so it can be cited and is not returned twice.
+
+        ``spend`` is False for messages read BEFORE the turn started — the
+        thread context shown to the model automatically. Those must stay
+        readable: marking them seen would make the retrieval sub-agent's first
+        look at the thread come back empty, which is exactly the thread it was
+        asked about.
 
         Args:
-            records: The records handed to the sub-agent.
+            records: The records to remember.
+            spend: Whether they count against the turn's budget and dedupe.
         """
         for record in records:
-            self.seen.add(record.post_id)
             self.records[record.post_id] = record
-        self.records_used += len(records)
+            if spend:
+                self.seen.add(record.post_id)
+        if spend:
+            self.records_used += len(records)
 
 
 current_discussion: ContextVar[Optional[DiscussionTurn]] = ContextVar("current_discussion", default=None)

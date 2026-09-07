@@ -108,7 +108,7 @@ class Record:
         Returns:
             str: A labelled, fenced record.
         """
-        head = f"post {self.post_id} · {self.author} · {self.when} · {self.channel_label}"
+        head = f"post {self.post_id} · {self.author} · {self.when} · {self.channel_label} · {self.permalink}"
         if self.root_id:
             head += f" · in thread {self.root_id}"
         if self.is_bot:

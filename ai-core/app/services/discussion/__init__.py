@@ -74,7 +74,7 @@ async def prime_thread(*, first_turn: bool) -> int:
     if turn is None or not first_turn or not turn.root_id:
         return 0
     try:
-        page = await thread_messages(limit=POLICY.thread_priming, turn=turn)
+        page = await thread_messages(limit=POLICY.thread_priming, turn=turn, spend=False)
     except RetrievalRefused as refused:
         logger.info("discussion_priming_refused", session_id=turn.session_id, reason=str(refused))
         return 0

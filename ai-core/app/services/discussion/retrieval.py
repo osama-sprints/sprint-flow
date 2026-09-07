@@ -212,6 +212,7 @@ async def thread_messages(
     cursor: str = "",
     limit: Optional[int] = None,
     turn: Optional[DiscussionTurn] = None,
+    spend: bool = True,
 ) -> Page:
     """Read a thread, newest-first by page but returned oldest-first.
 
@@ -220,6 +221,8 @@ async def thread_messages(
         cursor: A post id from a previous page; reads what came before it.
         limit: Page size, clamped by policy.
         turn: The turn context; the bound one by default.
+        spend: False when reading context automatically before the turn, so the
+            same messages can still be retrieved by the sub-agent afterwards.
 
     Returns:
         Page: Records oldest first, with a cursor when the thread runs deeper.
@@ -258,8 +261,8 @@ async def thread_messages(
     records = await to_records(window, access, turn)
     anchor = await _trigger_created_at(turn)
     fresh = _fresh(records, turn, anchor)
-    kept, note = _take(fresh, turn, size)
-    turn.remember(kept)
+    kept, note = _take(fresh, turn, size) if spend else (fresh, "")
+    turn.remember(kept, spend=spend)
 
     earlier = len(ordered) - len(window)
     next_cursor = window[0].get("id") if earlier > 0 and window else None

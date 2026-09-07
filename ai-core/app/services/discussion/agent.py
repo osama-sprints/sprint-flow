@@ -53,6 +53,12 @@ from app.services.discussion.records import (
 
 REPORT_TOOL = "report_findings"
 
+_LAST_STEP = (
+    "This is your last step. Call report_findings now, with what the messages above actually say — "
+    "you have read them, so summarise them rather than describing the reading. Cite the post ids you "
+    "saw, and put anything you could not reach in `coverage`."
+)
+
 
 @dataclass
 class Digest:
@@ -342,7 +348,7 @@ async def investigate(question: str, *, turn: Optional[DiscussionTurn] = None) -
         Digest: Findings, sources, coverage and unresolved ambiguity.
     """
     turn = turn or require_turn()
-    turn.runs += 1
+    turn.begin_run()
     started_with = turn.records_used
     digest = Digest()
     messages: List[BaseMessage] = [SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=_brief(turn, question))]
@@ -352,6 +358,12 @@ async def investigate(question: str, *, turn: Optional[DiscussionTurn] = None) -
     for step in range(POLICY.max_steps):
         digest.steps = step + 1
         last = step == POLICY.max_steps - 1 or turn.budget_remaining <= 0
+        if last:
+            # Being handed one tool is not the same as being told to stop. A
+            # run that spent its steps paging reported the paging — "I could
+            # not read the channel" — while thirty messages it HAD read sat
+            # unused in its own context.
+            messages.append(HumanMessage(content=_LAST_STEP))
         response = await executions.run_cancellable(
             llm_service.call(
                 messages,
