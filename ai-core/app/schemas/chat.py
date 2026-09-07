@@ -12,6 +12,7 @@ from pydantic import (
     field_validator,
 )
 
+from app.core.config import settings
 from app.schemas.base import BaseResponse
 
 
@@ -26,7 +27,12 @@ class Message(BaseModel):
     model_config = {"extra": "ignore"}
 
     role: Literal["user", "assistant", "system"] = Field(..., description="The role of the message sender")
-    content: str = Field(..., description="The content of the message", min_length=1, max_length=3000)
+    # The ceiling is configuration, not a constant: it must match what the
+    # transports accept, or a long-but-legitimate message would fail validation
+    # after the person has already been told it was read.
+    content: str = Field(
+        ..., description="The content of the message", min_length=1, max_length=settings.MESSAGE_MAX_INPUT_CHARS
+    )
 
     @field_validator("content")
     @classmethod

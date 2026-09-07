@@ -34,6 +34,10 @@ from app.core.logging import logger
 _RETRYABLE = (httpx.TransportError, httpx.HTTPStatusError)
 
 
+class FileTooLarge(Exception):
+    """A download exceeded the caller's byte ceiling and was abandoned."""
+
+
 class MattermostClient:
     """Async client for the Mattermost v4 REST API, authenticated as a bot."""
 
@@ -477,6 +481,57 @@ class MattermostClient:
             height=info.get("height"),
         )
         return file_id
+
+    async def get_file_info(self, file_id: str) -> Optional[Dict[str, Any]]:
+        """Read a file's metadata: name, size, content type, and the post it belongs to.
+
+        Args:
+            file_id: The file's id.
+
+        Returns:
+            dict | None: The FileInfo, or None when it cannot be read.
+        """
+        try:
+            return await self._request("GET", f"/files/{file_id}/info")
+        except Exception as e:
+            logger.warning("mattermost_file_info_failed", file_id=file_id, error=str(e))
+            return None
+
+    async def download_file(self, file_id: str, *, max_bytes: int) -> Optional[bytes]:
+        """Download a file's bytes, refusing to read past a ceiling.
+
+        The size in FileInfo is checked first by the caller; this guard is for
+        a body that turns out larger than declared.
+
+        Args:
+            file_id: The file's id.
+            max_bytes: Abandon the download once more than this has arrived.
+
+        Returns:
+            bytes | None: The content, or None when the download fails.
+
+        Raises:
+            FileTooLarge: When the body exceeds ``max_bytes``.
+        """
+        client = self._get_client()
+        chunks: list[bytes] = []
+        received = 0
+        try:
+            async with client.stream(
+                "GET", f"/files/{file_id}", timeout=settings.FILE_INPUT_DOWNLOAD_TIMEOUT
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    received += len(chunk)
+                    if received > max_bytes:
+                        raise FileTooLarge(file_id)
+                    chunks.append(chunk)
+        except FileTooLarge:
+            raise
+        except Exception as e:
+            logger.warning("mattermost_file_download_failed", file_id=file_id, error=str(e))
+            return None
+        return b"".join(chunks)
 
     async def create_direct_channel(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Open (or fetch) the DM channel between the bot and a user.

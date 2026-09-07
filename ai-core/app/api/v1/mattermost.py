@@ -123,6 +123,20 @@ async def _parse_payload(request: Request) -> MattermostWebhookPayload:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid webhook payload")
 
 
+def _file_ids(value: Union[str, List[str]]) -> List[str]:
+    """Normalise the webhook's file id field.
+
+    Args:
+        value: A comma-joined string (form encoding) or a list (JSON encoding).
+
+    Returns:
+        list[str]: The ids, empty when the post carried no file.
+    """
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
 def _verify_token(received: str) -> None:
     """Check the webhook's shared secret in constant time.
 
@@ -171,8 +185,9 @@ async def mattermost_webhook(
     _verify_token(payload.token)
 
     prompt = clean_text(payload.text, payload.trigger_word)
+    file_ids = _file_ids(payload.file_ids)
 
-    if not prompt:
+    if not prompt and not file_ids:
         logger.info("mattermost_webhook_ignored_empty_text", channel_id=payload.channel_id)
         return {}
 
@@ -199,6 +214,7 @@ async def mattermost_webhook(
             # fact about the transport, not a guess. Replies stay threaded here.
             channel_type="O",
             source="webhook",
+            file_ids=file_ids,
         ),
     )
     return {}

@@ -488,7 +488,9 @@ class MattermostWebSocketListener:
         stripped = raw_message.lstrip()
         leading = _MENTION_RE.match(stripped)
         prompt = clean_text(stripped[leading.end() :] if leading else raw_message)
-        if not prompt:
+        # A post can carry files and no words; that is still a message to answer.
+        file_ids = [str(f) for f in (post.get("file_ids") or []) if f]
+        if not prompt and not file_ids:
             return
 
         channel_id = str(post.get("channel_id") or "")
@@ -504,6 +506,7 @@ class MattermostWebSocketListener:
             user_name=user_name,
             in_thread=bool(root_id),
             text_length=len(prompt),
+            file_count=len(file_ids),
         )
 
         # Dispatched as its own task so a slow agent turn cannot stall the
@@ -522,6 +525,7 @@ class MattermostWebSocketListener:
                     # the reply then stays in that thread even in a DM.
                     root_id=root_id,
                     source="websocket",
+                    file_ids=file_ids,
                 )
             ),
             name=f"mm-ws-turn-{post_id or 'unknown'}",

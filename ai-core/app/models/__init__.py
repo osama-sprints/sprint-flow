@@ -5,6 +5,7 @@ metadata matters — Alembic's ``env.py`` does — so a table can never be left 
 of autogenerate or verification by accident.
 """
 
+from app.models.attachment import Attachment
 from app.models.ceremony import Ceremony
 from app.models.ceremony_amendment import CeremonyAmendment
 from app.models.ceremony_type import CeremonyType
@@ -41,7 +42,7 @@ INITIAL_DOMAIN_TABLES: tuple[str, ...] = (
 )
 
 # Tables added after 0001, newest revision last.
-LATER_DOMAIN_TABLES: tuple[str, ...] = ("rich_artifacts",)
+LATER_DOMAIN_TABLES: tuple[str, ...] = ("rich_artifacts", "attachments")
 
 # Every application-owned table, in dependency order. Verification scripts
 # compare against this list.
@@ -51,6 +52,7 @@ __all__ = [
     "DOMAIN_TABLES",
     "INITIAL_DOMAIN_TABLES",
     "LATER_DOMAIN_TABLES",
+    "Attachment",
     "Ceremony",
     "CeremonyAmendment",
     "CeremonyType",

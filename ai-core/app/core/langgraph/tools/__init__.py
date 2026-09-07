@@ -11,7 +11,9 @@ or workspace-administration tool.
 The rich-media tools are the deliberate exception to "groups differ": every
 group holds them. They stage visual output onto the turn's reply envelope and
 write nothing — no Mattermost call, no database write — so sharing them widens
-what a reply can LOOK like without widening what any specialist can DO.
+what a reply can LOOK like without widening what any specialist can DO. The
+attachment tools are shared for the same reason: they read back files the
+person themselves put into this conversation, and nothing else.
 
 Every privileged tool re-checks authorisation in code at call time from the
 ``current_requester`` ContextVar; group membership is capability scoping, not
@@ -21,6 +23,7 @@ the security boundary.
 from langchain_core.tools.base import BaseTool
 
 from .ask_human import ask_human
+from .attachments import ATTACHMENT_TOOLS
 from .back_office import TOOLS as BACK_OFFICE_ADMIN_TOOLS
 from .back_office import (
     list_cohort_members,
@@ -45,6 +48,7 @@ GENERAL_TOOLS: list[BaseTool] = [
     mattermost_add_user_to_team,
     mattermost_send_welcome_dm,
     *RICH_MEDIA_TOOLS,
+    *ATTACHMENT_TOOLS,
 ]
 
 # Learner-facing support: clarification, web search and READ-ONLY cohort
@@ -57,6 +61,7 @@ LEARNER_SUPPORT_TOOLS: list[BaseTool] = [
     list_cohorts,
     list_cohort_members,
     *RICH_MEDIA_TOOLS,
+    *ATTACHMENT_TOOLS,
 ]
 
 # Back office: cohort, role, sprint administration (s1e2) and ceremony
@@ -66,6 +71,7 @@ BACK_OFFICE_TOOLS: list[BaseTool] = [
     *BACK_OFFICE_ADMIN_TOOLS,
     *CEREMONY_TOOLS,
     *RICH_MEDIA_TOOLS,
+    *ATTACHMENT_TOOLS,
 ]
 
 # The composition specialist: rendering, plus the clarification tool. It holds
@@ -73,6 +79,7 @@ BACK_OFFICE_TOOLS: list[BaseTool] = [
 RICH_MEDIA_ONLY_TOOLS: list[BaseTool] = [
     ask_human,
     *RICH_MEDIA_TOOLS,
+    *ATTACHMENT_TOOLS,
 ]
 
 TOOL_GROUPS: dict[str, list[BaseTool]] = {
@@ -98,6 +105,7 @@ def _union(*groups: list[BaseTool]) -> list[BaseTool]:
 tools: list[BaseTool] = _union(GENERAL_TOOLS, LEARNER_SUPPORT_TOOLS, BACK_OFFICE_TOOLS, RICH_MEDIA_ONLY_TOOLS)
 
 __all__ = [
+    "ATTACHMENT_TOOLS",
     "BACK_OFFICE_TOOLS",
     "GENERAL_TOOLS",
     "LEARNER_SUPPORT_TOOLS",

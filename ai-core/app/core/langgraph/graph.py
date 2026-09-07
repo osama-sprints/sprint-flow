@@ -97,6 +97,7 @@ from app.utils import (
     prepare_messages,
     process_llm_response,
 )
+from app.services import attachments
 
 PostgresConnPool = AsyncConnectionPool[AsyncConnection[DictRow]]
 
@@ -364,11 +365,19 @@ class LangGraphAgent:
             returning_from_tool = isinstance(last_message, ToolMessage)
             tool_choice = "any" if (spec.force_tool_use and tool_group and not returning_from_tool) else None
 
+            # This turn's attachments join the call here, not the checkpoint:
+            # the history keeps a one-line summary per file, so images and
+            # long extracts are never replayed into every later turn. A turn
+            # carrying pictures or scanned pages moves to a model that can see
+            # them when the current one cannot.
+            llm_messages = attachments.augment_llm_messages(dump_messages(messages))
+            vision_model = attachments.vision_model_override(model_name)
+
             try:
                 with llm_inference_duration_seconds.labels(model=model_name).time():
                     try:
                         response_message = await self.llm_service.call(
-                            dump_messages(messages), tools=tool_group, tool_choice=tool_choice
+                            llm_messages, model_name=vision_model, tools=tool_group, tool_choice=tool_choice
                         )
                     except Exception as forced_error:
                         if tool_choice is None:
@@ -381,7 +390,9 @@ class LangGraphAgent:
                             specialist=spec.node_name,
                             error=str(forced_error),
                         )
-                        response_message = await self.llm_service.call(dump_messages(messages), tools=tool_group)
+                        response_message = await self.llm_service.call(
+                            llm_messages, model_name=vision_model, tools=tool_group
+                        )
             except Exception as e:
                 logger.error(
                     "llm_call_failed_all_models",

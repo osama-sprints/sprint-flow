@@ -69,6 +69,9 @@ EXPECTED_NODES = {
 }
 
 # Shared by every group on purpose: they stage visual output and write nothing.
+# Read-only access to files the person attached; shared by every group.
+ATTACHMENT_TOOL_NAMES = {"list_attachments", "read_attachment"}
+
 RICH_MEDIA_TOOL_NAMES = {
     "send_mermaid_diagram",
     "send_chart",
@@ -172,7 +175,9 @@ def probe_tool_groups() -> None:
         missing = sorted(RICH_MEDIA_TOOL_NAMES - names.get(group, set()))
         check(f"tool group '{group}' has every shared rich-media tool", not missing, f"missing: {missing}")
     rich = names.get("rich_media", set())
-    leaked = sorted(n for n in rich if n not in RICH_MEDIA_TOOL_NAMES and n != "ask_human")
+    leaked = sorted(
+        n for n in rich if n not in RICH_MEDIA_TOOL_NAMES and n not in ATTACHMENT_TOOL_NAMES and n != "ask_human"
+    )
     check("rich_media holds nothing but rendering and clarification", not leaked, f"leaked: {leaked}")
     check("every specialist maps to an existing tool group", all(s.tool_group in names for s in SPECIALISTS.values()))
     check(

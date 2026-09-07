@@ -11,6 +11,8 @@ reply path. That shared behaviour lives here so the two transports cannot
 drift apart; each transport module is left with nothing but its own wire format.
 """
 
+from typing import List
+
 from pydantic import (
     BaseModel,
     Field,
@@ -24,16 +26,25 @@ from app.schemas.rich_media import (
     RICH_MEDIA_POST_TYPE,
     ReplyEnvelope,
 )
-from app.services import rich_media
+from app.services import (
+    attachments,
+    rich_media,
+)
 from app.services.agent import agent
 from app.services.identity import resolve_requester
 from app.services.mattermost import mattermost_client
 
-# app/schemas/chat.py caps Message.content at 3000 characters. Mattermost posts
-# can be far longer, so trim rather than let validation reject the turn.
-MAX_INPUT_CHARS = 3000
+# Longest message text a turn reads. The default is above Mattermost's own
+# post limit, so in practice nothing is ever cut; if a transport does deliver
+# more, the person is told what was read rather than losing the tail silently.
+MAX_INPUT_CHARS = settings.MESSAGE_MAX_INPUT_CHARS
 
 FALLBACK_REPLY = "Sorry — I hit an error while working on that. Please try again in a moment."
+
+
+class _NothingToAnswer(Exception):
+    """The message held nothing readable; the notices alone are the reply."""
+
 
 # Mattermost channel types where a threaded reply is the natural shape. In a
 # direct ("D") or group ("G") message there is no surrounding traffic to be
@@ -52,6 +63,7 @@ class IncomingMessage(BaseModel):
     channel_type: str = Field(default="O", description="O public, P private, D direct, G group")
     root_id: str = Field(default="", description="Set when the trigger is already inside a thread")
     source: str = Field(default="unknown", description="Transport label for logs")
+    file_ids: List[str] = Field(default_factory=list, description="Files attached to the triggering post")
 
     @property
     def threads_by_default(self) -> bool:
@@ -92,7 +104,10 @@ class IncomingMessage(BaseModel):
 
 
 def clean_text(text: str, trigger_word: str = "") -> str:
-    """Strip the trigger word and clamp the message to the schema's limit.
+    """Strip the trigger word and surrounding whitespace.
+
+    Nothing is cut here: the length ceiling is applied in ``answer_and_reply``,
+    where the person can be told about it.
 
     Args:
         text: Raw message text.
@@ -104,7 +119,23 @@ def clean_text(text: str, trigger_word: str = "") -> str:
     cleaned = text.strip()
     if trigger_word and cleaned.lower().startswith(trigger_word.lower()):
         cleaned = cleaned[len(trigger_word) :].strip()
-    return cleaned[:MAX_INPUT_CHARS]
+    return cleaned
+
+
+def with_notices(reply: str, notices: List[str]) -> str:
+    """Prefix a reply with what the person should know about their input.
+
+    Args:
+        reply: The answer.
+        notices: Lines about skipped files, caps that applied, or cut text.
+
+    Returns:
+        str: The reply, preceded by a quoted notice block when there is one.
+    """
+    if not notices:
+        return reply
+    block = "\n".join(f"> ⚠️ {line}" for line in notices)
+    return f"{block}\n\n{reply}" if reply else block
 
 
 async def is_own_post(user_id: str, user_name: str = "") -> bool:
@@ -178,9 +209,37 @@ async def answer_and_reply(message: IncomingMessage) -> None:
     )
     envelope = ReplyEnvelope()
 
+    # What the person sent, made explicit: text past the ceiling is reported
+    # rather than dropped, and every attached file is fetched, checked and
+    # read before the model sees the message.
+    notices: List[str] = []
+    text = message.text
+    if len(text) > MAX_INPUT_CHARS:
+        notices.append(
+            f"Your message was {len(text):,} characters long; I read the first {MAX_INPUT_CHARS:,}. "
+            "Attach the rest as a file if you need me to read all of it."
+        )
+        text = text[:MAX_INPUT_CHARS]
+    turn_files = await attachments.ingest(
+        message.file_ids,
+        post_id=message.post_id,
+        channel_id=channel_id,
+        root_id=message.root_id,
+        session_id=session_id,
+        turn_id=turn.turn_id,
+        mattermost_user_id=message.user_id,
+        requester_user_id=requester.user_id,
+    )
+    attachments.bind(turn_files)
+    notices.extend(turn_files.notices)
+    prompt_text = attachments.state_text(text, turn_files)
+
     try:
+        if not prompt_text:
+            # Only refused files arrived: the notices are the whole answer.
+            raise _NothingToAnswer()
         result = await agent.get_response(
-            [Message(role="user", content=message.text)],
+            [Message(role="user", content=prompt_text)],
             session_id=session_id,
             # Scopes mem0 long-term memory to the person. This is the layer
             # that makes per-thread isolation safe: durable facts about someone
@@ -200,14 +259,17 @@ async def answer_and_reply(message: IncomingMessage) -> None:
             logger.warning("mattermost_agent_returned_empty", session_id=session_id, source=source)
             reply = FALLBACK_REPLY
         envelope = await rich_media.collect(turn.turn_id)
+    except _NothingToAnswer:
+        reply = ""
     except Exception as e:
         logger.exception("mattermost_agent_turn_failed", session_id=session_id, source=source, error=str(e))
         reply = FALLBACK_REPLY
     finally:
         current_requester.set(None)
         rich_media.end_turn()
+        attachments.clear()
 
-    await _deliver(message, reply, envelope)
+    await _deliver(message, with_notices(reply, notices), envelope)
     logger.info(
         "mattermost_agent_turn_completed",
         session_id=session_id,

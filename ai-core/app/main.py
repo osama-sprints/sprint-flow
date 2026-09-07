@@ -38,6 +38,7 @@ from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
 from app.services.memory import memory_service
 from app.workers.artifact_dispatcher import artifact_dispatcher
+from app.workers.attachment_retention import attachment_retention
 from app.workers.onboarding_dispatcher import onboarding_dispatcher
 
 # Load environment variables
@@ -111,11 +112,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("artifact_dispatcher_start_failed", error=str(e))
 
+    # Deletes what people attached once its retention lapses.
+    try:
+        attachment_retention.start()
+    except Exception as e:
+        logger.exception("attachment_retention_start_failed", error=str(e))
+
     yield
 
     # Cleanup on shutdown
     await onboarding_dispatcher.stop()
     await artifact_dispatcher.stop()
+    await attachment_retention.stop()
     await mattermost_ws_listener.stop()
     await cache_service.close()
     await mattermost_client.close()
@@ -241,6 +249,7 @@ async def health_check(request: Request) -> JSONResponse:
             "domain_schema": "healthy" if schema_present else "missing",
             "onboarding_dispatcher": onboarding_dispatcher.status(),
             "artifact_dispatcher": artifact_dispatcher.status(),
+            "attachment_retention": attachment_retention.status(),
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }
