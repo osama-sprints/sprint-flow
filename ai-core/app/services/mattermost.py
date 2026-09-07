@@ -482,6 +482,20 @@ class MattermostClient:
         )
         return file_id
 
+    async def list_outgoing_webhooks(self) -> Optional[List[Dict[str, Any]]]:
+        """List the team's outgoing webhooks.
+
+        Returns:
+            list[dict] | None: The hooks, or None when they cannot be read —
+            callers treat "unknown" differently from "none".
+        """
+        try:
+            result: Any = await self._request("GET", "/hooks/outgoing", params={"per_page": 200})
+        except Exception as e:
+            logger.warning("mattermost_outgoing_webhooks_unavailable", error=str(e))
+            return None
+        return list(result) if isinstance(result, list) else []
+
     async def get_file_info(self, file_id: str) -> Optional[Dict[str, Any]]:
         """Read a file's metadata: name, size, content type, and the post it belongs to.
 

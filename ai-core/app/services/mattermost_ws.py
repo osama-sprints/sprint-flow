@@ -22,6 +22,7 @@ by this listener. `MATTERMOST_WS_CHANNEL_TYPES` therefore defaults to "D" only.
 
 import asyncio
 import json
+import time
 import re
 from typing import (
     Any,
@@ -62,6 +63,9 @@ _DIRECT_CHANNEL_TYPES = frozenset({"D", "G"})
 # channels — everywhere else, this listener is the sole transport and must not
 # defer to the webhook.
 _WEBHOOK_OWNED_CHANNEL_TYPES = frozenset({"O"})
+
+# How long the outgoing-webhook coverage is trusted before it is re-read.
+_WEBHOOK_COVERAGE_TTL_SECONDS = 600
 
 
 def _mention_pattern(username: str) -> re.Pattern[str]:
@@ -113,6 +117,12 @@ class MattermostWebSocketListener:
         """Initialize the listener without connecting."""
         self._task: Optional[asyncio.Task] = None
         self._handlers: Set[asyncio.Task] = set()
+        # Channels where an outgoing webhook aimed at ai-core fires. A
+        # trigger-word message is left to the webhook only there; elsewhere
+        # it would otherwise go unanswered by both transports.
+        self._webhook_channels: Optional[Set[str]] = None
+        self._webhook_everywhere = False
+        self._webhook_checked_at = 0.0
         self._connected: bool = False
         self._events_seen: int = 0
         self._messages_handled: int = 0
@@ -400,16 +410,52 @@ class MattermostWebSocketListener:
 
         return participating
 
-    async def _should_handle(self, channel_type: str, message: str, root_id: str) -> bool:
+    async def _webhook_covers(self, channel_id: str) -> bool:
+        """Whether an outgoing webhook pointing at ai-core fires in this channel.
+
+        Read from Mattermost and cached for a while. When the hooks cannot be
+        read the answer is "yes": deferring to a webhook that may exist beats
+        answering twice.
+
+        Args:
+            channel_id: The channel of the post.
+
+        Returns:
+            bool: True when the webhook will deliver posts from this channel.
+        """
+        now = time.monotonic()
+        if self._webhook_channels is None or now - self._webhook_checked_at > _WEBHOOK_COVERAGE_TTL_SECONDS:
+            hooks = await mattermost_client.list_outgoing_webhooks()
+            if hooks is None:
+                return True
+            ours = [
+                hook
+                for hook in hooks
+                if any("/api/v1/mattermost/webhook" in str(url) for url in (hook.get("callback_urls") or []))
+            ]
+            # A hook with no channel fires in every public channel of its team.
+            self._webhook_everywhere = any(not hook.get("channel_id") for hook in ours)
+            self._webhook_channels = {str(hook["channel_id"]) for hook in ours if hook.get("channel_id")}
+            self._webhook_checked_at = now
+            logger.info(
+                "mattermost_webhook_coverage_loaded",
+                channels=len(self._webhook_channels),
+                everywhere=self._webhook_everywhere,
+            )
+        return self._webhook_everywhere or channel_id in self._webhook_channels
+
+    async def _should_handle(self, channel_type: str, message: str, root_id: str, channel_id: str = "") -> bool:
         """Decide whether this listener should answer a post.
 
         The rules, in order:
 
         1. Direct and group messages — always ours; there is no one else in the
            conversation and no webhook can reach them.
-        2. Public channel, first word is a webhook trigger word — NOT ours. The
-           outgoing webhook is already delivering this message, and answering
-           here too would post the reply twice.
+        2. Public channel, first word is a webhook trigger word, AND an
+           outgoing webhook aimed at ai-core fires in this channel — NOT ours.
+           The webhook is already delivering this message, and answering here
+           too would post the reply twice. In a channel the webhook does not
+           cover, the same message is ours: nobody else will answer it.
         3. The bot is mentioned anywhere in the message — ours. This also picks
            up mentions that are not the first word ("thanks @bot, can you..."),
            which the webhook's first-word matching silently ignores.
@@ -422,6 +468,7 @@ class MattermostWebSocketListener:
             channel_type: Mattermost channel type (O, P, D, G).
             message: Raw message text.
             root_id: The post's root id, empty when not in a thread.
+            channel_id: The post's channel, for the webhook coverage check.
 
         Returns:
             bool: True when the message should be answered.
@@ -429,7 +476,11 @@ class MattermostWebSocketListener:
         if channel_type in _DIRECT_CHANNEL_TYPES:
             return True
 
-        if channel_type in _WEBHOOK_OWNED_CHANNEL_TYPES and _starts_with_trigger_word(message):
+        if (
+            channel_type in _WEBHOOK_OWNED_CHANNEL_TYPES
+            and _starts_with_trigger_word(message)
+            and await self._webhook_covers(channel_id)
+        ):
             return False
 
         if _MENTION_RE.search(message):
@@ -476,10 +527,11 @@ class MattermostWebSocketListener:
 
         raw_message = str(post.get("message") or "")
         root_id = str(post.get("root_id") or "")
+        channel_id = str(post.get("channel_id") or "")
 
         # Routing decision comes before any expensive work. Most public-channel
         # chatter is discarded here without an API call, let alone a model call.
-        if not await self._should_handle(channel_type, raw_message, root_id):
+        if not await self._should_handle(channel_type, raw_message, root_id, channel_id):
             return
 
         # Strip the mention only when it opens the message, so the agent sees
@@ -494,7 +546,6 @@ class MattermostWebSocketListener:
         if not prompt and not file_ids:
             return
 
-        channel_id = str(post.get("channel_id") or "")
         post_id = str(post.get("id") or "")
         if not channel_id:
             return
