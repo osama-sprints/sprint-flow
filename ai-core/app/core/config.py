@@ -366,7 +366,7 @@ class Settings:
         # never fires for it. Double replies are prevented by routing, not by
         # this filter: the listener skips any public post whose first word is a
         # webhook trigger word, because the webhook already owns that message.
-        self.MATTERMOST_WS_CHANNEL_TYPES = parse_list_from_env("MATTERMOST_WS_CHANNEL_TYPES", ["D", "O"])
+        self.MATTERMOST_WS_CHANNEL_TYPES = parse_list_from_env("MATTERMOST_WS_CHANNEL_TYPES", ["D", "O", "P", "G"])
 
         # The trigger words configured on the Mattermost outgoing webhook. This
         # is the single source of truth: scripts/bootstrap_mattermost.sh reads

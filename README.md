@@ -497,8 +497,12 @@ Threading a 1-on-1 buries the answer a click deep for no benefit, but replying
 flat to someone who deliberately opened a thread would drop the answer outside
 the conversation they started — hence the third row.
 `python3 scripts/verify_threading.py` checks all three. The listener receives events
-for *every* visible channel, so `MATTERMOST_WS_CHANNEL_TYPES` defaults to `D`
-only — adding `O` would answer every public message twice.
+for *every* visible channel; `MATTERMOST_WS_CHANNEL_TYPES` defaults to
+`D,O,P,G`, because private channels and group messages have no outgoing webhook
+and would otherwise never get an answer. Only a direct message is answered
+unconditionally — everywhere else the bot replies when it is addressed or when
+it is already in the thread, and it skips a public post whose first word is a
+trigger word because the webhook already owns that one.
 
 **`AllowedUntrustedInternalConnections` is mandatory.** Mattermost routes
 webhook calls through an SSRF filter that rejects any hostname resolving into a

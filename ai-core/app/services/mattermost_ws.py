@@ -55,9 +55,15 @@ from app.services.mattermost import mattermost_client
 _BACKOFF_MIN_SECONDS = 1.0
 _BACKOFF_MAX_SECONDS = 60.0
 
-# Channels where every message is meant for the bot: there is nobody else in the
-# conversation, so no mention is required.
-_DIRECT_CHANNEL_TYPES = frozenset({"D", "G"})
+# The one channel type where every message is meant for the bot: a 1-on-1 has
+# nobody else in it, so no mention is required.
+#
+# A GROUP message is not that. It has other people in it, talking to each
+# other, and a bot that answered every line would both drown the conversation
+# and make itself part of a discussion it is meant to be able to read. Group
+# messages take the same path as private channels: answer when addressed, or
+# when already in the thread.
+_DIRECT_CHANNEL_TYPES = frozenset({"D"})
 
 # Channel types the Mattermost outgoing webhook can fire in. Only public
 # channels — everywhere else, this listener is the sole transport and must not
@@ -449,7 +455,7 @@ class MattermostWebSocketListener:
 
         The rules, in order:
 
-        1. Direct and group messages — always ours; there is no one else in the
+        1. Direct messages — always ours; there is no one else in the
            conversation and no webhook can reach them.
         2. Public channel, first word is a webhook trigger word, AND an
            outgoing webhook aimed at ai-core fires in this channel — NOT ours.

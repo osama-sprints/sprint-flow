@@ -57,6 +57,18 @@ async def test_mentions_mid_sentence_and_direct_messages_are_always_ours(listene
     assert await listener._should_handle("O", "just chatting", "", "chan-hooked") is False
 
 
+async def test_a_group_message_is_answered_only_when_the_bot_is_addressed(listener):
+    """A group message has other people in it; the bot is not part of every line."""
+    assert await listener._should_handle("G", "so shall we ship on Tuesday?", "", "gm-1") is False
+    assert await listener._should_handle("G", "@sprintflow-assistant what did we agree?", "", "gm-1") is True
+
+
+async def test_a_private_channel_mention_is_answered_by_this_listener(listener):
+    """No outgoing webhook fires in a private channel, so nobody else will answer it."""
+    assert await listener._should_handle("P", "@sprintflow-assistant summarise the above", "", "chan-p") is True
+    assert await listener._should_handle("P", "unrelated chatter", "", "chan-p") is False
+
+
 async def test_unknown_coverage_keeps_deferring(monkeypatch):
     async def unavailable():
         return None
