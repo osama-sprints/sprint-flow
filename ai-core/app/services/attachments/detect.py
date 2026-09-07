@@ -17,6 +17,7 @@ from typing import (
     FrozenSet,
     Optional,
     Tuple,
+    override,
 )
 
 import filetype
@@ -92,6 +93,7 @@ class _WhatDescriptor:
         """
         return describe(self.mime)
 
+    @override
     def __str__(self) -> str:
         """English rendering for logs and tests.
 

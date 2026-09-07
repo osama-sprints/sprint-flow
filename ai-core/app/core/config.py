@@ -173,6 +173,16 @@ class Settings:
         # against it, so a ceiling sized for the visible reply alone starves
         # the answer: after reading a document, 2,000 left sixty visible tokens.
         self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
+        # The wider ceiling used ONCE when a final answer stopped on the
+        # ceiling above. It must stay within the model's own output limit;
+        # raising it past that makes the provider reject the call.
+        self.MAX_TOKENS_RETRY = int(os.getenv("MAX_TOKENS_RETRY", "32768"))
+        # What one turn may occupy: the person's message plus this turn's tool
+        # results. Older results are shortened to fit, never dropped. Keep it
+        # comfortably below the smallest configured model's input window —
+        # the system prompt, the trimmed history and any attachment blocks are
+        # added on top of it.
+        self.MAX_TURN_TOKENS = int(os.getenv("MAX_TURN_TOKENS", "48000"))
         # Budget for how much prior conversation is replayed to the model.
         # Kept separate from MAX_TOKENS: these were one setting, so raising the
         # context window also silently raised the maximum reply length.

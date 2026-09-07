@@ -29,6 +29,7 @@ CATALOGUE: Dict[str, Dict[str, str]] = {
     "en": {
         "reply.fallback": "Sorry — I hit an error while working on that. Reply **retry** to try again.",
         "reply.stopped": "⏹ Stopped as you asked. Reply **retry** if you want me to run it again.",
+        "reply.cut_short": "\n\n_(The reply was cut short by the length limit.)_",
         "reply.nothing_readable": "",
         "notice.message_truncated": (
             "Your message was {total:,} characters long; I read the first {limit:,}. "
@@ -75,6 +76,7 @@ CATALOGUE: Dict[str, Dict[str, str]] = {
     "ar": {
         "reply.fallback": "عذرًا — حدث خطأ أثناء العمل على طلبك. اكتب **أعد المحاولة** للمحاولة مجددًا.",
         "reply.stopped": "⏹ توقفت كما طلبت. اكتب **أعد المحاولة** إذا أردت تشغيله من جديد.",
+        "reply.cut_short": "\n\n_(تم اختصار الرد بسبب حد الطول.)_",
         "reply.nothing_readable": "",
         "notice.message_truncated": (
             "كانت رسالتك بطول {total:,} حرفًا؛ قرأت أول {limit:,} حرفًا منها. أرفق الباقي كملف إذا أردت أن أقرأه كاملًا."

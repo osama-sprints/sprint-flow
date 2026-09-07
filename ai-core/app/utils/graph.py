@@ -125,15 +125,97 @@ def _is_human(message: dict) -> bool:
     return message.get("role") == "user" or message.get("type") == "human"
 
 
+def _is_tool_result(message: dict) -> bool:
+    return message.get("role") == "tool" or message.get("type") == "tool"
+
+
+# Characters kept from a shortened tool result, tried in turn: the first pass
+# that brings the turn inside its budget stops the shrinking, so the newest
+# results — the ones the answer is being written from — keep the most text.
+_TOOL_RESULT_CAPS = (12000, 4000, 1200, 400)
+
+
+def _shorten_tool_result(message: dict, keep: int) -> dict:
+    """Cut a tool result down, leaving the model a way to read the rest.
+
+    The head of every tool result in this codebase names the tool's subject —
+    the document, the id, the page range — so keeping it makes the cut
+    retrievable: the model can call the same tool again for the same pages.
+
+    Args:
+        message: A dumped tool message.
+        keep: Characters of the result to keep.
+
+    Returns:
+        dict: The message, shortened when it was longer than ``keep``.
+    """
+    content = message.get("content")
+    if not isinstance(content, str) or len(content) <= keep:
+        return message
+    shortened = dict(message)
+    shortened["content"] = (
+        content[:keep].rstrip() + f"\n\n… [{message.get('name') or 'tool'} result shortened to fit this turn "
+        f"({len(content):,} characters in all). Call the same tool again with the arguments named above to "
+        "read the part that was cut.]"
+    )
+    return shortened
+
+
+def _bound_turn(current: list[dict], budget: int) -> list[dict]:
+    """Bring the current turn inside ``budget`` tokens without dropping a message.
+
+    The person's request and every tool call stay exactly as they are, so the
+    tool-call/result pairing the provider requires is never broken; only the
+    text of tool RESULTS is shortened, oldest first, and each cut says how to
+    read the rest. A turn that cannot be brought inside the budget this way
+    (hundreds of calls) is logged rather than truncated further.
+
+    Args:
+        current: The dumped messages of the current turn, starting with the person's.
+        budget: Token ceiling for the turn.
+
+    Returns:
+        list[dict]: The bounded turn.
+    """
+    if not current or budget <= 0:
+        return current
+    tokens = _count_tokens_tiktoken(current)
+    if tokens <= budget:
+        return current
+
+    bounded = list(current)
+    positions = [index for index, message in enumerate(bounded) if _is_tool_result(message)]
+    for cap in _TOOL_RESULT_CAPS:
+        for index in positions:
+            if _count_tokens_tiktoken(bounded) <= budget:
+                break
+            bounded[index] = _shorten_tool_result(bounded[index], cap)
+
+    final_tokens = _count_tokens_tiktoken(bounded)
+    logger.warning(
+        "current_turn_shortened_to_fit",
+        before_tokens=tokens,
+        after_tokens=final_tokens,
+        budget=budget,
+        tool_results=len(positions),
+        still_over=final_tokens > budget,
+    )
+    return bounded
+
+
 def prepare_messages(messages: list[Message], system_prompt: str) -> list[Message]:
     """Prepare the messages for the LLM.
 
     The current turn — the person's latest message and everything the graph
-    has added since (tool calls and their results) — is never trimmed. Only
+    has added since (tool calls and their results) — is never dropped. Only
     the history before it competes for ``MAX_HISTORY_TOKENS``. Trimming the
     whole list used to drop this turn's tool results and, with them, the
     person's message itself once a turn's reads outgrew the budget; the model
     then saw only the system prompt and answered with a greeting.
+
+    The turn is not unbounded either: past ``MAX_TURN_TOKENS`` its older tool
+    results are shortened — never removed, so the tool-call/result pairing
+    stays valid — and each cut tells the model how to read the rest.
 
     Args:
         messages (list[Message]): The messages to prepare.
@@ -145,18 +227,11 @@ def prepare_messages(messages: list[Message], system_prompt: str) -> list[Messag
     dumped = dump_messages(messages)
     split = next((i for i in range(len(dumped) - 1, -1, -1) if _is_human(dumped[i])), None)
     history = dumped if split is None else dumped[:split]
-    current = [] if split is None else dumped[split:]
+    current = _bound_turn([] if split is None else dumped[split:], settings.MAX_TURN_TOKENS)
 
     try:
         current_tokens = _count_tokens_tiktoken(current) if current else 0
         budget = max(0, settings.MAX_HISTORY_TOKENS - current_tokens)
-        if current_tokens > settings.MAX_HISTORY_TOKENS:
-            logger.warning(
-                "current_turn_exceeds_history_budget",
-                current_tokens=current_tokens,
-                budget=settings.MAX_HISTORY_TOKENS,
-                message_count=len(current),
-            )
         trimmed_history = (
             _trim_messages(
                 history,

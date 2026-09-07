@@ -70,6 +70,7 @@ from psycopg.rows import (
 from psycopg_pool import AsyncConnectionPool
 
 from app.core.config import settings
+from app.core.i18n import t
 from app.core.langgraph.specialists import (
     SPECIALISTS,
     Specialist,
@@ -424,31 +425,44 @@ class LangGraphAgent:
             # reasoning, and after a long read the visible text can be a few
             # dozen tokens. One retry with a wider ceiling, then a note.
             if was_cut_short(response_message):
+                ceiling = max(settings.MAX_TOKENS, settings.MAX_TOKENS_RETRY)
                 logger.warning(
                     "reply_cut_by_completion_ceiling",
                     session_id=thread_id,
                     specialist=spec.node_name,
                     ceiling=settings.MAX_TOKENS,
+                    retry_ceiling=ceiling if ceiling > settings.MAX_TOKENS else None,
                     visible_chars=len(str(response_message.content)),
                 )
-                try:
-                    retried = await executions.run_cancellable(
-                        self.llm_service.call(
-                            llm_messages,
-                            model_name=vision_model,
-                            tools=tool_group,
-                            max_completion_tokens=settings.MAX_TOKENS * 4,
+                # NO tools on the retry. The work of this turn is done — the
+                # results are in the messages — and re-binding them would let
+                # the model call a tool a second time, paying twice for a
+                # transcription or generating a second image. With none bound
+                # the retry can only write the answer it was cut off from.
+                if ceiling > settings.MAX_TOKENS:
+                    try:
+                        retried = process_llm_response(
+                            await executions.run_cancellable(
+                                self.llm_service.call(
+                                    llm_messages,
+                                    model_name=vision_model,
+                                    tools=[],
+                                    max_completion_tokens=ceiling,
+                                )
+                            )
                         )
-                    )
-                    response_message = process_llm_response(retried)
-                except executions.ExecutionCancelled:
-                    raise
-                except Exception as retry_error:
-                    logger.warning("reply_ceiling_retry_failed", session_id=thread_id, error=str(retry_error))
+                        if getattr(retried, "tool_calls", None):
+                            # Nothing should be callable; if a provider returns
+                            # one anyway it is discarded rather than executed.
+                            logger.warning("reply_ceiling_retry_returned_tool_calls", session_id=thread_id)
+                        else:
+                            response_message = retried
+                    except executions.ExecutionCancelled:
+                        raise
+                    except Exception as retry_error:
+                        logger.warning("reply_ceiling_retry_failed", session_id=thread_id, error=str(retry_error))
                 if was_cut_short(response_message) and isinstance(response_message, AIMessage):
-                    response_message.content = (
-                        str(response_message.content).rstrip() + "\n\n_(The reply was cut short by the length limit.)_"
-                    )
+                    response_message.content = str(response_message.content).rstrip() + t("reply.cut_short")
             requested_tools = (
                 [call["name"] for call in response_message.tool_calls]
                 if isinstance(response_message, AIMessage)

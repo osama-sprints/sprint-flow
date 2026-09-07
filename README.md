@@ -381,13 +381,19 @@ results stay English; they are protocol, not prose. PDFium returns some
 producers' Arabic text layers in visual order (the words read backwards); such
 a page is treated as having no usable text and is transcribed instead.
 
-Two settings govern how much a reply may say. `MAX_HISTORY_TOKENS` trims the
-conversation *before* the current turn; the person's latest message and this
-turn's tool results are never trimmed, whatever their size. `MAX_TOKENS` is the
-completion ceiling; thinking models spend part of it on reasoning, so it must
-be sized for reasoning plus the visible answer (the default is 8,192 — at
-2,000, a book summary came back as sixty visible tokens). A reply that still
-stops at the ceiling is retried once with a wider one.
+Four settings govern how much a turn may carry and a reply may say.
+`MAX_HISTORY_TOKENS` trims the conversation *before* the current turn. The
+current turn is never dropped, but it is not unbounded either: past
+`MAX_TURN_TOKENS` its older tool results are shortened — never removed, so the
+tool-call/result pairing stays valid — and each cut keeps the head naming the
+document and pages, with a line telling the model to call the tool again for
+the rest. `MAX_TOKENS` is the completion ceiling; thinking models spend part of
+it on reasoning, so it must be sized for reasoning plus the visible answer (the
+default is 8,192 — at 2,000, a book summary came back as sixty visible tokens).
+A final answer the provider cut at that ceiling is retried once at
+`MAX_TOKENS_RETRY`, with **no tools bound**, so the retry can only write the
+answer and can never repeat a paid call; if the wider ceiling is not actually
+wider, nothing is spent and the reply says it was cut.
 
 Limits worth knowing: images are not stored, so a later turn cannot look at
 them again; `ask_pdf_pages` answers are not cached; the search covers only text
