@@ -39,6 +39,7 @@ class IncomingMessage(BaseModel):
     """One inbound Mattermost message, normalised across both transports."""
 
     channel_id: str = Field(..., description="Channel the message arrived in")
+    team_id: str = Field(default="", description="Team the message belongs to")
     post_id: str = Field(default="", description="The triggering post")
     text: str = Field(..., description="Cleaned message body")
     user_id: str = Field(default="", description="Author's Mattermost user id — scopes long-term memory")
@@ -147,6 +148,8 @@ async def _resolve_requester(message: IncomingMessage) -> dict:
         "user_id": message.user_id,
         "user_name": message.user_name,
         "channel_type": message.channel_type,
+        "channel_id": message.channel_id,
+        "team_id": message.team_id,
         "email": None,
         "is_admin": False,
     }

@@ -1,8 +1,8 @@
 """Comprehensive verification suite for Ceremony Scheduler capabilities."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
 import pytest
+from unittest.mock import MagicMock, patch
 
 from app.core.langgraph.tools.ceremony_scheduler import (
     schedule_ceremony,
@@ -14,6 +14,10 @@ from app.core.langgraph.tools.ceremony_scheduler import (
 from app.models.cohort import Cohort
 from app.services.admin_service import AuthorisationRefusalError
 
+@pytest.fixture(autouse=True)
+def setup_requester(monkeypatch):
+    monkeypatch.setattr("app.core.langgraph.tools.ceremony_scheduler._get_requester", lambda: {"channel_id": "chan_123", "team_id": "team_123"})
+    yield
 
 @pytest.fixture
 def mock_db_session():
@@ -105,7 +109,6 @@ def test_schedule_ceremony_success(
     mock_ask_human.invoke.return_value = "yes"  # User confirms the parsed time
 
     res = schedule_ceremony.invoke({
-        "cohort_id": 2026,
         "ceremony_type": "standup",
         "raw_time": "tomorrow at 10 AM UTC",
         "organizer_id": "admin_user",
@@ -113,63 +116,13 @@ def test_schedule_ceremony_success(
     })
 
     assert "SUCCESS" in res
-    mock_admin.evaluate_permission.assert_called_once_with(
-        requester_id="admin_user", required_role="admin", cohort_id="2026"
-    )
     # ask_human must have been called exactly once for the confirmation prompt
     mock_ask_human.invoke.assert_called_once()
     mock_db_session.add.assert_called_once()
     mock_db_session.commit.assert_called_once()
 
 
-@patch("app.core.langgraph.tools.ceremony_scheduler.Session")
-@patch("app.core.langgraph.tools.ceremony_scheduler.admin_service")
-def test_schedule_ceremony_unauthorized(mock_admin, mock_session_cls, mock_db_session):
-    """Non-admin users are rejected before any ask_human or DB operation."""
-    mock_session_cls.return_value.__enter__.return_value = mock_db_session
-    mock_admin.evaluate_permission.side_effect = AuthorisationRefusalError(
-        requester_id="learner_user", action="schedule_ceremony", cohort_id="2026"
-    )
 
-    res = schedule_ceremony.invoke({
-        "cohort_id": 2026,
-        "ceremony_type": "standup",
-        "raw_time": "tomorrow at 10 AM UTC",
-        "organizer_id": "learner_user",
-    })
-
-    assert "Error: You don't have permission" in res
-    mock_db_session.add.assert_not_called()
-
-
-@patch("app.core.langgraph.tools.ceremony_scheduler.ask_human")
-@patch("app.core.langgraph.tools.ceremony_scheduler.Session")
-@patch("app.core.langgraph.tools.ceremony_scheduler.admin_service")
-@patch("app.core.langgraph.tools.ceremony_scheduler.find_conflict")
-def test_schedule_ceremony_missing_cohort(
-    mock_find, mock_admin, mock_session_cls, mock_ask_human, mock_db_session
-):
-    """Unknown cohort ID is rejected after confirmation, before DB insert."""
-    mock_session_cls.return_value.__enter__.return_value = mock_db_session
-    mock_admin.evaluate_permission.return_value = None
-    mock_db_session.get.return_value = None  # cohort not found
-    mock_ask_human.invoke.return_value = "yes"
-
-    res = schedule_ceremony.invoke({
-        "cohort_id": 202,
-        "ceremony_type": "planning",
-        "raw_time": "tomorrow at 6 PM UTC",
-        "organizer_id": "admin_user",
-    })
-
-    assert res == (
-        "Error: Cohort #202 does not exist. "
-        "Ask the user to create it or choose an existing cohort."
-    )
-    mock_db_session.get.assert_called_once_with(Cohort, 202)
-    mock_db_session.add.assert_not_called()
-    mock_db_session.commit.assert_not_called()
-    mock_find.assert_not_called()
 
 
 @patch("app.core.langgraph.tools.ceremony_scheduler.ask_human")
@@ -192,7 +145,6 @@ def test_schedule_ceremony_conflict(
     mock_find.return_value = conflict_obj
 
     res = schedule_ceremony.invoke({
-        "cohort_id": 2026,
         "ceremony_type": "standup",
         "raw_time": "tomorrow at 10 AM UTC",
         "organizer_id": "admin_user",
@@ -216,7 +168,6 @@ def test_schedule_ceremony_aborts_on_negative_confirmation(
     mock_ask_human.invoke.return_value = "no"
 
     res = schedule_ceremony.invoke({
-        "cohort_id": 2026,
         "ceremony_type": "standup",
         "raw_time": "tomorrow at 10 AM UTC",
         "organizer_id": "admin_user",
@@ -240,7 +191,6 @@ def test_schedule_ceremony_ambiguous_time_calls_ask_human(
     mock_ask_human.invoke.return_value = "Monday 9 AM UTC"
 
     res = schedule_ceremony.invoke({
-        "cohort_id": 2026,
         "ceremony_type": "standup",
         "raw_time": "Monday at 9",  # missing timezone and AM/PM
         "organizer_id": "admin_user",
@@ -266,6 +216,7 @@ def test_amend_ceremony_success_cancel(mock_session_cls, mock_ask_human, mock_db
     target = MagicMock()
     target.organizer = "admin_user"
     target.status = "scheduled"
+    target.channel_id = "chan_123"
     target.scheduled_at = datetime.now(timezone.utc) + timedelta(days=1)
     mock_db_session.get.return_value = target
 
@@ -288,6 +239,7 @@ def test_amend_ceremony_unauthorized_organizer(mock_session_cls, mock_db_session
     target = MagicMock()
     target.organizer = "other_admin"
     target.status = "scheduled"
+    target.channel_id = "chan_123"
     target.scheduled_at = datetime.now(timezone.utc) + timedelta(days=1)
     mock_db_session.get.return_value = target
 
@@ -335,6 +287,7 @@ def test_amend_ceremony_aborts_on_negative_confirmation(
     target = MagicMock()
     target.organizer = "admin_user"
     target.status = "scheduled"
+    target.channel_id = "chan_123"
     target.scheduled_at = datetime.now(timezone.utc) + timedelta(days=1)
     mock_db_session.get.return_value = target
 
@@ -360,6 +313,7 @@ def test_amend_ceremony_ambiguous_time_calls_ask_human(
     target = MagicMock()
     target.organizer = "admin_user"
     target.status = "scheduled"
+    target.channel_id = "chan_123"
     target.scheduled_at = datetime.now(timezone.utc) + timedelta(days=1)
     mock_db_session.get.return_value = target
 
@@ -411,11 +365,11 @@ def test_read_ceremonies(mock_type_name, mock_session_cls, mock_db_session):
 
     mock_db_session.exec.return_value.all.return_value = [cerem1]
 
-    res = read_ceremonies.invoke({"cohort_id": 2026, "include_inactive": False})
+    res = read_ceremonies.invoke({"include_inactive": False})
 
-    assert "Upcoming ceremonies for cohort #2026:" in res
-    assert "#1" in res
-    assert "standup" in res
+    assert "Upcoming ceremonies in this channel:" in res
+    assert "#1 | standup |" in res
+    assert "by admin_user" in res
     assert "Discuss stuff" in res
 
 
@@ -425,6 +379,6 @@ def test_read_ceremonies_empty(mock_session_cls, mock_db_session):
     mock_session_cls.return_value.__enter__.return_value = mock_db_session
     mock_db_session.exec.return_value.all.return_value = []
 
-    res = read_ceremonies.invoke({"cohort_id": 999})
+    res = read_ceremonies.invoke({})
 
-    assert "No upcoming ceremonies found for cohort #999." in res
+    assert "No upcoming ceremonies found in this channel." in res

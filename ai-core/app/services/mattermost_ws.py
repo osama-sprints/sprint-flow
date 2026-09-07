@@ -478,6 +478,7 @@ class MattermostWebSocketListener:
             return
 
         channel_id = str(post.get("channel_id") or "")
+        team_id = str(data.get("team_id") or "")
         post_id = str(post.get("id") or "")
         if not channel_id:
             return
@@ -499,6 +500,7 @@ class MattermostWebSocketListener:
             answer_and_reply(
                 IncomingMessage(
                     channel_id=channel_id,
+                    team_id=team_id,
                     post_id=post_id,
                     text=prompt,
                     user_id=user_id,

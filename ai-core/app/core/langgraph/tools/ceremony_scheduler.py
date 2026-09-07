@@ -16,6 +16,13 @@ from app.models.cohort import Cohort
 from app.services.database import database_service
 from app.services.admin_service import AdminService, AuthorisationRefusalError
 
+# Use current_requester to scope operations by channel and team
+from app.core.langgraph.tools.mattermost_admin import current_requester
+
+def _get_requester():
+    """Helper to retrieve the current requester context."""
+    return current_requester.get()
+
 # Reuse the ask_human tool built by the Admin team (Norhan/Youhanna)
 # The agent uses this to pause and ask the user for confirmation
 from app.core.langgraph.tools.ask_human import ask_human  # noqa: F401
@@ -71,9 +78,9 @@ def validate_and_parse_time(raw_time: str) -> tuple[datetime | None, str]:
 
     # Step 1: Try to understand what time the user wrote
     
-    parsed = dateparser.parse(raw_time)
+    parsed = dateparser.parse(raw_time, settings={'PREFER_DATES_FROM': 'future'})
     if not parsed:
-        return None, "Error: I couldn't understand that time. Ask the user to be more specific (e.g. 'Monday 9 AM UTC')."
+        return None, "Error: I couldn't understand that time. Please be more specific (e.g. 'Monday 9 AM UTC')."
 
     # Step 2: Reject if the time is ambiguous
     # We need to know the timezone AND whether it's morning or afternoon
@@ -83,38 +90,40 @@ def validate_and_parse_time(raw_time: str) -> tuple[datetime | None, str]:
     has_timezone = parsed.tzinfo is not None
 
     if not has_timezone or not (has_ampm or has_24h):
-        return None, "Error: The time is ambiguous. Ask the user to add AM/PM and a timezone (e.g. '3 PM UTC')."
+        return None, "Error: The time is ambiguous. Please add AM/PM and a timezone (e.g. '3 PM UTC')."
 
     # Step 3: Convert to UTC so everything in the DB is consistent
     utc_dt = parsed.astimezone(timezone.utc)
 
     # Step 4: Don't allow booking in the past
     if utc_dt <= datetime.now(timezone.utc):
-        return None, "Error: That time is in the past. Ask the user to pick a future date."
+        return None, "Error: That time is in the past. Please pick a future date."
 
     return utc_dt, ""
 
 
 def find_conflict(
     session: Session,
-    cohort_id: int,
+    channel_id: str | None,
     scheduled_at: datetime,
     exclude_id: int | None = None,
 ) -> Ceremony | None:
     """
     Looks in the DB to see if there's already an active ceremony for this
-    cohort within 30 minutes of the requested time.
+    channel within 30 minutes of the requested time.
     Returns the conflicting ceremony if found, or None if the slot is free.
     """
     window_start = scheduled_at - timedelta(minutes=30)
     window_end = scheduled_at + timedelta(minutes=30)
 
     query = select(Ceremony).where(
-        Ceremony.cohort_id == cohort_id,
         Ceremony.status != "cancelled",
         Ceremony.scheduled_at >= window_start,
         Ceremony.scheduled_at <= window_end,
     )
+
+    if channel_id:
+        query = query.where(Ceremony.channel_id == channel_id)
 
     # When amending, we ignore the ceremony being changed
     if exclude_id is not None:
@@ -143,36 +152,36 @@ def _ceremony_type_name(session: Session, type_id: int) -> str:
 
 @tool
 def schedule_ceremony(
-    cohort_id: int,
     ceremony_type: str,
     raw_time: str,
     organizer_id: str,
     agenda: Optional[str] = None,
-    channel_id: Optional[str] = None,
 ) -> str:
     """
-    Books a new ceremony for a cohort and saves it to the database.
+    Books a new ceremony for a channel and saves it to the database.
 
     The tool enforces a two-step human gate before any DB write:
 
       1. If the time is ambiguous (missing timezone or AM/PM), ask_human
          is called immediately to collect a corrected input. No row is written.
 
-
       2. If the time is valid, ask_human echoes the parsed UTC time and waits
          for an explicit "yes" before proceeding.
 
+    Args:
+        ceremony_type: The type of ceremony to schedule.
+        raw_time: The exact time string provided by the user. Do not format or convert this into a timestamp; pass it exactly as the user typed it.
+        organizer_id: The user ID of the organizer.
+        agenda: Optional agenda string.
     """
 
+    # Fetch context from current requester
+    requester = _get_requester()
+    ceremony_channel_id = requester.get("channel_id")
+    current_team_id = requester.get("team_id")
+
     # Check that the person has permission to schedule ceremonies
-    try:
-        admin_service.evaluate_permission(
-            requester_id=organizer_id,
-            required_role="admin",
-            cohort_id=str(cohort_id),
-        )
-    except AuthorisationRefusalError as e:
-        return f"Error: You don't have permission to schedule ceremonies. ({e})"
+    # (Removed cohort admin logic as scoping is channel-native)
 
     # Validate the time the user typed
     utc_dt, error_msg = validate_and_parse_time(raw_time)
@@ -187,14 +196,26 @@ def schedule_ceremony(
         )
         return (
             f"The user has provided a corrected time: {clarified!r}. "
-            "Please call schedule_ceremony again with this updated time."
+            "Please call schedule_ceremony again using EXACTLY this string for the raw_time parameter without modifying or formatting it."
         )
+
+    # Pre-flight conflict check before asking for human confirmation
+    with Session(database_service.engine) as session:
+        ctype = _get_or_create_ceremony_type(session, ceremony_type)
+        conflict = find_conflict(session, ceremony_channel_id, utc_dt)
+        if conflict:
+            conflict_name = _ceremony_type_name(session, conflict.type_id)
+            return (
+                f"Error: Cohort already has a '{conflict_name}' at "
+                f"{conflict.scheduled_at.isoformat()} UTC (within 30 minutes). "
+                f"Ask the user to pick a different time."
+            )
 
     # Echo the parsed time and get explicit confirmation before touching the DB.
     human_display = utc_dt.strftime("%A, %d %B %Y at %H:%M UTC")
     confirmation = ask_human.invoke(
         f"I've understood the time as **{human_display}** "
-        f"for a **{ceremony_type}** ceremony for cohort #{cohort_id}. "
+        f"for a **{ceremony_type}** ceremony. "
         f"Shall I go ahead and book it? (yes / no)"
     )
     if not _is_affirmative(confirmation):  
@@ -205,18 +226,11 @@ def schedule_ceremony(
 
     with Session(database_service.engine) as session:
 
-    
-        if session.get(Cohort, cohort_id) is None:
-            return (
-                f"Error: Cohort #{cohort_id} does not exist. "
-                "Ask the user to create it or choose an existing cohort."
-            )
-
         # Resolve ceremony type name -> CeremonyType row (create if new)
         ctype = _get_or_create_ceremony_type(session, ceremony_type)
 
-        # Make sure there's no other meeting at the same time for this cohort
-        conflict = find_conflict(session, cohort_id, utc_dt)
+        # Make sure there's no other meeting at the same time for this channel
+        conflict = find_conflict(session, ceremony_channel_id, utc_dt)
         if conflict:
             conflict_name = _ceremony_type_name(session, conflict.type_id)
             return (
@@ -227,19 +241,19 @@ def schedule_ceremony(
 
         # Everything looks good — save to the database
         new_ceremony = Ceremony(
-            cohort_id=cohort_id,
             type_id=ctype.id,
             scheduled_at=utc_dt,
             organizer=organizer_id,
             agenda=agenda,
             raw_input=raw_time,
-            channel_id=channel_id,
+            channel_id=ceremony_channel_id,
+            team_id=current_team_id,
         )
         session.add(new_ceremony)
         session.commit()
         session.refresh(new_ceremony)
 
-    logger.info(f"Ceremony #{new_ceremony.id} created for cohort {cohort_id} by {organizer_id}")
+    logger.info(f"Ceremony #{new_ceremony.id} created by {organizer_id}")
     return f"SUCCESS: {ctype.name} scheduled at {utc_dt.isoformat()} UTC. Ceremony ID is #{new_ceremony.id}."
 
 
@@ -275,7 +289,7 @@ def amend_ceremony(
     Args:
         ceremony_id:    The ID of the ceremony to update.
         organizer_id:   Must match the person who originally booked it.
-        new_raw_time:   New time string if rescheduling (optional).
+        new_raw_time:   New time string if rescheduling (optional). Pass exactly what the user typed without formatting it.
         new_agenda:     New agenda text (optional).
         cancel:         Set to True to cancel the ceremony.
     """
@@ -309,8 +323,12 @@ def amend_ceremony(
                 "can change this ceremony."
             )
 
+        # Enforce scope: can only amend ceremonies in the current channel
+        requester = _get_requester()
+        if not requester or ceremony.channel_id != requester.get("channel_id"):
+            return "Error: You can only amend ceremonies scheduled in the current channel."
+
         # Capture everything needed from the row before the session closes
-        cohort_id = ceremony.cohort_id
         current_type_name = _ceremony_type_name(session, ceremony.type_id)
 
     # --- Phase 2a: Cancellation path ---
@@ -349,8 +367,22 @@ def amend_ceremony(
             )
             return (
                 f"The user has provided a corrected time: {clarified!r}. "
-                "Please call amend_ceremony again with this updated time."
+                "Please call amend_ceremony again using EXACTLY this string for the new_raw_time parameter without modifying or formatting it."
             )
+
+        # Pre-flight conflict check BEFORE asking human
+        with Session(database_service.engine) as session:
+            ceremony = session.get(Ceremony, ceremony_id)
+            if not ceremony:
+                return f"Error: No ceremony found with ID #{ceremony_id}."
+            conflict = find_conflict(session, ceremony.channel_id, utc_dt, exclude_id=ceremony_id)
+            if conflict:
+                conflict_name = _ceremony_type_name(session, conflict.type_id)
+                return (
+                    f"Error: There's already a '{conflict_name}' at "
+                    f"{conflict.scheduled_at.isoformat()} UTC (within 30 minutes). "
+                    "Ask the user to pick a different time."
+                )
 
         # Echo the parsed time and get explicit confirmation before writing.
         human_display = utc_dt.strftime("%A, %d %B %Y at %H:%M UTC")
@@ -374,7 +406,7 @@ def amend_ceremony(
 
         if new_utc_dt is not None:
             # Make sure the new time doesn't clash with another ceremony
-            conflict = find_conflict(session, cohort_id, new_utc_dt, exclude_id=ceremony_id)
+            conflict = find_conflict(session, ceremony.channel_id, new_utc_dt, exclude_id=ceremony_id)
             if conflict:
                 conflict_name = _ceremony_type_name(session, conflict.type_id)
                 return (
@@ -406,19 +438,21 @@ def amend_ceremony(
 
 
 @tool
-def read_ceremonies(cohort_id: int, include_inactive: bool = False) -> str:
+def read_ceremonies(include_inactive: bool = False) -> str:
     """
-    Returns a list of upcoming ceremonies for a cohort.
+    Returns a list of upcoming ceremonies for the current channel.
 
     Args:
-        cohort_id:        The ID of the cohort.
         include_inactive: Set to True to also show cancelled ceremonies.
     """
     now = datetime.now(timezone.utc)
 
+    requester = _get_requester()
+    current_channel_id = requester.get("channel_id") if requester else None
+
     with Session(database_service.engine) as session:
 
-        query = select(Ceremony).where(Ceremony.cohort_id == cohort_id)
+        query = select(Ceremony).where(Ceremony.channel_id == current_channel_id)
 
         # By default, only show future active (non-cancelled) ceremonies
         if not include_inactive:
@@ -432,10 +466,10 @@ def read_ceremonies(cohort_id: int, include_inactive: bool = False) -> str:
         ceremonies = session.exec(query).all()
 
         if not ceremonies:
-            return f"No upcoming ceremonies found for cohort #{cohort_id}."
+            return f"No upcoming ceremonies found in this channel."
 
         # Build a simple readable list
-        lines = [f"Upcoming ceremonies for cohort #{cohort_id}:"]
+        lines = [f"Upcoming ceremonies in this channel:"]
         for c in ceremonies:
             type_name = _ceremony_type_name(session, c.type_id)
             line = f"  #{c.id} | {type_name} | {c.scheduled_at.isoformat()} UTC | {c.status} | by {c.organizer}"

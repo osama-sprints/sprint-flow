@@ -191,6 +191,7 @@ async def mattermost_webhook(
         answer_and_reply,
         IncomingMessage(
             channel_id=payload.channel_id,
+            team_id=payload.team_id,
             post_id=payload.post_id,
             text=prompt,
             user_id=payload.user_id,
