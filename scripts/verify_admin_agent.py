@@ -22,6 +22,7 @@ NEW_TEAM = f"Growth Squad {STAMP}"
 
 
 def req(method, path, body=None, token=None):
+    """Call the Mattermost API and return (decoded body, headers)."""
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(API + path, data=data, method=method)
     r.add_header("Content-Type", "application/json")
@@ -32,6 +33,7 @@ def req(method, path, body=None, token=None):
 
 
 def login(login_id, password):
+    """Log in and return the session token."""
     _, h = req("POST", "/users/login", {"login_id": login_id, "password": password})
     return h["Token"]
 
@@ -41,28 +43,39 @@ bot, _ = req("GET", "/users/username/" + BOT, token=ADMIN)
 
 # A target to be added, and a non-admin who will try the same request.
 target_email = f"target{STAMP}@test.local"
-target, _ = req("POST", "/users", {"email": target_email, "username": f"target{STAMP}",
-                                   "password": "Target12345!"}, token=ADMIN)
+target, _ = req(
+    "POST", "/users", {"email": target_email, "username": f"target{STAMP}", "password": "Target12345!"}, token=ADMIN
+)
 outsider_name = f"outsider{STAMP}"
-req("POST", "/users", {"email": f"{outsider_name}@test.local", "username": outsider_name,
-                       "password": "Outsider12345!"}, token=ADMIN)
+req(
+    "POST",
+    "/users",
+    {"email": f"{outsider_name}@test.local", "username": outsider_name, "password": "Outsider12345!"},
+    token=ADMIN,
+)
 print(f"==> target={target_email}  outsider={outsider_name}")
 
 
 def dm(token, user_id, text):
+    """Open a DM with the bot and post ``text`` as the given user."""
     ch, _ = req("POST", "/channels/direct", [user_id, bot["id"]], token=token)
     p, _ = req("POST", "/posts", {"channel_id": ch["id"], "message": text}, token=token)
     return ch["id"], p
 
 
 def wait_reply(token, channel_id, after_ts, timeout=120):
+    """Wait for the bot's reply in a channel after ``after_ts``."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(3)
         d, _ = req("GET", f"/channels/{channel_id}/posts?per_page=40", token=token)
-        hits = [p for p in d["posts"].values()
-                if p["user_id"] == bot["id"] and p["create_at"] > after_ts
-                and not str(p.get("type") or "").startswith("system_")]
+        hits = [
+            p
+            for p in d["posts"].values()
+            if p["user_id"] == bot["id"]
+            and p["create_at"] > after_ts
+            and not str(p.get("type") or "").startswith("system_")
+        ]
         if hits:
             hits.sort(key=lambda p: p["create_at"])
             return hits[-1]["message"]
@@ -70,6 +83,7 @@ def wait_reply(token, channel_id, after_ts, timeout=120):
 
 
 def team_has(team_slug, user_id):
+    """Whether ``user_id`` is a member of the team with slug ``team_slug``."""
     try:
         team, _ = req("GET", f"/teams/name/{team_slug}", token=ADMIN)
         req("GET", f"/teams/{team['id']}/members/{user_id}", token=ADMIN)

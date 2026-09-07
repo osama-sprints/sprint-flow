@@ -6,9 +6,9 @@ SprintFlow receives messages over two different transports:
 * **WebSocket events** — everything else, notably direct messages.
 
 Both must behave identically once a message is in hand: same loop protection,
-same text normalisation, same agent invocation, same reply path. That shared
-behaviour lives here so the two transports cannot drift apart; each transport
-module is left with nothing but its own wire format.
+same text normalisation, same identity resolution, same agent invocation, same
+reply path. That shared behaviour lives here so the two transports cannot
+drift apart; each transport module is left with nothing but its own wire format.
 """
 
 from pydantic import (
@@ -16,11 +16,12 @@ from pydantic import (
     Field,
 )
 
-from app.services.agent import agent
 from app.core.config import settings
-from app.core.langgraph.tools.mattermost_admin import current_requester
 from app.core.logging import logger
+from app.core.requester import current_requester
 from app.schemas.chat import Message
+from app.services.agent import agent
+from app.services.identity import resolve_requester
 from app.services.mattermost import mattermost_client
 
 # app/schemas/chat.py caps Message.content at 3000 characters. Mattermost posts
@@ -128,41 +129,6 @@ async def is_own_post(user_id: str, user_name: str = "") -> bool:
     return bool(bot_user_id) and user_id == bot_user_id
 
 
-async def _resolve_requester(message: IncomingMessage) -> dict:
-    """Build the authorisation context for this turn.
-
-    The requester's identity is taken from the Mattermost user id on the event
-    and their email is read back from the server — never from the message text,
-    which the sender controls.
-
-    The lookup is skipped outside direct messages: admin tools refuse anything
-    that is not a DM anyway, so a public channel never pays for it.
-
-    Args:
-        message: The inbound message.
-
-    Returns:
-        dict: Requester context for the admin tools' ContextVar.
-    """
-    context = {
-        "user_id": message.user_id,
-        "user_name": message.user_name,
-        "channel_type": message.channel_type,
-        "channel_id": message.channel_id,
-        "team_id": message.team_id,
-        "email": None,
-        "is_admin": False,
-    }
-
-    if message.channel_type != "D" or not message.user_id or not settings.ADMIN_EMAILS:
-        return context
-
-    user = await mattermost_client.get_user(message.user_id)
-    email = (user or {}).get("email", "").strip().lower()
-    context["email"] = email or None
-    context["is_admin"] = bool(email) and email in settings.ADMIN_EMAILS
-    return context
-
 
 async def answer_and_reply(message: IncomingMessage) -> None:
     """Run the agent for one message and post the answer back to Mattermost.
@@ -186,9 +152,17 @@ async def answer_and_reply(message: IncomingMessage) -> None:
         source=source,
     )
 
-    # Bound before the graph runs so admin tools can read it, and never exposed
-    # as a tool argument the model could fill in itself.
-    current_requester.set(await _resolve_requester(message))
+    # Identity is resolved from the event's user id and STORED data, then bound
+    # before the graph runs so the supervisor and every tool can read it. It is
+    # never exposed as a tool argument the model could fill in itself.
+    requester = await resolve_requester(
+        mattermost_user_id=message.user_id,
+        username=message.user_name,
+        channel_id=channel_id,
+        team_id=message.team_id,
+        channel_type=message.channel_type,
+    )
+    current_requester.set(requester)
 
     try:
         result = await agent.get_response(
@@ -214,6 +188,8 @@ async def answer_and_reply(message: IncomingMessage) -> None:
     except Exception as e:
         logger.exception("mattermost_agent_turn_failed", session_id=session_id, source=source, error=str(e))
         reply = FALLBACK_REPLY
+    finally:
+        current_requester.set(None)
 
     await _deliver(message, reply)
     logger.info("mattermost_agent_turn_completed", session_id=session_id, source=source)

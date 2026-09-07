@@ -1,9 +1,32 @@
 # Ceremony Bot Failure Report
 
+## Resolution (2026-09-03)
+
+Root causes 1–3 below are fixed on `dev` by the Sprint 1 graph layer
+(`ai-core/app/core/langgraph/graph.py`, `tools/results.py`); see
+`reports/orchestration_report.md`, section *In-flight conversations*.
+
+1. **Failed state mistaken for an interrupt** — `pending_interrupt(state)` resumes with
+   `Command(resume=...)` only when a saved task actually carries an interrupt; a node that
+   raised leaves `state.next` set but no interrupt and the next message starts a fresh turn
+   (`tests/test_specialists.py::test_stale_failed_node_is_not_an_interrupt`).
+2. **Tool exceptions leave the conversation stuck** — every Sprint 1 tool wears
+   `@guarded_tool`, which turns authorisation refusals, validation failures and unexpected
+   errors into `[CODE] sentence` tool results; only `GraphInterrupt` propagates.
+3. **Deterministic errors retried** — the tool-executor nodes retry only transient
+   transport errors (`httpx.TransportError`, `ConnectionError`, `TimeoutError`, `OSError`);
+   validation, authorisation and integrity errors are attempted once.
+
+Root cause 4 (a fresh command during a pending confirmation) is unchanged: the paused
+tool receives the new text as its answer and treats anything non-affirmative as a decline.
+Root cause 5 is owned by the scheduling task. The original report follows unchanged.
+
+---
+
 **Date investigated:** 2026-09-02  
 **Environment:** Local Docker Compose, development  
 **Affected channel:** Mattermost direct message with `sprintflow-assistant`  
-**Status:** Root cause identified; shared bot fixes still required
+**Status:** Root causes 1–3 resolved on 2026-09-03 (see above); 4–5 tracked by their owners
 
 ## Summary
 

@@ -1,8 +1,12 @@
 """This file contains the main application entry point."""
-import asyncio
-from contextlib import asynccontextmanager
-from datetime import datetime
 
+from contextlib import asynccontextmanager
+from datetime import (
+    UTC,
+    datetime,
+)
+
+from asgi_correlation_id import CorrelationIdMiddleware
 from dotenv import load_dotenv
 from fastapi import (
     FastAPI,
@@ -15,10 +19,7 @@ from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from asgi_correlation_id import CorrelationIdMiddleware
-
 from app.api.v1.api import api_router
-from app.services.agent import agent
 from app.core.cache import cache_service
 from app.core.config import settings
 from app.core.limiter import limiter
@@ -30,14 +31,22 @@ from app.core.middleware import (
     ProfilingMiddleware,
 )
 from app.core.observability import langfuse_init, shutdown_langfuse
+from app.services.agent import agent
 from app.services.database import database_service
+from app.services.domain.reference_data import seed_reference_data
 from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
 from app.services.memory import memory_service
+from app.workers.onboarding_dispatcher import onboarding_dispatcher
 
 # Load environment variables
 load_dotenv()
 langfuse_init()
+
+# The table whose absence means the domain migrations never ran. /health
+# reports 503 in that case so the container cannot look healthy while every
+# cohort-aware feature is broken.
+_SCHEMA_SENTINEL_TABLE = "cohorts"
 
 
 @asynccontextmanager
@@ -71,6 +80,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("memory_service_pre_warm_failed", error=str(e))
 
+    # Sprint 1 / data model: reference data is data, not code. Re-applying the
+    # seed at every start is idempotent and restores anything removed by hand.
+    try:
+        await seed_reference_data()
+    except Exception as e:
+        logger.exception("reference_data_seed_failed", error=str(e))
+
     # Start the Mattermost WebSocket listener. This is what makes direct
     # messages work at all — outgoing webhooks never fire outside public
     # channels. It reconnects on its own, so a Mattermost that is still booting
@@ -80,15 +96,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("mattermost_ws_start_failed", error=str(e))
 
-    from app.services.onboarding import followup_poller
-    followup_task = asyncio.create_task(followup_poller(), name="onboarding-followup-poller")
+    # Sprint 1 / onboarding: durable follow-ups are delivered by a background
+    # dispatcher reading the onboarding outbox, so they survive restarts.
+    try:
+        await onboarding_dispatcher.start()
+    except Exception as e:
+        logger.exception("onboarding_dispatcher_start_failed", error=str(e))
+
     yield
 
     # Cleanup on shutdown
+    await onboarding_dispatcher.stop()
     await mattermost_ws_listener.stop()
-    followup_task.cancel()
     await cache_service.close()
     await mattermost_client.close()
+    await database_service.close()
     if agent._connection_pool:
         await agent._connection_pool.close()
         logger.info("connection_pool_closed")
@@ -192,23 +214,28 @@ async def health_check(request: Request) -> JSONResponse:
     """Health check endpoint with environment-specific information.
 
     Returns:
-        JSONResponse: Health status payload, with HTTP 503 when the
-        database is unreachable so load balancers can drop the instance.
+        JSONResponse: Health status payload, with HTTP 503 when the database
+        is unreachable or the domain schema was never migrated, so load
+        balancers (and Compose) can drop the instance.
     """
     logger.info("health_check_called")
 
-    # Check database connectivity
     db_healthy = await database_service.health_check()
+    schema_present = db_healthy and await database_service.table_exists(_SCHEMA_SENTINEL_TABLE)
+    healthy = db_healthy and schema_present
 
     response = {
-        "status": "healthy" if db_healthy else "degraded",
+        "status": "healthy" if healthy else "degraded",
         "version": settings.VERSION,
         "environment": settings.ENVIRONMENT.value,
-        "components": {"api": "healthy", "database": "healthy" if db_healthy else "unhealthy"},
-        "timestamp": datetime.now().isoformat(),
+        "components": {
+            "api": "healthy",
+            "database": "healthy" if db_healthy else "unhealthy",
+            "domain_schema": "healthy" if schema_present else "missing",
+            "onboarding_dispatcher": onboarding_dispatcher.status(),
+        },
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
-    # If DB is unhealthy, set the appropriate status code
-    status_code = status.HTTP_200_OK if db_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
-
+    status_code = status.HTTP_200_OK if healthy else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(content=response, status_code=status_code)

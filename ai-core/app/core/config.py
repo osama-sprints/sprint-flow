@@ -334,6 +334,47 @@ class Settings:
         # outside anything the model or a Mattermost misconfiguration can reach.
         self.ADMIN_EMAILS = [e.strip().lower() for e in parse_list_from_env("ADMIN_EMAILS", []) if e.strip()]
 
+        # --- Sprint 1 / data model & identity (s1e1, s1e2) ---------------------
+        # How long a Mattermost profile read is cached before the identity sync
+        # re-reads it. The users row is upserted on every turn regardless.
+        self.IDENTITY_PROFILE_CACHE_TTL = int(os.getenv("IDENTITY_PROFILE_CACHE_TTL", "600"))
+        # Default sprint length when open_sprint is called without an end date.
+        self.SPRINT_DEFAULT_LENGTH_DAYS = int(os.getenv("SPRINT_DEFAULT_LENGTH_DAYS", "14"))
+
+        # --- Sprint 1 / supervisor orchestration (s1e3) --------------------------
+        # A multi-intent message is decomposed into at most this many routes.
+        self.ROUTING_MAX_ROUTES_PER_TURN = int(os.getenv("ROUTING_MAX_ROUTES_PER_TURN", "2"))
+
+        # --- Sprint 1 / ceremony scheduling (s1e4) -------------------------------
+        # Zone used to interpret spoken times when the requester's Mattermost
+        # profile declares none. Empty means: ask the person for their zone
+        # rather than guess.
+        self.SCHEDULING_DEFAULT_TIMEZONE = os.getenv("SCHEDULING_DEFAULT_TIMEZONE", "").strip()
+        # A ceremony cannot be scheduled closer than this to the current time.
+        self.SCHEDULING_MIN_LEAD_MINUTES = int(os.getenv("SCHEDULING_MIN_LEAD_MINUTES", "5"))
+        # Nor further ahead than this.
+        self.SCHEDULING_MAX_HORIZON_DAYS = int(os.getenv("SCHEDULING_MAX_HORIZON_DAYS", "365"))
+        # What happens when a new ceremony overlaps an existing one for the same
+        # cohort: "refuse" (default, the scheduling report justifies it) or "warn".
+        self.SCHEDULING_CONFLICT_POLICY = os.getenv("SCHEDULING_CONFLICT_POLICY", "refuse").strip().lower()
+
+        # --- Sprint 1 / proactive onboarding (s1e5) ------------------------------
+        self.ONBOARDING_ENABLED = os.getenv("ONBOARDING_ENABLED", "true").lower() in ("true", "1", "t", "yes")
+        # Delay between the welcome and the follow-up check-in.
+        self.ONBOARDING_FOLLOW_UP_DELAY_HOURS = int(os.getenv("ONBOARDING_FOLLOW_UP_DELAY_HOURS", "72"))
+        # How often the dispatcher looks for due steps (it is also woken on arrival).
+        self.ONBOARDING_POLL_INTERVAL_SECONDS = int(os.getenv("ONBOARDING_POLL_INTERVAL_SECONDS", "30"))
+        # Delivery attempts before a step is marked failed for an operator.
+        self.ONBOARDING_MAX_ATTEMPTS = int(os.getenv("ONBOARDING_MAX_ATTEMPTS", "5"))
+        # Base of the exponential retry backoff after a failed delivery.
+        self.ONBOARDING_RETRY_BACKOFF_SECONDS = int(os.getenv("ONBOARDING_RETRY_BACKOFF_SECONDS", "60"))
+        # How long a claimed step stays exclusive to one worker before another
+        # may take it over (covers a worker that died mid-delivery). Must exceed
+        # the worst-case delivery: two REST calls, each retried up to three times
+        # with exponential backoff over MATTERMOST_HTTP_TIMEOUT (~200 s at the
+        # default 30 s timeout), so a slow-but-alive worker is never overtaken.
+        self.ONBOARDING_CLAIM_LEASE_SECONDS = int(os.getenv("ONBOARDING_CLAIM_LEASE_SECONDS", "600"))
+
         # Apply environment-specific settings
         self.apply_environment_settings()
 

@@ -1,351 +1,172 @@
-"""This file contains the database service for the application."""
+"""Async database engine and session factory for the SprintFlow domain tables.
 
-from typing import (
-    Any,
-    Dict,
-    List,
-    Optional,
-)
+One engine per process, built on psycopg 3's async driver (already a
+dependency), so every data-access function is ``async`` and never blocks the
+event loop the Mattermost transports run on. Data access lives in
+``app.services.domain``; this module only owns the connection.
 
-from fastapi import HTTPException
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.pool import QueuePool
-from sqlmodel import (
-    Session,
-    col,
-    create_engine,
-    or_,
-    select,
-)
+The LangGraph checkpointer keeps its own ``psycopg_pool`` connection pool in
+``app.core.langgraph.graph`` — the two never share a connection.
+"""
 
-from app.core.config import (
-    Environment,
-    settings,
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+from urllib.parse import quote_plus
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    create_async_engine,
 )
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.core.config import settings
 from app.core.logging import logger
-from app.models.cohort import Cohort
-from app.models.cohort_membership import CohortMembership
-from app.models.role import Role
-from app.models.session import Session as ChatSession
-from app.models.sprint import Sprint
-from app.models.user import User
+
+# Tables that live in the same database but belong to other systems: the
+# LangGraph checkpointer's schema and anything mem0 may create. Alembic's
+# ``env.py`` excludes them from every comparison so autogenerate can never
+# propose dropping or altering them, and ``make db-reset`` never lists them.
+EXTERNALLY_OWNED_TABLES: frozenset[str] = frozenset(
+    {
+        "checkpoints",
+        "checkpoint_blobs",
+        "checkpoint_writes",
+        "checkpoint_migrations",
+        "longterm_memory",
+        "mem0migrations",
+    }
+)
+
+
+def is_externally_owned(table_name: str | None) -> bool:
+    """Report whether a table belongs to another system sharing the database.
+
+    Args:
+        table_name: Unqualified table name, or None.
+
+    Returns:
+        bool: True for the checkpointer and mem0 tables.
+    """
+    return table_name is not None and table_name in EXTERNALLY_OWNED_TABLES
+
+
+def database_url(driver: str = "postgresql+psycopg") -> str:
+    """Build the SQLAlchemy URL from the repository's settings.
+
+    Args:
+        driver: SQLAlchemy dialect+driver prefix. psycopg 3 serves both the
+            async engine here and Alembic's sync engine.
+
+    Returns:
+        str: A URL with the password percent-encoded.
+    """
+    return (
+        f"{driver}://{quote_plus(settings.POSTGRES_USER)}:{quote_plus(settings.POSTGRES_PASSWORD)}"
+        f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
+    )
 
 
 class DatabaseService:
-    """Service class for database operations.
+    """Owns the async engine and hands out sessions."""
 
-    This class handles all database operations for Users, Sessions, Cohorts, Roles, and Sprints.
-    It uses SQLModel for ORM operations and maintains a connection pool.
-    """
+    def __init__(self) -> None:
+        """Create the engine lazily configured from settings. No connection is opened here."""
+        self.engine: AsyncEngine = create_async_engine(
+            database_url(),
+            pool_pre_ping=True,
+            pool_size=settings.POSTGRES_POOL_SIZE,
+            max_overflow=settings.POSTGRES_MAX_OVERFLOW,
+            pool_timeout=30,
+            pool_recycle=1800,
+        )
+        logger.info(
+            "database_engine_configured",
+            environment=settings.ENVIRONMENT.value,
+            pool_size=settings.POSTGRES_POOL_SIZE,
+            max_overflow=settings.POSTGRES_MAX_OVERFLOW,
+        )
 
-    def __init__(self):
-        """Initialize database service with connection pool."""
-        try:
-            # Configure environment-specific database connection pool settings
-            pool_size = settings.POSTGRES_POOL_SIZE
-            max_overflow = settings.POSTGRES_MAX_OVERFLOW
+    def session(self) -> AsyncSession:
+        """Return a new session; the caller owns commit/rollback/close.
 
-            # Create engine with appropriate pool configuration
-            connection_url = (
-                f"postgresql://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
-                f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{settings.POSTGRES_DB}"
-            )
+        ``expire_on_commit=False`` so rows returned from a closed session still
+        expose every loaded column — no ``DetachedInstanceError`` at the tool
+        boundary.
 
-            self.engine = create_engine(
-                connection_url,
-                pool_pre_ping=True,
-                poolclass=QueuePool,
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-                pool_timeout=30,  # Connection timeout (seconds)
-                pool_recycle=1800,  # Recycle connections after 30 minutes
-            )
-
-            logger.info(
-                "database_initialized",
-                environment=settings.ENVIRONMENT.value,
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-            )
-        except SQLAlchemyError as e:
-            logger.error("database_initialization_error", error=str(e), environment=settings.ENVIRONMENT.value)
-            # In production, don't raise - allow app to start even with DB issues
-            if settings.ENVIRONMENT != Environment.PRODUCTION:
-                raise
-
-    
-    # USER & SESSION OPERATIONS
-
-    async def create_user(self, email: str, password: str, username: str | None = None) -> User:
-        """Create a new user."""
-        with Session(self.engine) as session:
-            user = User(email=email, hashed_password=password, username=username)
-            session.add(user)
-            session.commit()
-            session.refresh(user)
-            logger.info("user_created", email=email)
-            return user
-
-    async def get_user(self, user_id: int | str) -> Optional[User]:
-        """Get a user by ID."""
-        with Session(self.engine) as session:
-            if str(user_id).isdigit():
-                user = session.get(User, int(user_id))
-            else:
-                statement = select(User).where(User.mattermost_user_id == str(user_id))
-                user = session.exec(statement).first()
-            return user
-
-    async def get_user_by_email(self, email: str) -> Optional[User]:
-        """Get a user by email."""
-        with Session(self.engine) as session:
-            statement = select(User).where(User.email == email)
-            user = session.exec(statement).first()
-            return user
-
-    async def delete_user_by_email(self, email: str) -> bool:
-        """Delete a user by email."""
-        with Session(self.engine) as session:
-            user = session.exec(select(User).where(User.email == email)).first()
-            if not user:
-                return False
-
-            session.delete(user)
-            session.commit()
-            logger.info("user_deleted", email=email)
-            return True
-
-    async def create_session(
-        self, session_id: str, user_id: int, name: str = "", username: str | None = None
-    ) -> ChatSession:
-        """Create a new chat session."""
-        with Session(self.engine) as session:
-            chat_session = ChatSession(id=session_id, user_id=user_id, name=name, username=username)
-            session.add(chat_session)
-            session.commit()
-            session.refresh(chat_session)
-            logger.info("session_created", session_id=session_id, user_id=user_id, name=name)
-            return chat_session
-
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete a session by ID."""
-        with Session(self.engine) as session:
-            chat_session = session.get(ChatSession, session_id)
-            if not chat_session:
-                return False
-
-            session.delete(chat_session)
-            session.commit()
-            logger.info("session_deleted", session_id=session_id)
-            return True
-
-    async def get_session(self, session_id: str) -> Optional[ChatSession]:
-        """Get a session by ID."""
-        with Session(self.engine) as session:
-            chat_session = session.get(ChatSession, session_id)
-            return chat_session
-
-    async def get_user_sessions(self, user_id: int) -> List[ChatSession]:
-        """Get all sessions for a user."""
-        with Session(self.engine) as session:
-            statement = (
-                select(ChatSession).where(col(ChatSession.user_id) == user_id).order_by(col(ChatSession.created_at))
-            )
-            sessions = session.exec(statement).all()
-            return list(sessions)
-
-    async def update_session_name(self, session_id: str, name: str) -> ChatSession:
-        """Update a session's name."""
-        with Session(self.engine) as session:
-            chat_session = session.get(ChatSession, session_id)
-            if not chat_session:
-                raise HTTPException(status_code=404, detail="Session not found")
-
-            chat_session.name = name
-            session.add(chat_session)
-            session.commit()
-            session.refresh(chat_session)
-            logger.info("session_name_updated", session_id=session_id, name=name)
-            return chat_session
-
-    # AUTHORISATION & BACK-OFFICE ADMIN OPERATIONS
-
-    def get_user_roles(
-        self, requester_id: Any, cohort_id: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Queries user and cohort roles from PostgreSQL safely handling dict, int, or str IDs."""
-        if isinstance(requester_id, dict):
-            requester_id = requester_id.get("user_id") or requester_id.get("id") or str(requester_id)
-
-        req_str = str(requester_id)
-
-        with Session(self.engine) as session:
-            conditions = [
-                (User.mattermost_user_id == req_str),
-                (User.username == req_str),
-            ]
-            if req_str.isdigit():
-                conditions.append(User.id == int(req_str))
-
-            statement = select(User).where(or_(*conditions))
-            user = session.exec(statement).first()
-
-            if not user:
-                return {"global": [], "cohort_roles": {}}
-
-            is_admin = user.username == "admin" or user.email == "admin@sprintflow.ai"
-            global_roles = ["admin"] if is_admin else []
-
-            cohort_roles: Dict[str, list] = {}
-            if cohort_id and user.id:
-                membership_stmt = select(CohortMembership).where(
-                    (CohortMembership.user_id == user.id)
-                    & (CohortMembership.cohort_id == (int(cohort_id) if str(cohort_id).isdigit() else cohort_id))
-                )
-                membership = session.exec(membership_stmt).first()
-                if membership:
-                    role_obj = session.get(Role, membership.role_id)
-                    if role_obj:
-                        cohort_roles[cohort_id] = [role_obj.name]
-
-            return {"global": global_roles, "cohort_roles": cohort_roles}
-
-    def get_cohort(self, cohort_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a cohort by ID handling integer vs string primary keys."""
-        with Session(self.engine) as session:
-            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
-            cohort = session.get(Cohort, c_id)
-            if cohort:
-                return {"id": str(cohort.id), "name": cohort.name, "status": cohort.status}
-            return None
-
-    def create_cohort(self, cohort_id: str, name: str) -> Dict[str, Any]:
-        """Inserts a new cohort record handling integer vs string primary keys."""
-        with Session(self.engine) as session:
-            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
-            cohort = Cohort(id=c_id, name=name, status="ACTIVE")
-            session.add(cohort)
-            session.commit()
-            session.refresh(cohort)
-            return {"id": str(cohort.id), "name": cohort.name, "status": cohort.status}
-
-    def check_user_has_role(self, user_id: Any, role: str, cohort_id: str) -> bool:
-        """Checks if user holds a specific role in a cohort."""
-        if isinstance(user_id, dict):
-            user_id = user_id.get("user_id") or user_id.get("id") or str(user_id)
-
-        u_str = str(user_id)
-        c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
-
-        with Session(self.engine) as session:
-            conditions = [(User.mattermost_user_id == u_str), (User.username == u_str)]
-            if u_str.isdigit():
-                conditions.append(User.id == int(u_str))
-
-            user = session.exec(select(User).where(or_(*conditions))).first()
-            if not user or not user.id:
-                return False
-
-            role_obj = session.exec(select(Role).where(Role.name == role)).first()
-            if not role_obj or not role_obj.id:
-                return False
-
-            membership = session.exec(
-                select(CohortMembership).where(
-                    (CohortMembership.user_id == user.id)
-                    & (CohortMembership.cohort_id == c_id)
-                    & (CohortMembership.role_id == role_obj.id)
-                )
-            ).first()
-
-            return membership is not None
-
-    def add_user_role(self, user_id: Any, role: str, cohort_id: str) -> Dict[str, Any]:
-        """Assigns a role to a user within a cohort via CohortMembership."""
-        if isinstance(user_id, dict):
-            user_id = user_id.get("user_id") or user_id.get("id") or str(user_id)
-
-        u_str = str(user_id)
-        c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
-
-        with Session(self.engine) as session:
-            conditions = [(User.mattermost_user_id == u_str), (User.username == u_str)]
-            if u_str.isdigit():
-                conditions.append(User.id == int(u_str))
-
-            user = session.exec(select(User).where(or_(*conditions))).first()
-            if not user or not user.id:
-                raise ValueError(f"User '{user_id}' not found")
-
-            role_obj = session.exec(select(Role).where(Role.name == role)).first()
-            if not role_obj or not role_obj.id:
-                raise ValueError(f"Role '{role}' not found")
-
-            membership = CohortMembership(
-                user_id=user.id, cohort_id=c_id, role_id=role_obj.id
-            )
-            session.add(membership)
-            session.commit()
-            return {"user_id": user.id, "role": role, "cohort_id": cohort_id}
-
-    def get_sprint_status(self, cohort_id: str, sprint_id: str) -> Optional[str]:
-        """Queries sprint status handling integer vs string IDs."""
-        with Session(self.engine) as session:
-            s_id = int(sprint_id) if str(sprint_id).isdigit() else sprint_id
-            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
-            sprint = session.exec(
-                select(Sprint).where(
-                    (Sprint.id == s_id) & (Sprint.cohort_id == c_id)
-                )
-            ).first()
-            return sprint.status if sprint else None
-
-    def set_sprint_status(
-        self, cohort_id: str, sprint_id: str, status: str
-    ) -> Dict[str, Any]:
-        """Updates or creates a sprint status handling integer vs string IDs."""
-        with Session(self.engine) as session:
-            s_id = int(sprint_id) if str(sprint_id).isdigit() else sprint_id
-            c_id = int(cohort_id) if str(cohort_id).isdigit() else cohort_id
-
-            sprint = session.exec(
-                select(Sprint).where(
-                    (Sprint.id == s_id) & (Sprint.cohort_id == c_id)
-                )
-            ).first()
-
-            if sprint:
-                sprint.status = status
-            else:
-                sprint = Sprint(
-                    id=s_id,
-                    cohort_id=c_id,
-                    name=f"Sprint {sprint_id}",
-                    status=status,
-                )
-                session.add(sprint)
-
-            session.commit()
-            session.refresh(sprint)
-            return {"id": str(sprint.id), "cohort_id": str(sprint.cohort_id), "status": sprint.status}
-
-    
-    # UTILITY METHODS
-
-    def get_session_maker(self):
-        """Get a session maker for creating database sessions."""
-        return Session(self.engine)
+        Returns:
+            AsyncSession: An unopened session bound to the engine.
+        """
+        return AsyncSession(self.engine, expire_on_commit=False)
 
     async def health_check(self) -> bool:
-        """Check database connection health."""
+        """Check connectivity with a trivial query.
+
+        Returns:
+            bool: True when the database answered.
+        """
         try:
-            with Session(self.engine) as session:
-                session.exec(select(1)).first()
-                return True
+            async with self.engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            return True
         except Exception as e:
             logger.error("database_health_check_failed", error=str(e))
             return False
 
+    async def table_exists(self, table_name: str) -> bool:
+        """Report whether a table exists in the public schema.
 
-# Create a singleton instance
+        Used by the health endpoint so a container whose migrations never ran
+        reports degraded instead of healthy.
+
+        Args:
+            table_name: Unqualified table name.
+
+        Returns:
+            bool: True when the table exists.
+        """
+        try:
+            async with self.engine.connect() as conn:
+                result = await conn.execute(text("SELECT to_regclass(:name)"), {"name": f"public.{table_name}"})
+                return result.scalar() is not None
+        except Exception as e:
+            logger.exception("database_table_check_failed", table=table_name, error=str(e))
+            return False
+
+    async def close(self) -> None:
+        """Dispose of the engine's pool on shutdown."""
+        await self.engine.dispose()
+        logger.info("database_engine_disposed")
+
+
 database_service = DatabaseService()
+
+
+@asynccontextmanager
+async def session_scope(session: AsyncSession | None = None) -> AsyncIterator[AsyncSession]:
+    """Provide a session, opening one unless the caller passed one in.
+
+    Data-access functions accept an optional ``session`` so several of them can
+    share one transaction; when none is given, this opens a session, commits on
+    success and rolls back on error. When one is given, ownership stays with
+    the caller and nothing is committed here.
+
+    Args:
+        session: An existing session to reuse, or None.
+
+    Yields:
+        AsyncSession: The session to use.
+    """
+    if session is not None:
+        yield session
+        return
+
+    own = database_service.session()
+    try:
+        yield own
+        await own.commit()
+    except BaseException:
+        await own.rollback()
+        raise
+    finally:
+        await own.close()

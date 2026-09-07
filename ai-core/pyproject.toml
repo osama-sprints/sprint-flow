@@ -67,10 +67,16 @@ dev = [
 ]
 test = ["httpx>=0.28.1", "pytest>=8.3.5"]
 
+# `uv sync --frozen` in the Dockerfile installs the default groups, so pytest
+# is available in the container for `make test`. This does not change uv.lock.
+[tool.uv]
+default-groups = ["dev", "test"]
+
 
 [tool.pytest.ini_options]
 markers = ["slow: marks tests as slow (deselect with '-m \"not slow\"')"]
 python_files = ["test_*.py", "*_test.py", "tests.py"]
+testpaths = ["tests"]
 
 [tool.black]
 line-length = 119
@@ -124,9 +130,15 @@ convention = "google"
 # Ignore `E402` (import violations) in all `__init__.py` files
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["E402"]
+"tests/**" = ["D"]
+"alembic/versions/**" = ["D"]
 
 [tool.pyright]
 include = ["app", "evals"]
+# Resolve imports from the project venv however pyright is launched
+# (host: ai-core/.venv, container: /app/.venv).
+venvPath = "."
+venv = ".venv"
 exclude = [
     "**/__pycache__",
     "**/.venv",

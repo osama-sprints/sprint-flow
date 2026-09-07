@@ -79,7 +79,17 @@ echo "Database User: $( [[ -n ${POSTGRES_USER:-${DB_USER:-}} ]] && echo 'set' ||
 echo "LLM Model: ${DEFAULT_LLM_MODEL:-Not set}"
 echo "Debug Mode: ${DEBUG:-false}"
 
-# Run migrations if necessary with `make docker-migrate`.
+# Sprint 1 / data model: bring the domain schema to head before serving.
+# uvicorn runs a single worker here, so there is exactly one migrator per
+# container; Alembic's own version table serialises concurrent containers.
+# Set AI_CORE_MIGRATE_ON_START=false to opt out (e.g. a one-off shell).
+if [[ "${AI_CORE_MIGRATE_ON_START:-true}" == "true" ]]; then
+    echo "Applying database migrations: alembic upgrade head"
+    /app/.venv/bin/alembic upgrade head
+    echo "Database schema is at head"
+else
+    echo "Skipping database migrations (AI_CORE_MIGRATE_ON_START=${AI_CORE_MIGRATE_ON_START})"
+fi
 
 # Execute the CMD
 exec "$@"
