@@ -111,6 +111,29 @@ async def get_cohort_by_name(name: str, session: AsyncSession | None = None) -> 
         result = await s.exec(select(Cohort).where(func.lower(Cohort.name) == wanted))
         return result.first()
 
+# Task 1 - escalation, Handing a Question to a Human
+async def get_cohort_by_channel_id(mattermost_channel_id: str, session: AsyncSession | None = None) -> Cohort | None:
+    """Resolve the Mattermost channel a message arrived in to its cohort.
+
+    Used to answer "which cohort is this conversation happening in?" from the
+    ``channel_id`` on the inbound event, e.g. when opening an escalation.
+
+    Args:
+        mattermost_channel_id: The channel id from the inbound event.
+        session: Optional session to reuse.
+
+    Returns:
+        Cohort | None: The cohort whose channel this is, or None when the
+        channel is not a cohort's channel (a DM with the bot, for instance).
+    """
+    channel_id = mattermost_channel_id.strip()
+    if not channel_id:
+        return None
+    async with session_scope(session) as s:
+        result = await s.exec(select(Cohort).where(Cohort.mattermost_channel_id == channel_id))
+        return result.first()
+
+
 
 async def resolve_cohort(reference: str, session: AsyncSession | None = None) -> Cohort | None:
     """Resolve what a person typed — a numeric id or a name — to a cohort.
