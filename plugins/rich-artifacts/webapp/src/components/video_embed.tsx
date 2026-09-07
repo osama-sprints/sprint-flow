@@ -58,6 +58,43 @@ export const isVideoUrl = (url: unknown): boolean => {
 export const isVideoEmbed = (embed: {type?: string; url?: string}): boolean =>
     embed.type === 'link' && isVideoUrl(embed.url);
 
+/**
+ * Find the first playable video URL inside a message's TEXT.
+ *
+ * The DOM-based fallback cannot help a post whose body this plugin renders
+ * itself: registering a post-type component replaces the whole message body,
+ * so Mattermost's embed area — and with it the embed hook — is never rendered.
+ * A rich reply therefore has to find its own video links, from the Markdown
+ * source rather than from anchors that do not exist yet.
+ *
+ * Markdown link targets are read first, so `[clip](https://…/a.mp4)` yields the
+ * URL without the closing parenthesis; bare URLs are then matched with the
+ * delimiters Markdown and prose put around them excluded.
+ *
+ * @param message The post's raw message text.
+ * @returns The first playable video URL, or null.
+ */
+export const firstVideoUrlIn = (message: string): string | null => {
+    if (!message) {
+        return null;
+    }
+    const candidates: string[] = [];
+    for (const match of message.matchAll(/\]\((https?:\/\/[^\s)]+)\)/gi)) {
+        candidates.push(match[1]);
+    }
+    for (const match of message.matchAll(/https?:\/\/[^\s<>"'`)\]]+/gi)) {
+        candidates.push(match[0]);
+    }
+    for (const candidate of candidates) {
+        // Trailing sentence punctuation is not part of the URL.
+        const cleaned = candidate.replace(/[.,;:!?]+$/, '');
+        if (isVideoUrl(cleaned)) {
+            return cleaned;
+        }
+    }
+    return null;
+};
+
 const VideoEmbed = ({embed}: EmbedProps) => {
     const [failed, setFailed] = useState(false);
     const url = embed.url;
