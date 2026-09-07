@@ -52,6 +52,7 @@ from app.services.conversation import (
     clean_text,
     is_own_post,
 )
+from app.services import execution_control
 from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
 
@@ -202,21 +203,22 @@ async def mattermost_webhook(
         text_length=len(prompt),
     )
 
-    background_tasks.add_task(
-        answer_and_reply,
-        IncomingMessage(
-            channel_id=payload.channel_id,
-            post_id=payload.post_id,
-            text=prompt,
-            user_id=payload.user_id,
-            user_name=payload.user_name,
-            # Outgoing webhooks only ever fire in public channels, so this is a
-            # fact about the transport, not a guess. Replies stay threaded here.
-            channel_type="O",
-            source="webhook",
-            file_ids=file_ids,
-        ),
+    incoming = IncomingMessage(
+        channel_id=payload.channel_id,
+        post_id=payload.post_id,
+        text=prompt,
+        user_id=payload.user_id,
+        user_name=payload.user_name,
+        # Outgoing webhooks only ever fire in public channels, so this is a
+        # fact about the transport, not a guess. Replies stay threaded here.
+        channel_type="O",
+        source="webhook",
+        file_ids=file_ids,
     )
+    if await execution_control.handle_command(incoming):
+        return {}
+
+    background_tasks.add_task(answer_and_reply, incoming)
     return {}
 
 

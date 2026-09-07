@@ -97,7 +97,10 @@ from app.utils import (
     prepare_messages,
     process_llm_response,
 )
-from app.services import attachments
+from app.services import (
+    attachments,
+    executions,
+)
 
 PostgresConnPool = AsyncConnectionPool[AsyncConnection[DictRow]]
 
@@ -373,12 +376,20 @@ class LangGraphAgent:
             llm_messages = attachments.augment_llm_messages(dump_messages(messages))
             vision_model = attachments.vision_model_override(model_name)
 
+            # Progress the person can see, and the point where a cancel lands:
+            # the model call is raced against the turn's cancel event.
+            await executions.progress(executions.STEP_WRITING if returning_from_tool else executions.STEP_THINKING)
+
             try:
                 with llm_inference_duration_seconds.labels(model=model_name).time():
                     try:
-                        response_message = await self.llm_service.call(
-                            llm_messages, model_name=vision_model, tools=tool_group, tool_choice=tool_choice
+                        response_message = await executions.run_cancellable(
+                            self.llm_service.call(
+                                llm_messages, model_name=vision_model, tools=tool_group, tool_choice=tool_choice
+                            )
                         )
+                    except executions.ExecutionCancelled:
+                        raise
                     except Exception as forced_error:
                         if tool_choice is None:
                             raise
@@ -390,9 +401,11 @@ class LangGraphAgent:
                             specialist=spec.node_name,
                             error=str(forced_error),
                         )
-                        response_message = await self.llm_service.call(
-                            llm_messages, model_name=vision_model, tools=tool_group
+                        response_message = await executions.run_cancellable(
+                            self.llm_service.call(llm_messages, model_name=vision_model, tools=tool_group)
                         )
+            except executions.ExecutionCancelled:
+                raise
             except Exception as e:
                 logger.error(
                     "llm_call_failed_all_models",
@@ -489,7 +502,8 @@ class LangGraphAgent:
                         f"(this part of the conversation is handled by {spec.route.value}); it was not run."
                     )
                 else:
-                    content = await _invoke_guarded(tool, tool_call)
+                    await executions.progress(executions.step_for_tool(tool_call["name"], tool_call.get("args")))
+                    content = await executions.run_cancellable(_invoke_guarded(tool, tool_call))
                 return ToolMessage(
                     content=content,
                     name=tool_call["name"],

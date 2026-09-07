@@ -45,6 +45,7 @@ from app.services.conversation import (
     clean_text,
     is_own_post,
 )
+from app.services import execution_control
 from app.services.identity import sync_mattermost_user
 from app.services.mattermost import mattermost_client
 
@@ -509,27 +510,29 @@ class MattermostWebSocketListener:
             file_count=len(file_ids),
         )
 
+        incoming = IncomingMessage(
+            channel_id=channel_id,
+            post_id=post_id,
+            text=prompt,
+            user_id=user_id,
+            user_name=user_name,
+            channel_type=channel_type,
+            # Present when the person replied inside an existing thread;
+            # the reply then stays in that thread even in a DM.
+            root_id=root_id,
+            source="websocket",
+            file_ids=file_ids,
+        )
+
+        # "cancel" while a turn runs, or "retry" after one failed, is a
+        # control, not a question — but only then; otherwise it is a message.
+        if await execution_control.handle_command(incoming):
+            return
+
         # Dispatched as its own task so a slow agent turn cannot stall the
         # receive loop — otherwise one long answer would block every other
         # conversation and the connection's keepalives with it.
-        handler = asyncio.create_task(
-            answer_and_reply(
-                IncomingMessage(
-                    channel_id=channel_id,
-                    post_id=post_id,
-                    text=prompt,
-                    user_id=user_id,
-                    user_name=user_name,
-                    channel_type=channel_type,
-                    # Present when the person replied inside an existing thread;
-                    # the reply then stays in that thread even in a DM.
-                    root_id=root_id,
-                    source="websocket",
-                    file_ids=file_ids,
-                )
-            ),
-            name=f"mm-ws-turn-{post_id or 'unknown'}",
-        )
+        handler = asyncio.create_task(answer_and_reply(incoming), name=f"mm-ws-turn-{post_id or 'unknown'}")
         # Hold a strong reference until completion; asyncio only keeps weak ones
         # and an unreferenced task can be garbage collected mid-flight.
         self._handlers.add(handler)

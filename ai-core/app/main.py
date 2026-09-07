@@ -33,6 +33,7 @@ from app.core.middleware import (
 from app.core.observability import langfuse_init
 from app.services.agent import agent
 from app.services.database import database_service
+from app.services import executions
 from app.services.domain.reference_data import seed_reference_data
 from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
@@ -93,6 +94,13 @@ async def lifespan(app: FastAPI):
     # messages work at all — outgoing webhooks never fire outside public
     # channels. It reconnects on its own, so a Mattermost that is still booting
     # is not a startup failure.
+    # Turns a dead process left "running" are marked failed now, so a typed
+    # "retry" can re-run them instead of waiting on a turn that never finishes.
+    try:
+        await executions.recover_after_restart()
+    except Exception as e:
+        logger.exception("execution_recovery_start_failed", error=str(e))
+
     try:
         await mattermost_ws_listener.start()
     except Exception as e:
@@ -250,6 +258,7 @@ async def health_check(request: Request) -> JSONResponse:
             "onboarding_dispatcher": onboarding_dispatcher.status(),
             "artifact_dispatcher": artifact_dispatcher.status(),
             "attachment_retention": attachment_retention.status(),
+            "executions": executions.status(),
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }

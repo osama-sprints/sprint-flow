@@ -324,6 +324,17 @@ class Settings:
         # is ever cut; if a transport delivers more, the person is told.
         self.MESSAGE_MAX_INPUT_CHARS = int(os.getenv("MESSAGE_MAX_INPUT_CHARS", "16384"))
 
+        # Execution tracking: every turn writes a durable row (progress note,
+        # heartbeat, outcome) so a stop can reach it and a retry can re-run
+        # it after a restart. Cancel and retry are typed words in the chat.
+        self.EXECUTION_TRACKING_ENABLED = os.getenv("EXECUTION_TRACKING_ENABLED", "true").lower() == "true"
+        # How often a running turn looks for a cancel request made elsewhere
+        # (another process, or the typed command handled by a sibling worker).
+        self.EXECUTION_CANCEL_POLL_SECONDS = float(os.getenv("EXECUTION_CANCEL_POLL_SECONDS", "2"))
+        # A running row whose heartbeat is older than this belonged to a
+        # process that died; start-up marks it failed so it can be retried.
+        self.EXECUTION_STALE_SECONDS = int(os.getenv("EXECUTION_STALE_SECONDS", "900"))
+
         # Evaluation Configuration
         self.EVALUATION_LLM = os.getenv("EVALUATION_LLM", "gemini/gemini-3.5-flash")
         # Never api.openai.com — evaluations go through the proxy like everything else.

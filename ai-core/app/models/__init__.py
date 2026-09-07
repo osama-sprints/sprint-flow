@@ -18,6 +18,7 @@ from app.models.domain_base import (
     utcnow,
 )
 from app.models.escalation_ticket import EscalationTicket
+from app.models.execution import Execution
 from app.models.onboarding_step import OnboardingStep
 from app.models.rich_artifact import RichArtifact
 from app.models.role import Role
@@ -42,7 +43,7 @@ INITIAL_DOMAIN_TABLES: tuple[str, ...] = (
 )
 
 # Tables added after 0001, newest revision last.
-LATER_DOMAIN_TABLES: tuple[str, ...] = ("rich_artifacts", "attachments")
+LATER_DOMAIN_TABLES: tuple[str, ...] = ("rich_artifacts", "attachments", "executions")
 
 # Every application-owned table, in dependency order. Verification scripts
 # compare against this list.
@@ -61,6 +62,7 @@ __all__ = [
     "DailyStandup",
     "DomainBase",
     "EscalationTicket",
+    "Execution",
     "OnboardingStep",
     "RichArtifact",
     "Role",

@@ -28,6 +28,7 @@ from app.schemas.rich_media import (
 )
 from app.services import (
     attachments,
+    executions,
     rich_media,
 )
 from app.services.agent import agent
@@ -39,7 +40,8 @@ from app.services.mattermost import mattermost_client
 # more, the person is told what was read rather than losing the tail silently.
 MAX_INPUT_CHARS = settings.MESSAGE_MAX_INPUT_CHARS
 
-FALLBACK_REPLY = "Sorry — I hit an error while working on that. Please try again in a moment."
+FALLBACK_REPLY = "Sorry — I hit an error while working on that. Reply **retry** to try again."
+STOPPED_REPLY = "⏹ Stopped as you asked. Reply **retry** if you want me to run it again."
 
 
 class _NothingToAnswer(Exception):
@@ -164,7 +166,7 @@ async def is_own_post(user_id: str, user_name: str = "") -> bool:
     return bool(bot_user_id) and user_id == bot_user_id
 
 
-async def answer_and_reply(message: IncomingMessage) -> None:
+async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = None, attempt: int = 1) -> None:
     """Run the agent for one message and post the answer back to Mattermost.
 
     Never raises. Both callers run this detached from the request that produced
@@ -173,6 +175,8 @@ async def answer_and_reply(message: IncomingMessage) -> None:
 
     Args:
         message: The normalised inbound message.
+        retry_of: The execution this run repeats, when it is a retry.
+        attempt: Attempt number, 1 for a first run.
     """
     channel_id = message.channel_id
     session_id = message.session_id
@@ -208,6 +212,24 @@ async def answer_and_reply(message: IncomingMessage) -> None:
         session_id=session_id,
     )
     envelope = ReplyEnvelope()
+
+    # The turn's durable record: progress the person can see, a cancel that
+    # reaches into the run, and a retry after a failure or a restart.
+    await executions.begin(
+        execution_id=turn.turn_id,
+        session_id=session_id,
+        channel_id=channel_id,
+        root_id=message.root_id,
+        trigger_post_id=message.post_id,
+        source=message.source,
+        mattermost_user_id=message.user_id,
+        requester_user_id=requester.user_id,
+        trigger=message.model_dump(),
+        retry_of=retry_of,
+        attempt=attempt,
+    )
+    outcome = "succeeded"
+    error: str | None = None
 
     # What the person sent, made explicit: text past the ceiling is reported
     # rather than dropped, and every attached file is fetched, checked and
@@ -261,15 +283,23 @@ async def answer_and_reply(message: IncomingMessage) -> None:
         envelope = await rich_media.collect(turn.turn_id)
     except _NothingToAnswer:
         reply = ""
+    except executions.ExecutionCancelled:
+        logger.info("mattermost_agent_turn_cancelled", session_id=session_id, source=source, turn_id=turn.turn_id)
+        reply = STOPPED_REPLY
+        outcome = "cancelled"
+        envelope = ReplyEnvelope()
     except Exception as e:
         logger.exception("mattermost_agent_turn_failed", session_id=session_id, source=source, error=str(e))
         reply = FALLBACK_REPLY
+        outcome = "failed"
+        error = str(e)[:500]
     finally:
         current_requester.set(None)
         rich_media.end_turn()
         attachments.clear()
 
-    await _deliver(message, with_notices(reply, notices), envelope)
+    posted = await _deliver(message, with_notices(reply, notices), envelope)
+    await executions.finish(outcome, error=error, reply_post_id=posted.get("id") if posted else None)
     logger.info(
         "mattermost_agent_turn_completed",
         session_id=session_id,
@@ -279,7 +309,7 @@ async def answer_and_reply(message: IncomingMessage) -> None:
     )
 
 
-async def _deliver(message: IncomingMessage, reply: str, envelope: ReplyEnvelope | None = None) -> None:
+async def _deliver(message: IncomingMessage, reply: str, envelope: ReplyEnvelope | None = None) -> dict | None:
     """Post the reply with the threading shape that suits the channel.
 
     Three cases, in priority order:
@@ -299,6 +329,9 @@ async def _deliver(message: IncomingMessage, reply: str, envelope: ReplyEnvelope
         message: The message being answered.
         reply: The agent's answer. Always a complete answer on its own.
         envelope: Staged artifacts, when the turn produced any.
+
+    Returns:
+        dict | None: The created post, or None when nothing was posted.
     """
     rich = envelope is not None and not envelope.is_empty()
 
@@ -315,7 +348,7 @@ async def _deliver(message: IncomingMessage, reply: str, envelope: ReplyEnvelope
                 post_id=existing,
                 channel_id=message.channel_id,
             )
-            return
+            return {"id": existing}
     post_type = RICH_MEDIA_POST_TYPE if rich else None
     props = envelope.to_props() if rich and envelope else None
     file_ids = list(envelope.file_ids) if rich and envelope else None
@@ -335,10 +368,11 @@ async def _deliver(message: IncomingMessage, reply: str, envelope: ReplyEnvelope
 
     if posted is None:
         logger.error("reply_delivery_failed", channel_id=message.channel_id, source=message.source)
-        return
+        return None
 
     if rich and envelope is not None:
         await rich_media.record_publication(envelope.turn_id, posted["id"], file_ids=list(envelope.file_ids))
+    return posted
 
 
 async def _publish(
