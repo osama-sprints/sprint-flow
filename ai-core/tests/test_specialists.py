@@ -41,6 +41,7 @@ from app.core.langgraph.graph import (
 )
 from app.core.langgraph.routing_examples import REQUESTERS
 from app.core.langgraph.specialists import SPECIALISTS
+from app.core.langgraph.tools import TOOL_GROUPS as REAL_TOOL_GROUPS
 from app.core.langgraph.tools.ask_human import ask_human
 from app.core.metrics import routing_decisions_total
 from app.core.requester import current_requester
@@ -213,6 +214,30 @@ def test_compiled_graph_has_the_contracted_node_names():
         "rich_media_tools",
         "conversation_context_tools",
         "tool_call",
+    }
+
+
+def test_a_forced_tool_names_the_tool_it_forces():
+    """ "Call something" is not grounding: the forced tool must be in the group.
+
+    Asked to summarise a discussion as a mind map, a specialist forced only to
+    "call any tool" drew the map and never read the discussion.
+    """
+    for spec in SPECIALISTS.values():
+        choice = spec.first_call_tool_choice
+        if not spec.force_tool_use:
+            assert choice is None
+            continue
+        assert choice is not None
+        if spec.forced_tool:
+            names = {tool.name for tool in REAL_TOOL_GROUPS[spec.tool_group]}
+            assert spec.forced_tool in names, f"{spec.route.value} forces a tool it does not hold"
+
+    grounding = SPECIALISTS[CapabilityRoute.CONVERSATION_CONTEXT.value]
+    assert grounding.first_call_tool_choice == "read_discussion"
+    # No rendering tool in reach, so the forced call cannot be satisfied by one.
+    assert not {"send_mermaid_diagram", "send_chart", "generate_and_send_image"} & {
+        tool.name for tool in REAL_TOOL_GROUPS[grounding.tool_group]
     }
 
 

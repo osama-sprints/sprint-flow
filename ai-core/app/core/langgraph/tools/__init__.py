@@ -99,13 +99,16 @@ RICH_MEDIA_ONLY_TOOLS: list[BaseTool] = [
     *CONTEXT_TOOLS,
 ]
 
-# Grounding a reply in what people said: the retrieval tool, plus the shared
-# rendering and attachment tools so an answer about the discussion can still
-# quote a document or draw what it describes. No business tool at all.
+# Grounding a reply in what people said. Retrieval and the attachment tools,
+# so a request that spans the discussion AND a document is answered whole — but
+# deliberately NO rendering tools. This specialist's first call is forced, and
+# with a drawing tool in reach a model asked to "summarise the discussion as a
+# mind map" drew the map and never read the discussion. Where a visual is
+# wanted the supervisor plans rich_media after this route, which is the
+# specialist that owns drawing anyway.
 CONVERSATION_CONTEXT_TOOLS: list[BaseTool] = [
     ask_human,
     *CONTEXT_TOOLS,
-    *RICH_MEDIA_TOOLS,
     *ATTACHMENT_TOOLS,
 ]
 

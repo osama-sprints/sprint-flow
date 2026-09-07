@@ -303,7 +303,11 @@ ROUTING_RULES: List[Rule] = [
             # Arabic. No \b anchors: the article and conjunctions attach to the
             # front of the word ("والرسمة") and plurals to the back.
             r"(?:^|\s|و|ف)(?:ا|إ|أ)رسم(?:لي|لنا|ها|ه)?",
-            r"رسم(?:ة|ه|ات|ي)?\s*(?:بياني|توضيحي)?",
+            # The trailing lookahead is what keeps "الرسمية" (official) out of
+            # this rule: Arabic has no word boundary, so "رسم" sits inside
+            # perfectly ordinary words, and a request for "ساعات العمل الرسمية"
+            # was being read as a request for a drawing.
+            r"رسم(?:ة|ه|ات)?(?![\u0621-\u064a])\s*(?:بياني|توضيحي)?",
             r"(?:مخطط|تشارت|شارت|جراف|إنفوجرافيك)",
             r"(?:خريطة|خارطة)\s*(?:ذهنية|طريق)",
             r"(?:جدول|خط)\s*زمني",

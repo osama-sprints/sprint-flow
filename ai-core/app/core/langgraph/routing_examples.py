@@ -361,6 +361,14 @@ ROUTING_EXAMPLES: Tuple[RoutingExample, ...] = (
         note="calendar read leads; the visual is the continuation",
     ),
     RoutingExample(
+        "ساعات العمل الرسمية كام؟",
+        "learner",
+        (GENERAL,),
+        "general_fallback",
+        hard=True,
+        note="'الرسمية' contains 'رسم'; Arabic has no word boundary, so the drawing rule needs a lookahead",
+    ),
+    RoutingExample(
         "بصورة عامة إيه سياسة الغياب؟",
         "learner",
         (LEARNER,),

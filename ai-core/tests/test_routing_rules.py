@@ -34,7 +34,7 @@ from app.schemas.graph import CapabilityRoute
 
 MIN_LABELLED_SENTENCES = 40
 # The exact corpus size, quoted in reports/orchestration_report.md.
-LABELLED_SENTENCES = 108
+LABELLED_SENTENCES = 109
 LATENCY_P95_BUDGET_MS = 2.0
 LATENCY_MIN_SAMPLES = 1000
 

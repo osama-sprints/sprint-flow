@@ -43,6 +43,11 @@ class Specialist:
             artifact, a prose answer is a silent failure — the person asked for
             a diagram and received a description of one — and instructions alone
             did not reliably prevent it.
+        forced_tool: Which tool that must be, when only one will do. "Call
+            something" is not enough for a specialist that must GROUND its
+            answer: asked to summarise a discussion as a mind map, a model
+            given a free choice drew the map and never read the discussion.
+            Empty means any tool in the group satisfies the requirement.
     """
 
     route: CapabilityRoute
@@ -51,6 +56,18 @@ class Specialist:
     tool_group: str
     prompt_context: str
     force_tool_use: bool = False
+    forced_tool: str = ""
+
+    @property
+    def first_call_tool_choice(self) -> Optional[str]:
+        """What to require of this specialist's first model call, if anything.
+
+        Returns:
+            str | None: A tool name, ``"any"``, or None when nothing is forced.
+        """
+        if not self.force_tool_use:
+            return None
+        return self.forced_tool or "any"
 
 
 _LEARNER_SUPPORT_CONTEXT = (
@@ -166,6 +183,7 @@ SPECIALISTS: Dict[str, Specialist] = {
         tool_group="conversation_context",
         prompt_context=_CONVERSATION_CONTEXT_CONTEXT,
         force_tool_use=True,
+        forced_tool="read_discussion",
     ),
     CapabilityRoute.GENERAL.value: Specialist(
         route=CapabilityRoute.GENERAL,

@@ -370,7 +370,7 @@ class LangGraphAgent:
             # again would loop.
             last_message = state.messages[-1] if state.messages else None
             returning_from_tool = isinstance(last_message, ToolMessage)
-            tool_choice = "any" if (spec.force_tool_use and tool_group and not returning_from_tool) else None
+            tool_choice = spec.first_call_tool_choice if (tool_group and not returning_from_tool) else None
 
             # This turn's attachments join the call here, not the checkpoint:
             # the history keeps a one-line summary per file, so images and
