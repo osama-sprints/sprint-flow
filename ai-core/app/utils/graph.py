@@ -203,6 +203,40 @@ def _bound_turn(current: list[dict], budget: int) -> list[dict]:
     return bounded
 
 
+def memory_messages(messages: list[dict], *, own_words_only: bool) -> list[dict]:
+    """Pick the messages long-term memory is allowed to learn from.
+
+    Two things are dropped whatever the turn did. Tool results are internal
+    protocol — retrieved pages, page transcriptions, refusal codes — and
+    remembering them as facts about a person is a category error. So are
+    assistant messages that carry only a tool call.
+
+    ``own_words_only`` drops the assistant's reply as well, and is set for a
+    turn that read other people's messages. Memory is a record of the person
+    the assistant is talking to; a reply that summarises what four colleagues
+    said would otherwise be stored as things THEY said, under the name of the
+    person who asked.
+
+    Args:
+        messages: The conversation, in OpenAI shape.
+        own_words_only: Keep only what the person themselves wrote.
+
+    Returns:
+        list[dict]: The messages to learn from, possibly empty.
+    """
+    kept = [
+        message
+        for message in messages
+        if message.get("role") in ("user", "assistant")
+        and not message.get("tool_calls")
+        and isinstance(message.get("content"), str)
+        and message["content"].strip()
+    ]
+    if own_words_only:
+        kept = [message for message in kept if message.get("role") == "user"]
+    return kept
+
+
 def prepare_messages(messages: list[Message], system_prompt: str) -> list[Message]:
     """Prepare the messages for the LLM.
 

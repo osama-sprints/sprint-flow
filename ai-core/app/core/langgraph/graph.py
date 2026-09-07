@@ -95,6 +95,7 @@ from app.services.memory import memory_service
 from app.utils import (
     dump_messages,
     extract_text_content,
+    memory_messages,
     prepare_messages,
     process_llm_response,
     was_cut_short,
@@ -734,8 +735,7 @@ class LangGraphAgent:
                 logger.info("graph_interrupted", session_id=session_id, interrupt_value=interrupt_value)
                 return [Message(role="assistant", content=interrupt_value)]
 
-            openai_msgs = cast(list[dict], convert_to_openai_messages(response["messages"]))
-            asyncio.create_task(memory_service.add(user_id, openai_msgs, config.get("metadata")))
+            self._remember(user_id, response["messages"], config)
             return self.__process_messages(response["messages"])
         except GraphInterrupt:
             state = await graph.aget_state(config)
@@ -806,8 +806,7 @@ class LangGraphAgent:
                 logger.info("graph_interrupted_stream", session_id=session_id, interrupt_value=interrupt_value)
                 yield interrupt_value
             elif state.values and "messages" in state.values:
-                openai_msgs = cast(list[dict], convert_to_openai_messages(state.values["messages"]))
-                asyncio.create_task(memory_service.add(user_id, openai_msgs, config.get("metadata")))
+                self._remember(user_id, state.values["messages"], config)
         except GraphInterrupt:
             state = await graph.aget_state(config)
             interrupt_value = pending_interrupt(state) or "Waiting for input."
@@ -816,6 +815,28 @@ class LangGraphAgent:
         except Exception as stream_error:
             logger.exception("stream_processing_failed", error=str(stream_error), session_id=session_id)
             raise stream_error
+
+    @staticmethod
+    def _remember(user_id: Optional[str], messages: list, config: RunnableConfig) -> None:
+        """Hand this turn to long-term memory, minus what is not the person's own.
+
+        Args:
+            user_id: The person the memories belong to.
+            messages: The conversation as the graph holds it.
+            config: The run configuration, carrying the metadata to store.
+        """
+        openai_msgs = cast(list[dict], convert_to_openai_messages(messages))
+        own_words_only = discussion.read_other_people()
+        learnable = memory_messages(openai_msgs, own_words_only=own_words_only)
+        logger.info(
+            "long_term_memory_scope",
+            considered=len(openai_msgs),
+            learnable=len(learnable),
+            own_words_only=own_words_only,
+        )
+        if not learnable:
+            return
+        asyncio.create_task(memory_service.add(user_id, learnable, config.get("metadata")))
 
     async def has_history(self, session_id: str) -> bool:
         """Whether this conversation has been spoken in before.
