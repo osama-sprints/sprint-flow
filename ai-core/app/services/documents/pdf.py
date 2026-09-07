@@ -11,6 +11,7 @@ a page.
 """
 
 import io
+import math
 import re
 import threading
 from collections import OrderedDict
@@ -273,8 +274,34 @@ def extract_text(pdf: pdfium.PdfDocument, page_numbers: Iterable[int]) -> List[P
     return results
 
 
+def render_scale(width: float, height: float) -> float:
+    """The scale that keeps a page inside the policy's edge and area ceilings.
+
+    Decided from the page's dimensions alone, before any bitmap exists, so a
+    page of unusual size cannot cause an allocation past the limits.
+
+    Args:
+        width: Page width in points.
+        height: Page height in points.
+
+    Returns:
+        float: Scale factor for PDFium (pixels = points × scale).
+
+    Raises:
+        ValueError: When the page has no finite, positive size.
+    """
+    if not (math.isfinite(width) and math.isfinite(height)) or width <= 0 or height <= 0:
+        raise ValueError(f"page has no usable size ({width}×{height})")
+    scale = min(4.0, policy.PDF.render_max_edge / max(width, height))
+    area = width * height * scale * scale
+    if area > policy.PDF.render_max_pixels:
+        scale *= math.sqrt(policy.PDF.render_max_pixels / area)
+    # A side thinner than a pixel still gets one: PDFium rounds sizes up.
+    return scale
+
+
 def render_page(pdf: pdfium.PdfDocument, page_no: int) -> bytes:
-    """Render one page as a JPEG bounded by the policy's longest edge.
+    """Render one page as a JPEG within the policy's edge and area ceilings.
 
     Args:
         pdf: An open document.
@@ -285,6 +312,7 @@ def render_page(pdf: pdfium.PdfDocument, page_no: int) -> bytes:
 
     Raises:
         IndexError: When the page does not exist.
+        ValueError: When the page has no usable size.
     """
     with _LOCK:
         count = len(pdf)
@@ -293,8 +321,7 @@ def render_page(pdf: pdfium.PdfDocument, page_no: int) -> bytes:
         page = pdf[page_no - 1]
         try:
             width, height = page.get_size()
-            longest = max(width, height) or 1.0
-            scale = max(0.5, min(4.0, policy.PDF.render_max_edge / longest))
+            scale = render_scale(float(width), float(height))
             # The stub types scale as int; PDFium takes the pixel size from
             # width × scale and a fractional scale is what bounds the edge.
             bitmap = page.render(scale=scale)  # pyright: ignore[reportArgumentType]

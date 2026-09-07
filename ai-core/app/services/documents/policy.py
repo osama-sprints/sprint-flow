@@ -35,6 +35,9 @@ class PdfPolicy:
             larger ranges continue with ``next_page``.
         vision_concurrency: Pages transcribed at the same time.
         render_max_edge: Longest edge, in pixels, of a rendered page.
+        render_max_pixels: Ceiling on a rendered page's area, enforced before
+            the bitmap is allocated; a page of unusual proportions cannot
+            outgrow it whatever its edge.
         render_jpeg_quality: JPEG quality of the rendered page.
         result_chars_per_page: Ceiling on one page's text in a tool result.
         result_chars_total: Ceiling on a whole tool result.
@@ -56,6 +59,7 @@ class PdfPolicy:
     max_pages_per_read: int = 12
     vision_concurrency: int = 3
     render_max_edge: int = 1600
+    render_max_pixels: int = 4_000_000
     render_jpeg_quality: int = 85
     result_chars_per_page: int = 6000
     result_chars_total: int = 16000
