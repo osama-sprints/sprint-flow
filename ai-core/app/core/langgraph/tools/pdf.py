@@ -29,6 +29,8 @@ from app.core.langgraph.tools.results import (
 )
 from app.services.documents import service as documents
 from app.services.documents.service import (
+    AskResult,
+    BudgetExhausted,
     DocumentUnavailable,
     InvalidRange,
     ReadResult,
@@ -138,13 +140,25 @@ def _search_text(result: SearchResult) -> str:
     doc = result.document
     first, last = result.searched
     lines = [
-        f'{doc.name} (id {doc.id}) — searched pages {first}–{last} of {result.total_pages} for "{result.query}": {len(result.hits)} hit(s).'
+        f'{doc.name} (id {doc.id}) — searched pages {first}–{last} of {result.total_pages} for "{result.query}": '
+        f"{len(result.hits)} hit(s)."
     ]
+    if result.transcribed_now:
+        lines.append(f"Transcribed in this call so they could be searched: pages {result.transcribed_now}.")
     if result.unsearched:
-        lines.append(
-            f"NOT searched: pages {result.unsearched} have no readable text yet. Transcribe them with "
-            f'read_pdf_pages("{doc.id}", start, end, mode="vision") before concluding the phrase is absent.'
-        )
+        if result.budget_skipped:
+            lines.append(
+                f"NOT searched: pages {result.unsearched} have no readable text; pages {result.budget_skipped} were "
+                "left untranscribed because this turn's transcription budget is used up. Tell the person which "
+                "pages remain unsearched; they can ask again to continue."
+            )
+        else:
+            lines.append(
+                f"NOT searched: pages {result.unsearched} have no readable text yet. Call search_pdf again with "
+                "transcribe_missing=true to transcribe them in order within the budget, or transcribe a chosen range "
+                f'with read_pdf_pages("{doc.id}", start, end, mode="vision"). Never conclude the phrase is absent '
+                "from pages that were not searched."
+            )
     for hit in result.hits:
         label = f' (label "{hit.label}")' if hit.label else ""
         lines.append(
@@ -156,8 +170,24 @@ def _search_text(result: SearchResult) -> str:
         lines.append(
             f'More pages remain: continue with search_pdf("{doc.id}", "{result.query}", cursor={result.next_cursor}).'
         )
-    else:
-        lines.append("Every page with readable text has been searched.")
+    elif not result.unsearched:
+        lines.append("Every page has been searched.")
+    lines.append(f"Transcription budget left this turn: {result.budget_remaining}.")
+    return "\n".join(lines)
+
+
+def _ask_text(result: AskResult) -> str:
+    doc = result.document
+    pages = ", ".join(str(p) for p in result.pages)
+    lines = [
+        f"{doc.name} (id {doc.id}) — visual reading of page(s) {pages} of {result.total_pages} by {result.model}. "
+        "This is an interpretation of the page images, not a transcription; for exact wording use read_pdf_pages.",
+        "<<<",
+        result.answer,
+        ">>>",
+        f"Read in this conversation so far: {result.coverage or 'nothing'} of {result.total_pages} pages. "
+        f"Visual/transcription budget left this turn: {result.budget_remaining}.",
+    ]
     return "\n".join(lines)
 
 
@@ -230,26 +260,33 @@ async def read_pdf_pages(document_id: str, start_page: int, end_page: Optional[i
 
 @tool
 @guarded_tool
-async def search_pdf(document_id: str, query: str, cursor: Optional[int] = None) -> str:
+async def search_pdf(
+    document_id: str, query: str, cursor: Optional[int] = None, transcribe_missing: bool = False
+) -> str:
     """Find which pages of a PDF mention a word or phrase.
 
     Matching is case-insensitive and ignores Arabic diacritics and common
-    letter variants. Only text that is already available is searched: the
-    text layer, plus any pages transcribed earlier. The result says exactly
-    which pages were searched and which could not be — never treat an
-    unsearched page as a page without the phrase. Long documents are scanned
-    in windows; continue with the returned cursor.
+    letter variants. Only text that is available is searched: the text layer,
+    plus pages transcribed earlier. The result says exactly which pages were
+    searched and which could not be — never treat an unsearched page as a
+    page without the phrase. For a scanned document, first learn its
+    structure (inspect_pdf; transcribe the contents page if there is one),
+    then search with transcribe_missing=true: the call transcribes the
+    untranscribed pages of the window in order, within this turn's budget,
+    reports what it covered, and hands back a cursor to continue. Long
+    documents are scanned in windows; continue with the returned cursor.
 
     Args:
         document_id: The id shown with the file.
         query: The word or phrase.
         cursor: Page to continue from, taken from a previous result.
+        transcribe_missing: Transcribe pages without readable text before searching them.
 
     Returns:
-        Hits with page numbers and snippets, the pages searched, the pages not searchable, and a cursor.
+        Hits with page numbers and snippets, the pages searched, transcribed and not searchable, and a cursor.
     """
     try:
-        result = await documents.search(document_id, query, cursor)
+        result = await documents.search(document_id, query, cursor, transcribe_missing=bool(transcribe_missing))
     except DocumentUnavailable as e:
         return tool_result(ResultCode.PDF_NOT_FOUND, str(e))
     except InvalidRange as e:
@@ -259,7 +296,54 @@ async def search_pdf(document_id: str, query: str, cursor: Optional[int] = None)
             ResultCode.PDF_UNREADABLE,
             "the file is password-protected" if e.kind == "encrypted" else "the file could not be opened as a PDF",
         )
-    return tool_result(ResultCode.PDF_SEARCH, _search_text(result))
+    code = ResultCode.PDF_BUDGET_EXHAUSTED if result.budget_skipped else ResultCode.PDF_SEARCH
+    return tool_result(code, _search_text(result))
 
 
-PDF_TOOLS = [inspect_pdf, search_pdf, read_pdf_pages]
+@tool
+@guarded_tool
+async def ask_pdf_pages(document_id: str, question: str, start_page: int, end_page: Optional[int] = None) -> str:
+    """Ask a question about what one to four PDF pages look like.
+
+    Use this when the question is about a diagram, chart, screenshot, photo,
+    stamp, signature, handwriting, form layout or how a table is arranged —
+    anything read_pdf_pages' text cannot carry. The pages are shown as images
+    to a vision model that answers only from what is visible and names the
+    pages it relies on. It is an interpretation, not a transcription: for the
+    exact wording of a page use read_pdf_pages. At most four pages per
+    question; split wider ranges.
+
+    Args:
+        document_id: The id shown with the file.
+        question: What to find out from the page images.
+        start_page: First page, 1-based.
+        end_page: Last page, inclusive. Omit for a single page.
+
+    Returns:
+        The answer with the pages shown and the model that answered.
+    """
+    try:
+        result = await documents.ask_pages(
+            document_id, question, int(start_page), None if end_page is None else int(end_page)
+        )
+    except DocumentUnavailable as e:
+        return tool_result(ResultCode.PDF_NOT_FOUND, str(e))
+    except InvalidRange as e:
+        return tool_result(ResultCode.PDF_INVALID_RANGE, str(e))
+    except BudgetExhausted as e:
+        return tool_result(
+            ResultCode.PDF_BUDGET_EXHAUSTED,
+            f"this turn's page budget is used up; pages {', '.join(str(p) for p in e.pages)} were not looked at. "
+            "Tell the person, who can ask again.",
+        )
+    except documents.PdfError as e:
+        return tool_result(
+            ResultCode.PDF_UNREADABLE,
+            "the file is password-protected" if e.kind == "encrypted" else "the file could not be opened as a PDF",
+        )
+    except Exception as e:  # the vision call itself failed after retries
+        return tool_result(ResultCode.PDF_UNREADABLE, f"the pages could not be examined ({type(e).__name__}).")
+    return tool_result(ResultCode.PDF_VISUAL_ANSWER, _ask_text(result))
+
+
+PDF_TOOLS = [inspect_pdf, search_pdf, read_pdf_pages, ask_pdf_pages]

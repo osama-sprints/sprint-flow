@@ -24,6 +24,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
 )
 
 from app.core.config import settings
@@ -39,6 +40,7 @@ from app.services import (
 from app.services.documents import (
     ocr,
     policy,
+    vision,
 )
 from app.services.documents.pdf import (
     DocumentCache,
@@ -191,9 +193,12 @@ class SearchResult:
         hits: Matches, in page order.
         searched: ``(first, last)`` page scanned.
         unsearched: Pages in the window with no readable text, as ranges.
+        transcribed_now: Pages transcribed by this call so they could be searched.
+        budget_skipped: Pages left untranscribed because the turn's budget ran out.
         next_cursor: Page to continue from, when pages remain.
         total_pages: Document length.
         capped: Whether the hit limit stopped the scan early.
+        budget_remaining: Transcriptions left this turn.
     """
 
     document: Attachment
@@ -201,9 +206,12 @@ class SearchResult:
     hits: List[Hit]
     searched: tuple[int, int]
     unsearched: str
+    transcribed_now: str
+    budget_skipped: str
     next_cursor: Optional[int]
     total_pages: int
     capped: bool
+    budget_remaining: int
 
 
 async def _document(document_id: str) -> Attachment:
@@ -396,6 +404,65 @@ async def inspect(document_id: str) -> Dict[str, Any]:
     }
 
 
+async def _transcribe_many(
+    row: Attachment, data: bytes, page_numbers: List[int], native: Dict[int, DocumentPage]
+) -> Tuple[Dict[int, DocumentPage], List[int], List[int]]:
+    """Transcribe pages that have no cached transcription, within the turn's budget.
+
+    Args:
+        row: The document.
+        data: Its bytes.
+        page_numbers: Pages wanted, in order.
+        native: Native rows, for page labels.
+
+    Returns:
+        tuple: transcriptions by page (cached and fresh), pages transcribed
+        now, and pages skipped for budget.
+    """
+    cached = {
+        p.page_no: p
+        for p in await pages_store.pages_for(row.id, row.sha256, page_numbers, method="vision")
+        if p.model == settings.PDF_OCR_MODEL and p.render_key == policy.PDF.render_key
+    }
+    fresh = [n for n in page_numbers if n not in cached]
+    budget = _budget()
+    allowed = fresh[: budget.remaining]
+    skipped = fresh[len(allowed) :]
+    done_pages: List[int] = []
+    if allowed:
+        budget.used += len(allowed)
+        semaphore = asyncio.Semaphore(policy.PDF.vision_concurrency)
+
+        async def _one(page_no: int) -> None:
+            async with semaphore:
+                executions.check_cancel()
+                await executions.progress(f"Reading page {page_no} of {row.name}")
+                label = native[page_no].label if page_no in native else None
+                result = await executions.run_cancellable(_transcribe_page(row, data, page_no, label))
+                # Cache as we go: a cancel or a crash keeps what was paid for.
+                await pages_store.upsert_pages([result])
+                cached[page_no] = result
+                done_pages.append(page_no)
+
+        await asyncio.gather(*(_one(n) for n in allowed))
+    return cached, sorted(done_pages), skipped
+
+
+async def _open_total(row: Attachment, data: bytes) -> int:
+    total = int(row.page_count or 0)
+    if total:
+        return total
+
+    def _count() -> int:
+        pdf = open_pdf(data)
+        try:
+            return page_count(pdf)
+        finally:
+            pdf.close()
+
+    return await asyncio.to_thread(_count)
+
+
 async def read_pages(document_id: str, start: int, end: Optional[int], mode: str = "auto") -> ReadResult:
     """Read a page or an inclusive range.
 
@@ -416,17 +483,7 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
     if mode not in MODES:
         raise InvalidRange(f"mode must be one of {', '.join(MODES)}")
     data = await _bytes(row)
-    total = int(row.page_count or 0)
-    if not total:
-
-        def _count() -> int:
-            pdf = open_pdf(data)
-            try:
-                return page_count(pdf)
-            finally:
-                pdf.close()
-
-        total = await asyncio.to_thread(_count)
+    total = await _open_total(row, data)
 
     last = start if end is None else end
     if start < 1 or last < start or start > total:
@@ -442,43 +499,15 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
     need_vision = [
         n for n in numbers if mode == "vision" or (mode == "auto" and not (n in native and native[n].usable))
     ]
-    vision: Dict[int, DocumentPage] = {}
-    fresh_pages: set[int] = set()
+    vision_rows: Dict[int, DocumentPage] = {}
+    fresh_pages: List[int] = []
+    budget_skipped: set[int] = set()
     if need_vision:
-        vision = {
-            p.page_no: p
-            for p in await pages_store.pages_for(row.id, row.sha256, need_vision, method="vision")
-            if p.model == settings.PDF_OCR_MODEL and p.render_key == policy.PDF.render_key
-        }
-        fresh = [n for n in need_vision if n not in vision]
-        budget = _budget()
-        allowed = fresh[: budget.remaining]
-        skipped = fresh[len(allowed) :]
+        vision_rows, fresh_pages, skipped = await _transcribe_many(row, data, need_vision, native)
         if skipped:
             not_processed.append({"reason": "budget", "pages": compress_ranges(skipped)})
-        if allowed:
-            budget.used += len(allowed)
-            semaphore = asyncio.Semaphore(policy.PDF.vision_concurrency)
-            done: List[DocumentPage] = []
+            budget_skipped = set(skipped)
 
-            async def _one(page_no: int) -> None:
-                async with semaphore:
-                    executions.check_cancel()
-                    await executions.progress(f"Reading page {page_no} of {row.name}…")
-                    label = native[page_no].label if page_no in native else None
-                    result = await executions.run_cancellable(_transcribe_page(row, data, page_no, label))
-                    done.append(result)
-                    # Cache as we go: a cancel or a crash keeps what was paid for.
-                    await pages_store.upsert_pages([result])
-                    fresh_pages.add(page_no)
-
-            await asyncio.gather(*(_one(n) for n in allowed))
-            vision.update({p.page_no: p for p in done})
-    freshly_transcribed = fresh_pages
-
-    budget_skipped = {
-        int(x) for entry in not_processed if entry["reason"] == "budget" for x in _expand(entry["pages"])
-    }
     pages: List[PageResult] = []
     shown: Dict[int, str] = {}
     remaining_chars = policy.PDF.result_chars_total
@@ -496,9 +525,9 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
             if chosen is not None and not chosen.usable:
                 warnings.append('no usable text layer; read again with mode="vision" to transcribe the page')
         elif mode == "vision":
-            chosen = vision.get(n)
+            chosen = vision_rows.get(n)
         else:
-            chosen = native.get(n) if n in native and native[n].usable else vision.get(n)
+            chosen = native.get(n) if n in native and native[n].usable else vision_rows.get(n)
         if chosen is None:
             pages.append(PageResult(page_no=n, label=None, method="none", text="", warnings=["nothing could be read"]))
             continue
@@ -514,7 +543,7 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
                 method=chosen.method,
                 text=text,
                 warnings=page_warnings,
-                cached=chosen.method == "vision" and n not in freshly_transcribed,
+                cached=chosen.method == "vision" and n not in fresh_pages,
                 model=chosen.model,
             )
         )
@@ -535,7 +564,7 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
         requested=f"{start}-{last}",
         served=len(pages),
         mode=mode,
-        transcribed=len([p for p in pages if p.method == "vision"]),
+        transcribed=len(fresh_pages),
         next_page=next_page,
         budget_remaining=_budget().remaining,
     )
@@ -549,6 +578,127 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
         coverage=compress_ranges(read),
         total_pages=total,
         budget_remaining=_budget().remaining,
+    )
+
+
+@dataclass
+class AskResult:
+    """An answer about page images.
+
+    Attributes:
+        document: The attachment.
+        pages: Physical pages that were shown.
+        answer: What the model said.
+        model: Model that answered.
+        usage: Tokens and cost.
+        latency_ms: Wall time of the call.
+        coverage: Pages this conversation has been shown so far.
+        total_pages: Document length.
+        budget_remaining: Transcription/visual budget left this turn.
+    """
+
+    document: Attachment
+    pages: List[int]
+    answer: str
+    model: str
+    usage: Dict[str, Any]
+    latency_ms: int
+    coverage: str
+    total_pages: int
+    budget_remaining: int
+
+
+class BudgetExhausted(Exception):
+    """The turn may not render any more pages.
+
+    Attributes:
+        pages: The pages that were not processed.
+    """
+
+    def __init__(self, pages: List[int]) -> None:
+        """Create the signal.
+
+        Args:
+            pages: Pages that were not processed.
+        """
+        super().__init__(f"turn budget exhausted for pages {compress_ranges(pages)}")
+        self.pages = pages
+
+
+async def ask_pages(document_id: str, question: str, start: int, end: Optional[int] = None) -> AskResult:
+    """Ask a question about what a page or short range looks like.
+
+    Args:
+        document_id: The attachment id.
+        question: What to find out from the page images.
+        start: First page, 1-based.
+        end: Last page, inclusive; None for a single page.
+
+    Returns:
+        AskResult: The answer with the pages that were shown and the model.
+
+    Raises:
+        DocumentUnavailable: Not this conversation's PDF, or not fetchable.
+        InvalidRange: Bad page numbers, empty question, or too many pages.
+        BudgetExhausted: The turn may not render these pages.
+    """
+    row = await _document(document_id)
+    if not question.strip():
+        raise InvalidRange("give a question to answer from the pages")
+    data = await _bytes(row)
+    total = await _open_total(row, data)
+    last = start if end is None else end
+    if start < 1 or last < start or start > total:
+        raise InvalidRange(f"pages run 1–{total}; {start}–{last} is not a valid range")
+    last = min(last, total)
+    numbers = list(range(start, last + 1))
+    cap = policy.PDF.visual_pages_per_call
+    if len(numbers) > cap:
+        raise InvalidRange(
+            f"ask about at most {cap} pages at a time ({start}–{last} is {len(numbers)} pages); split the range"
+        )
+    budget = _budget()
+    if budget.remaining < len(numbers):
+        raise BudgetExhausted(numbers[budget.remaining :])
+    budget.used += len(numbers)
+
+    def _render_all() -> List[Tuple[int, bytes]]:
+        pdf = open_pdf(data)
+        try:
+            return [(n, render_page(pdf, n)) for n in numbers]
+        finally:
+            pdf.close()
+
+    executions.check_cancel()
+    await executions.progress("Looking at pages")
+    images = await asyncio.to_thread(_render_all)
+    model = settings.FILE_INPUT_VISION_MODEL or settings.PDF_OCR_MODEL
+    answer = await executions.run_cancellable(
+        vision.answer_about_pages(images, question=question, model=model, document_name=row.name)
+    )
+
+    context = rich_media.current_rich_media.get()
+    if context:
+        await pages_store.record_reads(row.id, context.session_id, {n: "visual" for n in numbers})
+    read = await pages_store.pages_read(row.id, context.session_id) if context else set(numbers)
+    logger.info(
+        "pdf_pages_answered",
+        attachment_id=row.id,
+        pages=f"{start}-{last}",
+        model=answer.model,
+        latency_ms=answer.latency_ms,
+        budget_remaining=budget.remaining,
+    )
+    return AskResult(
+        document=row,
+        pages=numbers,
+        answer=answer.text,
+        model=answer.model,
+        usage=answer.usage,
+        latency_ms=answer.latency_ms,
+        coverage=compress_ranges(read),
+        total_pages=total,
+        budget_remaining=budget.remaining,
     )
 
 
@@ -592,16 +742,22 @@ def _snippet(text: str, position: int, length: int) -> str:
     return ("…" if start > 0 else "") + piece + ("…" if end < len(text) else "")
 
 
-async def search(document_id: str, query: str, cursor: Optional[int] = None) -> SearchResult:
+async def search(
+    document_id: str, query: str, cursor: Optional[int] = None, *, transcribe_missing: bool = False
+) -> SearchResult:
     """Find pages whose available text contains the query.
 
     Args:
         document_id: The attachment id.
         query: Text to look for; matched case- and diacritic-insensitively.
         cursor: Page to start from, from a previous result's ``next_cursor``.
+        transcribe_missing: Transcribe pages in the window that have no
+            readable text — in page order, at most
+            ``search_transcribe_pages_per_call`` and within the turn's budget —
+            so they can be searched in this same call.
 
     Returns:
-        SearchResult: Hits, what was searched, what could not be.
+        SearchResult: Hits, what was searched, what was transcribed, what could not be.
 
     Raises:
         DocumentUnavailable: Not this conversation's PDF, or not fetchable.
@@ -612,28 +768,32 @@ async def search(document_id: str, query: str, cursor: Optional[int] = None) -> 
     if not needle:
         raise InvalidRange("give a word or phrase to search for")
     data = await _bytes(row)
-    total = int(row.page_count or 0)
+    total = await _open_total(row, data)
     first = cursor or 1
-    if first < 1 or (total and first > total):
+    if first < 1 or first > total:
         raise InvalidRange(f"cursor must be a page between 1 and {total}")
-    last = (
-        min(total, first + policy.PDF.search_pages_per_call - 1)
-        if total
-        else first + policy.PDF.search_pages_per_call - 1
-    )
+    last = min(total, first + policy.PDF.search_pages_per_call - 1)
     numbers = list(range(first, last + 1))
 
     native = await _native_pages(row, data, numbers)
-    vision = {
+    vision_rows = {
         p.page_no: p for p in await pages_store.pages_for(row.id, row.sha256, numbers, method="vision") if p.usable
     }
+    missing = [n for n in numbers if n not in vision_rows and not (n in native and native[n].usable)]
+
+    transcribed_now: List[int] = []
+    budget_skipped: List[int] = []
+    if transcribe_missing and missing:
+        batch = missing[: policy.PDF.search_transcribe_pages_per_call]
+        fresh_rows, transcribed_now, budget_skipped = await _transcribe_many(row, data, batch, native)
+        vision_rows.update({n: p for n, p in fresh_rows.items() if p.usable})
 
     hits: List[Hit] = []
     unsearched: List[int] = []
     capped = False
     stopped_at = last
     for n in numbers:
-        page = vision.get(n) or (native.get(n) if n in native and native[n].usable else None)
+        page = vision_rows.get(n) or (native.get(n) if n in native and native[n].usable else None)
         if page is None:
             unsearched.append(n)
             continue
@@ -641,11 +801,8 @@ async def search(document_id: str, query: str, cursor: Optional[int] = None) -> 
         position = haystack.find(needle)
         if position < 0:
             continue
-        # Map back approximately: search the original text case-insensitively
-        # for a snippet; fall back to the normalised text when folding moved it.
         original = page.text
-        lowered = original.casefold()
-        raw_position = lowered.find(query.strip().casefold())
+        raw_position = original.casefold().find(query.strip().casefold())
         snippet = (
             _snippet(original, raw_position, len(query))
             if raw_position >= 0
@@ -659,7 +816,13 @@ async def search(document_id: str, query: str, cursor: Optional[int] = None) -> 
 
     next_cursor = stopped_at + 1 if stopped_at < total else None
     logger.info(
-        "pdf_searched", attachment_id=row.id, pages=f"{first}-{stopped_at}", hits=len(hits), unsearched=len(unsearched)
+        "pdf_searched",
+        attachment_id=row.id,
+        pages=f"{first}-{stopped_at}",
+        hits=len(hits),
+        unsearched=len(unsearched),
+        transcribed=len(transcribed_now),
+        budget_remaining=_budget().remaining,
     )
     return SearchResult(
         document=row,
@@ -667,9 +830,12 @@ async def search(document_id: str, query: str, cursor: Optional[int] = None) -> 
         hits=hits,
         searched=(first, stopped_at),
         unsearched=compress_ranges(n for n in unsearched if n <= stopped_at),
+        transcribed_now=compress_ranges(transcribed_now),
+        budget_skipped=compress_ranges(budget_skipped),
         next_cursor=next_cursor,
         total_pages=total,
         capped=capped,
+        budget_remaining=_budget().remaining,
     )
 
 
@@ -712,11 +878,14 @@ def clear_cache() -> None:
 
 
 __all__ = [
+    "AskResult",
+    "BudgetExhausted",
     "DocumentUnavailable",
     "InvalidRange",
     "PdfError",
     "ReadResult",
     "SearchResult",
+    "ask_pages",
     "begin_turn",
     "end_turn",
     "facts_for_intake",

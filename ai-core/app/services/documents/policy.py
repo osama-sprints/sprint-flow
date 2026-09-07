@@ -39,6 +39,11 @@ class PdfPolicy:
             the bitmap is allocated; a page of unusual proportions cannot
             outgrow it whatever its edge.
         render_jpeg_quality: JPEG quality of the rendered page.
+        visual_pages_per_call: Most page images one ``ask_pdf_pages`` question
+            may cover; wider ranges are refused, not silently trimmed, because
+            an answer about pages that were not shown would be wrong.
+        search_transcribe_pages_per_call: Most untranscribed pages one
+            progressive ``search_pdf`` call transcribes before handing back.
         result_chars_per_page: Ceiling on one page's text in a tool result.
         result_chars_total: Ceiling on a whole tool result.
         search_pages_per_call: Pages one ``search_pdf`` call scans before it
@@ -61,6 +66,8 @@ class PdfPolicy:
     render_max_edge: int = 1600
     render_max_pixels: int = 4_000_000
     render_jpeg_quality: int = 85
+    visual_pages_per_call: int = 4
+    search_transcribe_pages_per_call: int = 12
     result_chars_per_page: int = 6000
     result_chars_total: int = 16000
     search_pages_per_call: int = 400
