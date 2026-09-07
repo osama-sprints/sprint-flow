@@ -45,6 +45,7 @@ class MattermostClient:
         """Initialize the client without opening any connection."""
         self._client: Optional[httpx.AsyncClient] = None
         self._bot_user_id: Optional[str] = None
+        self._site_url: Optional[str] = None
 
     def _get_client(self) -> httpx.AsyncClient:
         """Return the shared HTTP client, creating it on first use.
@@ -150,6 +151,112 @@ class MattermostClient:
             return await self._request("GET", f"/posts/{root_id}/thread")
         except Exception as e:
             logger.exception("mattermost_get_thread_failed", root_id=root_id, error=str(e))
+            return None
+
+    async def site_url(self) -> str:
+        """Return the URL people use to reach this Mattermost, for permalinks.
+
+        The bot talks to Mattermost over the internal network, so its own base
+        URL is useless in a link a person is meant to click. Mattermost
+        publishes the browser-facing one in its client configuration; it is
+        read once and cached, and the internal URL is the fallback so a link is
+        never simply missing.
+
+        Returns:
+            str: The site URL, without a trailing slash.
+        """
+        if self._site_url is not None:
+            return self._site_url
+
+        resolved = ""
+        try:
+            config = await self._request("GET", "/config/client", params={"format": "old"})
+            resolved = str(config.get("SiteURL") or "").rstrip("/")
+        except Exception as e:
+            logger.warning("mattermost_site_url_unavailable", error=str(e))
+        self._site_url = resolved or settings.MATTERMOST_URL.rstrip("/")
+        return self._site_url
+
+    async def get_channel_posts(
+        self,
+        channel_id: str,
+        *,
+        before: str = "",
+        after: str = "",
+        per_page: int = 30,
+    ) -> Optional[Dict[str, Any]]:
+        """Read a page of a channel's posts, newest first.
+
+        Args:
+            channel_id: The channel to read.
+            before: Return only posts older than this post id.
+            after: Return only posts newer than this post id.
+            per_page: How many posts to ask for.
+
+        Returns:
+            dict | None: ``{"order": [...], "posts": {...}}``, or None when the
+            page cannot be read — "unknown" is not the same as "empty".
+        """
+        params: Dict[str, Any] = {"per_page": max(1, per_page)}
+        if before:
+            params["before"] = before
+        if after:
+            params["after"] = after
+        try:
+            return await self._request("GET", f"/channels/{channel_id}/posts", params=params)
+        except Exception as e:
+            logger.warning("mattermost_channel_posts_failed", channel_id=channel_id, before=before, error=str(e))
+            return None
+
+    async def get_channel(self, channel_id: str) -> Optional[Dict[str, Any]]:
+        """Read a channel's metadata: type, name, team.
+
+        Args:
+            channel_id: The channel id.
+
+        Returns:
+            dict | None: The channel, or None when the bot cannot see it.
+        """
+        try:
+            return await self._request("GET", f"/channels/{channel_id}")
+        except Exception as e:
+            logger.warning("mattermost_get_channel_failed", channel_id=channel_id, error=str(e))
+            return None
+
+    async def channel_member(self, channel_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+        """Read one person's membership of a channel.
+
+        This is the server's own answer to "may this person read this channel",
+        and it is the only acceptable basis for retrieving a conversation on
+        their behalf: the BOT's membership proves nothing about THEIR access.
+
+        Args:
+            channel_id: The channel id.
+            user_id: The Mattermost user id.
+
+        Returns:
+            dict | None: The membership, or None when there is none (or it
+            cannot be read, which is treated the same way — as no access).
+        """
+        try:
+            return await self._request("GET", f"/channels/{channel_id}/members/{user_id}")
+        except Exception as e:
+            logger.info("mattermost_channel_membership_absent", channel_id=channel_id, user_id=user_id, error=str(e))
+            return None
+
+    async def get_team(self, team_id: str) -> Optional[Dict[str, Any]]:
+        """Read a team by id, for building permalinks.
+
+        Args:
+            team_id: The team id.
+
+        Returns:
+            dict | None: The team, or None when it cannot be read.
+        """
+        try:
+            return await self._request("GET", f"/teams/{team_id}")
+        except Exception as e:
+            logger.warning("mattermost_get_team_failed", team_id=team_id, error=str(e))
             return None
 
     async def get_team_by_name(self, name: str) -> Optional[Dict[str, Any]]:

@@ -58,6 +58,18 @@ _NOT_AFTER_DETERMINER = (
     r"(?<!\bof\s)(?<!\bon\s)(?<!\bfor\s)(?<!\bin\s)(?<!'s\s)(?<!\bits\s)(?<!\bthe\s\s)"
 )
 
+# Words that name the conversation itself rather than its subject. A question
+# only counts as being ABOUT the discussion when one of these appears, which is
+# what keeps "summarise this report" with the report.
+_DISCUSSION_WORD = (
+    r"\b(?:discussion|conversation|thread|chat|messages?|channel|standup\s+notes|above|"
+    r"what\s+(?:was|we(?:'ve| have)?)\s+said)\b"
+)
+_DISCUSSION_WORD_AR = (
+    r"(?:الكلام|الرسائل|النقاش|المناقشة|المحادثة|المحادثه|الحوار|الشات|الثريد|"
+    r"الموضوع اللي فوق|اللي فوق|اللي اتقال|اللي حصل|كلامنا|كلامكم)"
+)
+
 # Leading chatter that says nothing about intent: greetings, mentions, punctuation.
 _LEAD_IN = re.compile(
     r"^(?:\s*(?:hi|hey|hello|yo|ok|okay|so|please|kindly|hey\s+there|hi\s+there|@\S+|[,!.:\-–—])\s*)*",
@@ -196,6 +208,36 @@ ROUTING_RULES: List[Rule] = [
             rf"schedule|scheduled|book|booked)\b.{{0,40}}\b{_CEREMONY}\b",
         ),
         confidence=0.9,
+    ),
+    # ---- Conversation context: questions about what was said --------------------
+    # Before learner support so "what did we agree in the retro?" is answered from
+    # the discussion rather than from cohort data. Every pattern needs a word that
+    # names the conversation ("the discussion", "الكلام", "above") or an explicit
+    # decision reference ("what did we agree"), so "summarise this document" and
+    # "لخص الكتاب" stay with the attachment they are about.
+    Rule(
+        name="conversation_context",
+        route=CapabilityRoute.CONVERSATION_CONTEXT,
+        patterns=_compile(
+            rf"\b(?:summar(?:ise|ize|y|ising|izing)|recap|tl;?dr|catch\s+(?:me\s+)?up)\b.{{0,40}}{_DISCUSSION_WORD}",
+            rf"{_DISCUSSION_WORD}.{{0,30}}\b(?:summar(?:ise|ize|y)|recap|about|so\s+far)\b",
+            r"\b(?:what|which|who)\b.{0,40}\b(?:we|they|everyone|the\s+team|you\s+all)\b.{0,25}"
+            r"\b(?:agree|agreed|decide|decided|conclude|concluded|settle|settled|say|said)\b",
+            r"\b(?:what|who)\b.{0,25}\b(?:was|were)\b.{0,20}\b(?:decided|agreed|discussed|said|concluded)\b",
+            r"\bwhat(?:'?s| is| was)\s+the\s+(?:decision|conclusion|outcome|consensus|agreement)\b",
+            r"\bwho\s+(?:said|suggested|proposed|raised|asked)\b",
+            r"\bwhat\s+did\s+[\w@.'-]+\s+(?:say|mean|suggest|propose)\b",
+            rf"\b(?:above|earlier|previous|preceding|last\s+few)\b.{{0,20}}{_DISCUSSION_WORD}",
+            rf"{_DISCUSSION_WORD}\s+(?:above|so\s+far|up\s+there|before\s+this)\b",
+            # Arabic. No \b anchors: the article and conjunctions attach to the
+            # front of a word, so "والكلام" carries no boundary around the stem.
+            rf"(?:لخص|لخّص|ملخص|تلخيص|اختصر|إختصر|راجع|لملم).{{0,30}}{_DISCUSSION_WORD_AR}",
+            rf"{_DISCUSSION_WORD_AR}.{{0,25}}(?:لخص|لخّص|ملخص|تلخيص|إيه|ايه|فوق|السابق|اللي فات|قبل كده)",
+            r"(?:اتفقنا|إتفقنا|قررنا|اتفقوا|قرروا|الاتفاق|القرار اللي|القرارات اللي|خلصنا على|استقرينا)",
+            r"(?:مين قال|من قال|قال مين|مين اقترح|من اقترح|مين طلب)",
+            r"(?:الكلام|الرسائل|النقاش|المحادثة|المحادثه|الحوار|الشات|الثريد)\s*(?:اللي\s*)?(?:فوق|قبل|السابق|فات)",
+        ),
+        confidence=0.88,
     ),
     # ---- Learner support: academic and process questions ------------------------
     Rule(

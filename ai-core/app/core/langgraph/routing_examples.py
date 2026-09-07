@@ -32,6 +32,7 @@ LEARNER = CapabilityRoute.LEARNER_SUPPORT.value
 BACK_OFFICE = CapabilityRoute.BACK_OFFICE.value
 GENERAL = CapabilityRoute.GENERAL.value
 RICH_MEDIA = CapabilityRoute.RICH_MEDIA.value
+CONVERSATION = CapabilityRoute.CONVERSATION_CONTEXT.value
 
 
 class RoutingExample(NamedTuple):
@@ -297,6 +298,50 @@ ROUTING_EXAMPLES: Tuple[RoutingExample, ...] = (
     RoutingExample("عايز رسمة توضيحية للعملية دي", "learner", (RICH_MEDIA,), "rich_media"),
     RoutingExample("اعمل حاسبة تكلفة تفاعلية بـReact فيها sliders", "learner", (RICH_MEDIA,), "rich_media"),
     RoutingExample("ولّد صورة توضيحية للفريق", "learner", (RICH_MEDIA,), "rich_media"),
+    # ---- Conversation context: questions about what people said ------------------
+    RoutingExample("summarise the discussion above", "learner", (CONVERSATION,), "conversation_context"),
+    RoutingExample("recap the conversation so far", "learner", (CONVERSATION,), "conversation_context"),
+    RoutingExample("catch me up on this thread", "learner", (CONVERSATION,), "conversation_context"),
+    RoutingExample("what did we agree about the release?", "authority", (CONVERSATION,), "conversation_context"),
+    RoutingExample("who said the demo was moved?", "learner", (CONVERSATION,), "conversation_context"),
+    RoutingExample("what did sara mean by that?", "learner", (CONVERSATION,), "conversation_context"),
+    RoutingExample("لخص الكلام اللي فوق", "learner", (CONVERSATION,), "conversation_context"),
+    RoutingExample("لخص النقاش ده", "anonymous", (CONVERSATION,), "conversation_context"),
+    RoutingExample("مين قال إن الموعد اتغير؟", "learner", (CONVERSATION,), "conversation_context"),
+    RoutingExample(
+        "إيه القرار اللي اتفقنا عليه؟",
+        "learner",
+        (CONVERSATION, LEARNER),
+        "conversation_context",
+        hard=True,
+        note="'عليه' contains the substring 'ليه', so learner support matches too; reading the "
+        "discussion still leads and learner support composes the final reply",
+    ),
+    RoutingExample(
+        "لخص المحادثة وارسمها كخريطة ذهنية",
+        "learner",
+        (CONVERSATION, RICH_MEDIA),
+        "conversation_context",
+        note="read what people said first, draw it second",
+    ),
+    # The boundary that matters: a request to summarise a DOCUMENT is not a
+    # request to summarise the conversation, in either language.
+    RoutingExample(
+        "summarise this document",
+        "learner",
+        (GENERAL,),
+        "general_fallback",
+        hard=True,
+        note="no word naming the conversation, so it stays with the attachment",
+    ),
+    RoutingExample(
+        "هاتلي ملخص للكتاب ده",
+        "learner",
+        (GENERAL,),
+        "general_fallback",
+        hard=True,
+        note="a book, not the discussion — routing it to conversation context would lose the PDF tools",
+    ),
     RoutingExample("visualise the sprint timeline as a gantt", "authority", (RICH_MEDIA,), "rich_media"),
     # Data first, picture second: the reader must be authorised and the numbers
     # real before anything is drawn, so learner_support leads and rich_media
@@ -326,4 +371,13 @@ ROUTING_EXAMPLES: Tuple[RoutingExample, ...] = (
 )
 
 
-__all__ = ["BACK_OFFICE", "GENERAL", "LEARNER", "REQUESTERS", "RICH_MEDIA", "ROUTING_EXAMPLES", "RoutingExample"]
+__all__ = [
+    "BACK_OFFICE",
+    "CONVERSATION",
+    "GENERAL",
+    "LEARNER",
+    "REQUESTERS",
+    "RICH_MEDIA",
+    "ROUTING_EXAMPLES",
+    "RoutingExample",
+]

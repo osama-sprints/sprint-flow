@@ -115,6 +115,22 @@ _RICH_MEDIA_CONTEXT = (
     "automatically."
 )
 
+_CONVERSATION_CONTEXT_CONTEXT = (
+    "This message is about the conversation itself — what was said, agreed, decided or meant "
+    "in the messages around it. You did not see those messages, so you MUST call read_discussion "
+    "before you answer. Ask it the actual question ('what did the team decide about the release "
+    "date?'), not 'summarise everything'.\n"
+    "Answer only from what it returns. Attribute every statement to the person who made it, by "
+    "name, and never fold several people's words into one voice or into the words of the person "
+    "now asking. Quote exactly where the wording matters — a decision, a number, a date, a "
+    "commitment — and link the messages you relied on.\n"
+    "Say what was decided and what was only discussed. If people disagreed, if a suggestion was "
+    "never confirmed, or if the thread trailed off, say that rather than presenting it as settled.\n"
+    "Be honest about coverage: if only part of the discussion was read, or a page was refused, say "
+    "so in one short line. If nothing relevant was found, say that plainly — never fill the gap "
+    "from memory or from what you would expect people to have said."
+)
+
 _GENERAL_CONTEXT = (
     "This message did not match a specialised area. Respond helpfully as a general assistant "
     "with the tools you have; if it needs rights the requester lacks, say so plainly."
@@ -141,6 +157,14 @@ SPECIALISTS: Dict[str, Specialist] = {
         tools_node_name="rich_media_tools",
         tool_group="rich_media",
         prompt_context=_RICH_MEDIA_CONTEXT,
+        force_tool_use=True,
+    ),
+    CapabilityRoute.CONVERSATION_CONTEXT.value: Specialist(
+        route=CapabilityRoute.CONVERSATION_CONTEXT,
+        node_name="conversation_context",
+        tools_node_name="conversation_context_tools",
+        tool_group="conversation_context",
+        prompt_context=_CONVERSATION_CONTEXT_CONTEXT,
         force_tool_use=True,
     ),
     CapabilityRoute.GENERAL.value: Specialist(

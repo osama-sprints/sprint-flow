@@ -34,6 +34,7 @@ from app.schemas.rich_media import (
 )
 from app.services import (
     attachments,
+    discussion,
     executions,
     rich_media,
 )
@@ -212,6 +213,18 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
     # error and "Stopped" replies — follows their language.
     set_language(detect_language(message.text, fallback=language_from_locale(requester.locale)))
 
+    # What retrieval may read, and for whom. Same rule as the requester: every
+    # identifier comes off the event, none of it from the model.
+    discussion.begin_turn(
+        requester_user_id=message.user_id,
+        requester_username=message.user_name,
+        channel_id=channel_id,
+        channel_type=message.channel_type,
+        trigger_post_id=message.post_id,
+        root_id=message.root_id,
+        session_id=session_id,
+    )
+
     # Visual output is staged against THIS turn. A resumed conversation opens a
     # new turn id, so artifacts staged before an interrupt can never be
     # published a second time by the turn that answers it.
@@ -265,6 +278,13 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
     documents.begin_turn()
     prompt_text = attachments.state_text(text, turn_files)
 
+    # Being pulled into a thread that has been running without us is the one
+    # case where waiting to be asked would be wrong: the question is about
+    # messages that, from our side, are simply missing. Read a bounded amount
+    # of that thread once, for this model call only.
+    if message.root_id:
+        await discussion.prime_thread(first_turn=not await agent.has_history(session_id))
+
     try:
         if not prompt_text:
             # Only refused files arrived: the notices are the whole answer.
@@ -307,6 +327,7 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
         rich_media.end_turn()
         attachments.clear()
         documents.end_turn()
+        discussion.end_turn()
 
     posted = await _deliver(message, with_notices(reply, notices), envelope)
     await executions.finish(outcome, error=error, reply_post_id=posted.get("id") if posted else None)

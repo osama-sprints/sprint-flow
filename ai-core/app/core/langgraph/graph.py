@@ -101,6 +101,7 @@ from app.utils import (
 )
 from app.services import (
     attachments,
+    discussion,
     executions,
 )
 
@@ -376,6 +377,7 @@ class LangGraphAgent:
             # carrying pictures or scanned pages moves to a model that can see
             # them when the current one cannot.
             llm_messages = attachments.augment_llm_messages(dump_messages(messages))
+            llm_messages = discussion.augment_llm_messages(llm_messages)
             vision_model = attachments.vision_model_override(model_name)
 
             # Progress the person can see, and the point where a cancel lands:
@@ -814,6 +816,23 @@ class LangGraphAgent:
         except Exception as stream_error:
             logger.exception("stream_processing_failed", error=str(stream_error), session_id=session_id)
             raise stream_error
+
+    async def has_history(self, session_id: str) -> bool:
+        """Whether this conversation has been spoken in before.
+
+        Used to decide whether a thread the bot has just been pulled into
+        needs its earlier messages read once for context. A checkpoint read,
+        not a model call.
+
+        Args:
+            session_id: The conversation key.
+
+        Returns:
+            bool: True when the conversation already holds messages.
+        """
+        graph = await self._get_graph()
+        state: StateSnapshot = await graph.aget_state({"configurable": {"thread_id": session_id}})
+        return bool((state.values or {}).get("messages"))
 
     async def get_chat_history(self, session_id: str) -> list[Message]:
         """Get the chat history for a given thread ID.

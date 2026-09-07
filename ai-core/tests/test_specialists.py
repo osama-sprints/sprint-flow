@@ -54,6 +54,8 @@ EXPECTED_NODES = {
     "learner_support_tools",
     "back_office",
     "back_office_tools",
+    "conversation_context",
+    "conversation_context_tools",
 }
 
 
@@ -202,12 +204,14 @@ def test_compiled_graph_has_the_contracted_node_names():
         "learner_support",
         "back_office",
         "rich_media",
+        "conversation_context",
         "chat",
     }
     assert {spec.tools_node_name for spec in SPECIALISTS.values()} == {
         "learner_support_tools",
         "back_office_tools",
         "rich_media_tools",
+        "conversation_context_tools",
         "tool_call",
     }
 
