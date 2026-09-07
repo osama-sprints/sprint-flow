@@ -251,6 +251,11 @@ def clear() -> None:
     current_attachments.set(None)
 
 
+def _short(file_id: str) -> str:
+    """A file named only by the head of its id, for notices about files that are not ours."""
+    return f"file {file_id[:8]}…"
+
+
 def format_bytes(size: int) -> str:
     """Human size: bytes, KB or MB.
 
@@ -391,9 +396,15 @@ async def ingest(
         requester_user_id=requester_user_id,
     )
 
-    def refuse(file_id: str, name: str, reason: str, *, claimed_mime: str = "", size_bytes: int = 0) -> None:
+    def refuse(
+        file_id: str, name: str, reason: str, *, claimed_mime: str = "", size_bytes: int = 0, persist: bool = True
+    ) -> None:
         turn.rejected.append(RejectedAttachment(id=file_id, name=name, reason=reason))
         turn.notices.append(t("notice.unreadable", name=name, reason=reason))
+        if not persist:
+            # A file that is not this message's is not recorded under this
+            # conversation: the row would carry another channel's file name.
+            return
         rows.append(
             _row(
                 file_id=file_id,
@@ -409,7 +420,7 @@ async def ingest(
     for file_id in ids:
         info = await mattermost_client.get_file_info(file_id)
         if not info:
-            refuse(file_id, file_id, t("reason.not_returned"))
+            refuse(file_id, _short(file_id), t("reason.not_returned"), persist=False)
             continue
         name = str(info.get("name") or file_id)
         claimed = str(info.get("mime_type") or "")
@@ -419,7 +430,8 @@ async def ingest(
         # a file id is guessable, and the bot can read more channels than the
         # person who typed the message.
         if str(info.get("post_id") or "") != post_id or str(info.get("channel_id") or "") != channel_id:
-            refuse(file_id, name, t("reason.not_this_message"), claimed_mime=claimed, size_bytes=size)
+            # Neither the name nor a record: both would leak what the bot can see.
+            refuse(file_id, _short(file_id), t("reason.not_this_message"), persist=False)
             continue
         if size > settings.FILE_INPUT_MAX_FILE_BYTES:
             refuse(

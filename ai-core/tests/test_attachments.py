@@ -372,8 +372,10 @@ async def test_ingest_refuses_files_that_belong_to_another_post_or_channel(stubb
         "it is not part of this message",
         "Mattermost did not return it",
     ]
-    assert all(row.status == "rejected" for row in stubbed.saved)
-    assert turn.notices[0].startswith("I couldn't read **a.png**")
+    # Another conversation's file leaves no record here and is not named:
+    # the row would sit under this conversation with that channel's file name.
+    assert stubbed.saved == []
+    assert turn.notices[0].startswith("I couldn't read **file other-po…**") and "a.png" not in turn.notices[0]
 
 
 async def test_ingest_enforces_count_size_and_type_limits(stubbed, monkeypatch):
