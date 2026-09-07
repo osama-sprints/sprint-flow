@@ -33,6 +33,7 @@ class RequesterContext:
         user_id: ``users.id`` after the profile sync; None if the sync failed.
         is_superadmin: Whether the email is on the ``ADMIN_EMAILS`` allowlist.
         timezone: IANA zone from the Mattermost profile, or None.
+        locale: Mattermost UI locale from the profile ("ar", "en-GB"), or "".
         cohort_roles: ``{cohort_id: role_key}`` for active memberships (routing hint).
     """
 
@@ -44,6 +45,7 @@ class RequesterContext:
     user_id: int | None = None
     is_superadmin: bool = False
     timezone: str | None = None
+    locale: str = ""
     cohort_roles: Mapping[int, str] = field(default_factory=lambda: MappingProxyType({}))
 
     @property

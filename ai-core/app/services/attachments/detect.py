@@ -12,6 +12,7 @@ import io
 import zipfile
 from dataclasses import dataclass
 from typing import (
+    Any,
     Dict,
     FrozenSet,
     Optional,
@@ -19,6 +20,11 @@ from typing import (
 )
 
 import filetype
+
+from app.core.i18n import (
+    t,
+    t_in,
+)
 
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -44,22 +50,94 @@ SUPPORTED_EXTENSIONS: FrozenSet[str] = frozenset().union(
     *(exts for _, exts in _BINARY_KINDS.values()), *(exts for _, exts in _TEXT_KINDS.values())
 )
 
+# Detected content type -> catalogue key describing it to the person.
 _DESCRIPTIONS = {
-    "application/pdf": "a PDF",
-    DOCX_MIME: "a Word document",
-    XLSX_MIME: "an Excel workbook",
-    "image/png": "a PNG image",
-    "image/jpeg": "a JPEG image",
-    "image/webp": "a WebP image",
-    "application/zip": "a zip archive",
+    "application/pdf": "what.pdf",
+    DOCX_MIME: "what.docx",
+    XLSX_MIME: "what.xlsx",
+    "image/png": "what.png",
+    "image/jpeg": "what.jpeg",
+    "image/webp": "what.webp",
+    "application/zip": "what.zip",
 }
 
 # Bytes of a text file that are never legitimate in text.
 _BINARY_MARKERS = frozenset(range(0, 9)) | frozenset({11, 12}) | frozenset(range(14, 32)) | {127}
 
 
+class _WhatDescriptor:
+    """A content type described in English for logs and in the turn's language for people."""
+
+    def __init__(self, mime: str) -> None:
+        """Remember the type.
+
+        Args:
+            mime: The detected content type.
+        """
+        self.mime = mime
+
+    def english(self) -> str:
+        """The description in English.
+
+        Returns:
+            str: e.g. "a PNG image".
+        """
+        return _describe_en(self.mime)
+
+    def local(self) -> str:
+        """The description in the current turn's language.
+
+        Returns:
+            str: e.g. "صورة PNG".
+        """
+        return describe(self.mime)
+
+    def __str__(self) -> str:
+        """English rendering for logs and tests.
+
+        Returns:
+            str: The description in English.
+        """
+        return self.english()
+
+
+def _english_values(values: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: (v.english() if isinstance(v, _WhatDescriptor) else v) for k, v in values.items()}
+
+
+def _local_values(values: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: (v.local() if isinstance(v, _WhatDescriptor) else v) for k, v in values.items()}
+
+
 class Unsupported(ValueError):
-    """The file cannot be read; the message says why, for the person."""
+    """The file cannot be read.
+
+    The reason is a catalogue key plus values, rendered in the person's
+    language when the notice is built; ``str()`` gives the English form.
+
+    Attributes:
+        key: Catalogue key under ``reason.``.
+        values: Format arguments for the key.
+    """
+
+    def __init__(self, key: str, **values: Any) -> None:
+        """Create the refusal.
+
+        Args:
+            key: Catalogue key.
+            **values: Format arguments.
+        """
+        self.key = key
+        self.values = values
+        super().__init__(t_in("en", key, **_english_values(values)))
+
+    def render(self) -> str:
+        """The reason in the current turn's language.
+
+        Returns:
+            str: The rendered sentence.
+        """
+        return t(self.key, **_local_values(self.values))
 
 
 @dataclass(frozen=True)
@@ -93,7 +171,7 @@ def extension_of(name: str) -> str:
 
 
 def describe(mime: str) -> str:
-    """Human wording for a detected content type.
+    """Human wording for a detected content type, in the turn's language.
 
     Args:
         mime: The content type.
@@ -101,7 +179,13 @@ def describe(mime: str) -> str:
     Returns:
         str: A phrase such as "a PNG image".
     """
-    return _DESCRIPTIONS.get(mime, f"a {mime} file")
+    key = _DESCRIPTIONS.get(mime)
+    return t(key) if key else t("what.other", mime=mime)
+
+
+def _describe_en(mime: str) -> str:
+    key = _DESCRIPTIONS.get(mime)
+    return t_in("en", key) if key else t_in("en", "what.other", mime=mime)
 
 
 def _office_kind(data: bytes) -> Optional[str]:
@@ -153,16 +237,16 @@ def decode_text(data: bytes) -> str:
         Unsupported: When the bytes carry binary markers or are not UTF-8/UTF-16.
     """
     if any(b in _BINARY_MARKERS for b in data[:65536]):
-        raise Unsupported("the content is binary, not text")
+        raise Unsupported("reason.binary")
     if data.startswith((b"\xff\xfe", b"\xfe\xff")):
         try:
             return data.decode("utf-16")
         except UnicodeDecodeError as e:
-            raise Unsupported("the text is not valid UTF-16") from e
+            raise Unsupported("reason.utf16") from e
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError as e:
-        raise Unsupported("the text is not UTF-8; please save it as UTF-8 and send it again") from e
+        raise Unsupported("reason.utf8") from e
 
 
 def detect(name: str, data: bytes) -> Detection:
@@ -185,12 +269,11 @@ def detect(name: str, data: bytes) -> Detection:
     if mime in _BINARY_KINDS:
         kind, extensions = _BINARY_KINDS[mime]
         if extension and extension not in extensions:
-            raise Unsupported(f"the content is {describe(mime)}, not a .{extension} file")
+            raise Unsupported("reason.mismatch", what=_WhatDescriptor(mime), ext=extension)
         return Detection(kind=kind, mime=mime, extension=extension or sorted(extensions)[0])
 
     if mime is not None:
-        label = describe(mime) if mime in _DESCRIPTIONS else f"of type {mime}"
-        raise Unsupported(f"it is {label}, which is not a supported type")
+        raise Unsupported("reason.unsupported_type", what=_WhatDescriptor(mime))
 
     for kind, (text_mime, extensions) in _TEXT_KINDS.items():
         if extension in extensions:
@@ -198,7 +281,7 @@ def detect(name: str, data: bytes) -> Detection:
             return Detection(kind=kind, mime=text_mime, extension=extension)
 
     if extension in SUPPORTED_EXTENSIONS:
-        raise Unsupported(f"the content does not look like a valid .{extension} file")
+        raise Unsupported("reason.invalid_for_ext", ext=extension)
     if extension:
-        raise Unsupported(f".{extension} files are not supported")
-    raise Unsupported("the file has no recognisable type")
+        raise Unsupported("reason.unsupported_ext", ext=extension)
+    raise Unsupported("reason.no_type")

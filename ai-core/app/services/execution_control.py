@@ -19,6 +19,11 @@ from typing import (
 )
 
 from app.core.logging import logger
+from app.core.i18n import (
+    detect_language,
+    set_language,
+    t,
+)
 from app.services import executions
 from app.services.conversation import (
     IncomingMessage,
@@ -125,6 +130,7 @@ async def handle_command(message: IncomingMessage) -> bool:
     command = command_of(message.text)
     if command is None or message.file_ids:
         return False
+    set_language(detect_language(message.text))
 
     if command == "cancel":
         running = await store.find_running_for_session(message.session_id)
@@ -136,7 +142,7 @@ async def handle_command(message: IncomingMessage) -> bool:
             # The stopped turn posts its own "Stopped" reply.
             return True
         if outcomes and all(outcome == "forbidden" for outcome in outcomes):
-            await _say(message, "Only the person who asked for that, or an admin, can stop it.")
+            await _say(message, t("control.only_requester_stop"))
             return True
         return False
 
@@ -146,6 +152,6 @@ async def handle_command(message: IncomingMessage) -> bool:
     outcome = await retry(latest.id, by_mattermost_user_id=message.user_id)
     logger.info("typed_retry_handled", session_id=message.session_id, execution_id=latest.id, outcome=outcome)
     if outcome == "forbidden":
-        await _say(message, "Only the person who asked for that, or an admin, can retry it.")
+        await _say(message, t("control.only_requester_retry"))
         return True
     return outcome == "started"

@@ -206,12 +206,21 @@ async def resolve_requester(
         return base
 
     try:
-        user = await sync_mattermost_user(mattermost_user_id)
+        # One cached profile read serves both the sync and the locale.
+        profile = await fetch_profile(mattermost_user_id)
+        user = await sync_mattermost_user(mattermost_user_id, profile)
     except Exception as e:
         logger.exception("identity_sync_failed", mattermost_user_id=mattermost_user_id, error=str(e))
         return base
+    locale = str((profile or {}).get("locale") or "")
     if user is None or user.id is None:
-        return base
+        return RequesterContext(
+            mattermost_user_id=mattermost_user_id,
+            username=username,
+            channel_id=channel_id,
+            channel_type=channel_type,
+            locale=locale,
+        )
 
     try:
         memberships = await cohort_repo.list_memberships_for_user(user.id, active_only=True)
@@ -232,5 +241,6 @@ async def resolve_requester(
         user_id=user.id,
         is_superadmin=user.is_superadmin,
         timezone=user.timezone,
+        locale=locale,
         cohort_roles=MappingProxyType(roles),
     )

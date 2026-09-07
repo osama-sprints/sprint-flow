@@ -32,6 +32,7 @@ from typing import (
 )
 
 from app.core.config import settings
+from app.core.i18n import t
 from app.core.logging import logger
 from app.models import (
     Attachment,
@@ -370,14 +371,12 @@ async def ingest(
         return turn
 
     if not settings.FILE_INPUT_ENABLED:
-        turn.notices.append("Reading attachments is switched off on this assistant, so I answered the text only.")
+        turn.notices.append(t("notice.attachments_off"))
         return turn
 
     limit = policy.FILE_INPUT.max_files
     if len(ids) > limit:
-        turn.notices.append(
-            f"Only the first {limit} of {len(ids)} attachments were read; send the others in a separate message."
-        )
+        turn.notices.append(t("notice.too_many_files", shown=limit, total=len(ids)))
         ids = ids[:limit]
 
     rows: List[Attachment] = []
@@ -394,7 +393,7 @@ async def ingest(
 
     def refuse(file_id: str, name: str, reason: str, *, claimed_mime: str = "", size_bytes: int = 0) -> None:
         turn.rejected.append(RejectedAttachment(id=file_id, name=name, reason=reason))
-        turn.notices.append(f"I couldn't read **{name}**: {reason}.")
+        turn.notices.append(t("notice.unreadable", name=name, reason=reason))
         rows.append(
             _row(
                 file_id=file_id,
@@ -410,7 +409,7 @@ async def ingest(
     for file_id in ids:
         info = await mattermost_client.get_file_info(file_id)
         if not info:
-            refuse(file_id, file_id, "Mattermost did not return it")
+            refuse(file_id, file_id, t("reason.not_returned"))
             continue
         name = str(info.get("name") or file_id)
         claimed = str(info.get("mime_type") or "")
@@ -420,13 +419,13 @@ async def ingest(
         # a file id is guessable, and the bot can read more channels than the
         # person who typed the message.
         if str(info.get("post_id") or "") != post_id or str(info.get("channel_id") or "") != channel_id:
-            refuse(file_id, name, "it is not part of this message", claimed_mime=claimed, size_bytes=size)
+            refuse(file_id, name, t("reason.not_this_message"), claimed_mime=claimed, size_bytes=size)
             continue
         if size > settings.FILE_INPUT_MAX_FILE_BYTES:
             refuse(
                 file_id,
                 name,
-                f"it is {format_bytes(size)}; the limit per file is {format_bytes(settings.FILE_INPUT_MAX_FILE_BYTES)}",
+                t("reason.too_large", size=format_bytes(size), limit=format_bytes(settings.FILE_INPUT_MAX_FILE_BYTES)),
                 claimed_mime=claimed,
                 size_bytes=size,
             )
@@ -435,7 +434,7 @@ async def ingest(
             refuse(
                 file_id,
                 name,
-                f"together the attachments exceed {format_bytes(policy.FILE_INPUT.max_total_bytes)}",
+                t("reason.total_too_large", limit=format_bytes(policy.FILE_INPUT.max_total_bytes)),
                 claimed_mime=claimed,
                 size_bytes=size,
             )
@@ -446,7 +445,7 @@ async def ingest(
         except FileTooLarge:
             data = None
         if data is None:
-            refuse(file_id, name, "it could not be downloaded", claimed_mime=claimed, size_bytes=size)
+            refuse(file_id, name, t("reason.download_failed"), claimed_mime=claimed, size_bytes=size)
             continue
         total += len(data)
 
@@ -454,11 +453,11 @@ async def ingest(
             detection = detect(name, data)
             extracted = await asyncio.to_thread(extract, detection, name, data)
         except Unsupported as e:
-            refuse(file_id, name, str(e), claimed_mime=claimed, size_bytes=len(data))
+            refuse(file_id, name, e.render(), claimed_mime=claimed, size_bytes=len(data))
             continue
         except Exception as e:  # a reader bug must not take the turn down
             logger.exception("attachment_extraction_failed", file_id=file_id, name=name, error=str(e))
-            refuse(file_id, name, "it could not be read", claimed_mime=claimed, size_bytes=len(data))
+            refuse(file_id, name, t("reason.unreadable"), claimed_mime=claimed, size_bytes=len(data))
             continue
 
         text_chars = len(extracted.text)
@@ -506,7 +505,7 @@ async def ingest(
         # later turns lose this file.
         logger.exception("attachment_store_failed", count=len(rows), error=str(e))
         if turn.accepted:
-            turn.notices.append("I read the attachments but could not save them for later turns.")
+            turn.notices.append(t("notice.not_saved"))
 
     return turn
 

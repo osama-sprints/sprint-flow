@@ -32,6 +32,7 @@ from PIL import (
     UnidentifiedImageError,
 )
 
+from app.core.i18n import t
 from app.services.attachments.detect import (
     Detection,
     Unsupported,
@@ -85,13 +86,11 @@ def _pdf(name: str, data: bytes) -> Extracted:
     try:
         pdf = open_pdf(data)
     except PdfError as e:
-        raise Unsupported(
-            "it is password-protected" if e.kind == "encrypted" else "it could not be opened as a PDF"
-        ) from e
+        raise Unsupported("reason.encrypted" if e.kind == "encrypted" else "reason.damaged_pdf") from e
     try:
         total = page_count(pdf)
         if total == 0:
-            raise Unsupported("it has no pages")
+            raise Unsupported("reason.no_pages")
         facts: Dict[str, Any] = {
             "page_count": total,
             **metadata(pdf),
@@ -136,7 +135,7 @@ def _docx(data: bytes) -> Extracted:
     try:
         document = docx.Document(io.BytesIO(data))
     except (PackageNotFoundError, KeyError, ValueError) as e:
-        raise Unsupported("it could not be opened as a Word document") from e
+        raise Unsupported("reason.docx") from e
 
     lines: List[str] = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
     for number, table in enumerate(document.tables, start=1):
@@ -155,7 +154,7 @@ def _xlsx(name: str, data: bytes) -> Extracted:
     try:
         workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     except Exception as e:
-        raise Unsupported("it could not be opened as an Excel workbook") from e
+        raise Unsupported("reason.xlsx") from e
 
     cap = policy.FILE_INPUT.max_sheet_rows
     lines: List[str] = []
@@ -167,7 +166,7 @@ def _xlsx(name: str, data: bytes) -> Extracted:
         for row in sheet.iter_rows(values_only=True):
             count += 1
             if count > cap:
-                notes.append(f"**{name}**, sheet {sheet.title}: only the first {cap} rows were read.")
+                notes.append(t("notice.sheet_rows", name=name, sheet=sheet.title, cap=cap))
                 break
             lines.append(", ".join("" if value is None else str(value) for value in row))
     workbook.close()
@@ -203,16 +202,16 @@ def _image(detection: Detection, data: bytes) -> Extracted:
         image = Image.open(io.BytesIO(data))
         width, height = image.size
     except (UnidentifiedImageError, OSError, ValueError) as e:
-        raise Unsupported("it could not be decoded as an image") from e
+        raise Unsupported("reason.image_decode") from e
 
     limit = policy.FILE_INPUT.max_image_pixels
     if width * height > limit:
-        raise Unsupported(f"it is {width}×{height} pixels; the limit is {limit:,} pixels")
+        raise Unsupported("reason.image_too_big", width=width, height=height, limit=limit)
 
     try:
         image.load()
     except (OSError, ValueError) as e:
-        raise Unsupported("it could not be decoded as an image") from e
+        raise Unsupported("reason.image_decode") from e
 
     source_format = (image.format or detection.extension).upper()
     edge = policy.FILE_INPUT.max_image_edge
@@ -267,4 +266,4 @@ def extract(detection: Detection, name: str, data: bytes) -> Extracted:
         return _text(detection.kind, data)
     if detection.kind == "image":
         return _image(detection, data)
-    raise Unsupported(f"{detection.kind} files are not supported")
+    raise Unsupported("reason.kind_unsupported", kind=detection.kind)

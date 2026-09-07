@@ -19,6 +19,12 @@ from pydantic import (
 )
 
 from app.core.config import settings
+from app.core.i18n import (
+    detect_language,
+    language_from_locale,
+    set_language,
+    t,
+)
 from app.core.logging import logger
 from app.core.requester import current_requester
 from app.schemas.chat import Message
@@ -202,6 +208,10 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
     )
     current_requester.set(requester)
 
+    # Everything the person reads from here on — notices above the reply, the
+    # error and "Stopped" replies — follows their language.
+    set_language(detect_language(message.text, fallback=language_from_locale(requester.locale)))
+
     # Visual output is staged against THIS turn. A resumed conversation opens a
     # new turn id, so artifacts staged before an interrupt can never be
     # published a second time by the turn that answers it.
@@ -238,10 +248,7 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
     notices: List[str] = []
     text = message.text
     if len(text) > MAX_INPUT_CHARS:
-        notices.append(
-            f"Your message was {len(text):,} characters long; I read the first {MAX_INPUT_CHARS:,}. "
-            "Attach the rest as a file if you need me to read all of it."
-        )
+        notices.append(t("notice.message_truncated", total=len(text), limit=MAX_INPUT_CHARS))
         text = text[:MAX_INPUT_CHARS]
     turn_files = await attachments.ingest(
         message.file_ids,
@@ -287,12 +294,12 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
         reply = ""
     except executions.ExecutionCancelled:
         logger.info("mattermost_agent_turn_cancelled", session_id=session_id, source=source, turn_id=turn.turn_id)
-        reply = STOPPED_REPLY
+        reply = t("reply.stopped")
         outcome = "cancelled"
         envelope = ReplyEnvelope()
     except Exception as e:
         logger.exception("mattermost_agent_turn_failed", session_id=session_id, source=source, error=str(e))
-        reply = FALLBACK_REPLY
+        reply = t("reply.fallback")
         outcome = "failed"
         error = str(e)[:500]
     finally:
