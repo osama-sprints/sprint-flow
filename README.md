@@ -277,6 +277,46 @@ or the model, and every one has a report and a verifier:
 | **Ceremony scheduling with confirmation** | "schedule the retro for Thursday at 3 pm" is interpreted in the speaker's zone, checked for conflicts, confirmed through `ask_human` before anything is stored, and amendable with an audit trail | [`reports/scheduling_report.md`](reports/scheduling_report.md) |
 | **Proactive onboarding** | a newcomer gets a welcome DM, a cohort orientation when a role is assigned, and a follow-up later — each exactly once, delivered from a durable outbox that survives restarts and stops for deactivated cohorts | [`reports/onboarding_report.md`](reports/onboarding_report.md) |
 
+## Attachments
+
+People can attach files to a message — in a DM, or with a mention in a
+channel — and the assistant reads them before answering. The bytes stay in
+Mattermost; ai-core fetches each file as the bot, checks that it belongs to
+the triggering post and channel (a file id is guessable, and the bot can read
+more than the person can), decides what it is **from its bytes**, and refuses
+a file whose name contradicts its content.
+
+| Kind | Read as | Provenance the model cites |
+|---|---|---|
+| PDF with a text layer | text, per page (`pypdf`) | `[page N]` |
+| PDF without one (scanned) | the pages themselves, sent to a multimodal model | the file |
+| DOCX | paragraphs and tables (`python-docx`) | `[table N]` |
+| XLSX | every sheet, rows capped (`openpyxl`) | `[sheet Name]` |
+| CSV, TXT, MD | the text, UTF-8/UTF-16 only | the file |
+| PNG, JPEG, WebP | the image, scaled to `FILE_INPUT_MAX_IMAGE_EDGE`, sent to a multimodal model | the file |
+
+What the model sees is deliberately split in two. The checkpointed message
+carries the person's text plus one line per file (name, kind, id), so images
+and long extracts are never replayed into every later turn. The extract and
+the images join the model call **for the turn the file arrives in only**
+(`attachments.augment_llm_messages`); a later question reaches the stored text
+through `read_attachment` / `list_attachments`, which are scoped to the
+conversation the file arrived in. A turn carrying pictures or scanned pages
+moves to `FILE_INPUT_VISION_MODEL` when the current model cannot see, provided
+that model is in the fallback chain.
+
+Anything that was not read is said, not hidden: refused files, page and row
+caps, and text past `MESSAGE_MAX_INPUT_CHARS` appear as a notice above the
+reply. That setting defaults above Mattermost's own post limit, replacing the
+earlier silent 3,000-character cut. Every ceiling is in `.env.example` under
+`FILE_INPUT_*`; records and extracted text are deleted after
+`FILE_INPUT_RETENTION_DAYS` by a background sweep.
+
+Limits worth knowing: images and scanned pages are not stored, so they can be
+looked at only in the message they arrive with; a PDF's pages beyond
+`FILE_INPUT_MAX_PDF_PAGES` are neither read nor sent; and the refusal notices
+are written in English whatever the language of the conversation.
+
 ## Things that will bite you
 
 **The vector store is external, on purpose.** mem0 embeddings live in a hosted
