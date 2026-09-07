@@ -8,13 +8,17 @@ class DocumentLoader:
     def load(file_path: str) -> Dict[str, Any]:
         ext = os.path.splitext(file_path)[1].lower()
         if ext in [".md", ".txt"]:
-            return DocumentLoader._load_text(file_path)
+            document = DocumentLoader._load_text(file_path)
         elif ext == ".pdf":
-            return DocumentLoader._load_pdf(file_path)
+            document = DocumentLoader._load_pdf(file_path)
         elif ext == ".docx":
-            return DocumentLoader._load_docx(file_path)
+            document = DocumentLoader._load_docx(file_path)
         else:
             raise ValueError(f"Unsupported document format: {ext}")
+        document["file_path"] = file_path
+        for section in document["sections"]:
+            section["file_path"] = file_path
+        return document
 
     @staticmethod
     def _load_text(file_path: str) -> Dict[str, Any]:

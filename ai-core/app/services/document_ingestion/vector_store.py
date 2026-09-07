@@ -9,7 +9,10 @@ class PolicyVectorStore:
         async with session_scope() as session:
             for chunk_data, emb in zip(chunks, embeddings):
                 existing = await session.get(PolicyDocumentChunk, chunk_data["id"])
-                if not existing:
+                if existing:
+                    existing.doc_metadata = chunk_data["metadata"]
+                    continue
+                else:
                     chunk = PolicyDocumentChunk(
                         id=chunk_data["id"],
                         document_id=chunk_data["document_id"],

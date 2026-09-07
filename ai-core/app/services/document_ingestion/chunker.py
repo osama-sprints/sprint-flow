@@ -33,6 +33,7 @@ class PolicyChunker:
                         "section_title": sec.get("title", "Root"),
                         "page_number": sec.get("page", 1),
                         "audience": audience,
+                        "source_file_path": sec.get("file_path", doc_data.get("file_path")),
                     },
                 })
                 chunk_idx += 1

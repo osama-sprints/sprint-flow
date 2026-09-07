@@ -43,6 +43,28 @@ async def verify_audience_filter() -> None:
     logger.info("✓ learner semantic search excludes internal_operator chunks.")
 
 
+async def verify_source_file_provenance() -> None:
+    async with database_service.engine.connect() as conn:
+        result = await conn.execute(
+            text("SELECT document_id, metadata FROM policy_document_chunks "
+                 "WHERE document_id IN ('acc_faqs', 'ops_circle_chatbot_scripts')")
+        )
+        rows = result.fetchall()
+
+    expected_paths = {
+        "acc_faqs": "/app/data/sample_policies/_ACC FAQs Presentation (editable).pdf",
+        "ops_circle_chatbot_scripts": "/app/data/sample_policies/Ops Circle Chatbot Scripts.docx",
+    }
+    assert rows, "No policy chunks found for provenance verification"
+    for document_id, metadata in rows:
+        assert metadata.get("source_file_path") == expected_paths[document_id], (
+            f"Missing source_file_path metadata for {document_id}"
+        )
+        assert metadata.get("page_number") is not None, f"Missing page_number metadata for {document_id}"
+        assert metadata.get("section_title"), f"Missing section_title metadata for {document_id}"
+    logger.info("✓ source file paths are stored with page and section provenance.")
+
+
 def verify_chunker_configuration() -> None:
     chunker = PolicyChunker()
     assert chunker.chunk_size == settings.POLICY_CHUNK_SIZE, "Chunker does not use POLICY_CHUNK_SIZE"
@@ -98,6 +120,7 @@ async def verify_pipeline():
     )
     verify_chunker_configuration()
     await verify_idempotency()
+    await verify_source_file_provenance()
     await verify_audience_filter()
     await verify_pruning()
     logger.info("All ingestion verification assertions passed!")

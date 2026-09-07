@@ -65,6 +65,7 @@ To prevent unauthorized access to internal operational playbooks:
 Every stored chunk preserves granular provenance attributes within its JSONB metadata payload to support auditability and precise user-facing inline citations:
 
 - `document_name`: Source file name (e.g., `_ACC FAQs Presentation (editable).pdf`)[cite: 1].
+- `source_file_path`: Source path retained from document loading for complete provenance.
 - `section_title`: Section or slide heading (e.g., `"What are the fees for the program?"`)[cite: 1].
 - `page_number`: Exact page or slide index (e.g., Page `5`).
 - `audience`: Targeted access scope (`learner` vs `internal_operator`).
@@ -99,14 +100,15 @@ The pipeline and schema integrity are verified via `scripts/verify_ingestion.py`
 docker compose run --rm -e PYTHONPATH=/app --entrypoint /app/.venv/bin/python ai-core /app/scripts/verify_ingestion.py
 ```
 
-The verification run completed successfully inside the container and passed all six assertions:
+The verification run completed successfully inside the container and passed all seven assertions:
 
 1. **pgvector extension active** — the `vector` extension is installed and available.
 2. **Ingestion table created** — `policy_document_chunks` exists in PostgreSQL.
 3. **Audience isolation** — a semantic search with `audience="learner"` returns learner content only and filters out `internal_operator` chunks.
 4. **Idempotent re-run** — running ingestion consecutively produces zero chunk growth; the total remains unchanged.
 5. **Configured chunking** — `PolicyChunker` reads `POLICY_CHUNK_SIZE` and `POLICY_CHUNK_OVERLAP` from `app/core/config.py`.
-6. **Stale chunk pruning** — deleting a document removes its old chunks, after which the document can be re-ingested cleanly.
+6. **Source provenance** — every stored chunk retains `source_file_path` alongside `page_number` and `section_title`.
+7. **Stale chunk pruning** — deleting a document removes its old chunks, after which the document can be re-ingested cleanly.
 
 Representative output:
 
@@ -115,7 +117,39 @@ Representative output:
 ✓ policy_document_chunks table exists.
 ✓ chunker uses configured POLICY_CHUNK_SIZE and POLICY_CHUNK_OVERLAP.
 ✓ consecutive ingestion is idempotent (28 chunks).
+✓ source file paths are stored with page and section provenance.
 ✓ learner semantic search excludes internal_operator chunks.
 ✓ document pruning removed stale chunks and restored the document.
 All ingestion verification assertions passed!
 ```
+
+## 9. Trade-Off Analysis (`trade_offs`)
+
+The chunker uses a 50-character overlap with the default 500-character chunk size. This overlap preserves context across boundaries, which improves retrieval when a sentence or procedure spans two adjacent chunks. The cost is controlled duplication: for long sections, approximately 10% of the chunk text is repeated, increasing the number of embedding tokens and PostgreSQL rows compared with non-overlapping chunks.
+
+The overlap is intentionally character-based because the current chunker operates on extracted text before tokenization. It is a practical approximation of token overlap, not an exact token budget. Increasing overlap improves boundary continuity but increases embedding API payload size, latency, and spend; decreasing it reduces those costs but can weaken retrieval for boundary-spanning answers. The 500/50 defaults balance citation granularity, embedding request size, and response latency. Changes should be validated against chunk counts, retrieval quality, and embedding API timings.
+
+## 10. Downstream Retrieval Interface Contract (`retrieval_contract`)
+
+Downstream RAG consumers provide the following explicit inputs:
+
+- `query`: The user’s natural-language search query. The orchestration layer converts it to an embedding before vector search.
+- `audience`: Required access scope, currently `learner` or `internal_operator`; results must never cross this boundary.
+- `top_k`: Maximum number of results to return.
+- `similarity_threshold`: Minimum accepted similarity score; results below this threshold are discarded.
+
+Each returned result has this schema:
+
+```json
+{
+  "content": "Retrieved chunk text",
+  "document_id": "acc_faqs",
+  "audience": "learner",
+  "section_title": "What are the fees for the program?",
+  "page_number": 5,
+  "source_file_path": "/app/data/sample_policies/_ACC FAQs Presentation (editable).pdf",
+  "similarity_score": 0.87
+}
+```
+
+`source_file_path`, `page_number`, and `section_title` are retained in each chunk's metadata so downstream responses can produce complete, auditable citations. `similarity_score` is calculated by the vector retrieval adapter from the selected distance metric and is returned with the result rather than inferred by the caller.
