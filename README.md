@@ -288,34 +288,81 @@ a file whose name contradicts its content.
 
 | Kind | Read as | Provenance the model cites |
 |---|---|---|
-| PDF with a text layer | text, per page (`pypdf`) | `[page N]` |
-| PDF without one (scanned) | the pages themselves, sent to a multimodal model | the file |
+| PDF | page by page, on demand — see below | `(file.pdf, p. N)` |
 | DOCX | paragraphs and tables (`python-docx`) | `[table N]` |
 | XLSX | every sheet, rows capped (`openpyxl`) | `[sheet Name]` |
 | CSV, TXT, MD | the text, UTF-8/UTF-16 only | the file |
-| PNG, JPEG, WebP | the image, scaled to `FILE_INPUT_MAX_IMAGE_EDGE`, sent to a multimodal model | the file |
+| PNG, JPEG, WebP | the image, scaled, sent to a multimodal model | the file |
 
 What the model sees is deliberately split in two. The checkpointed message
 carries the person's text plus one line per file (name, kind, id), so images
 and long extracts are never replayed into every later turn. The extract and
 the images join the model call **for the turn the file arrives in only**
 (`attachments.augment_llm_messages`); a later question reaches the stored text
-through `read_attachment` / `list_attachments`, which are scoped to the
-conversation the file arrived in. A turn carrying pictures or scanned pages
-moves to `FILE_INPUT_VISION_MODEL` when the current model cannot see, provided
-that model is in the fallback chain.
+through `read_attachment` / `list_attachments`, scoped to the conversation the
+file arrived in. A turn carrying pictures moves to `FILE_INPUT_VISION_MODEL`
+when the current model cannot see, provided that model is in the fallback
+chain.
 
-Anything that was not read is said, not hidden: refused files, page and row
-caps, and text past `MESSAGE_MAX_INPUT_CHARS` appear as a notice above the
+### PDFs: agent-directed, page by page
+
+A PDF is never sent to a model whole and never transcribed in full up front.
+At intake its text layer is assessed per page and stored (`document_pages`),
+and the model is shown a *document card* — length, title, table of contents,
+which pages have a text layer — plus the opening pages. From there the agent
+works like a reader, through three tools scoped to the conversation:
+
+- `inspect_pdf(id)` — page count, metadata, contents, text coverage, what has
+  already been read in this conversation and the first unread page;
+- `search_pdf(id, query, cursor)` — where a phrase occurs in the text that is
+  *available* (text layer plus earlier transcriptions), scanned in windows,
+  with an explicit list of pages that could **not** be searched;
+- `read_pdf_pages(id, start, end, mode)` — a page or inclusive range, in
+  batches with a continuation. `auto` uses the text layer and transcribes only
+  pages that have none; `text` never transcribes; `vision` renders and
+  transcribes even where text exists (scans, tables, screenshots, diagrams).
+
+Pages are rendered with PDFium (`pypdfium2`) at a bounded size and transcribed
+one page per call by `PDF_OCR_MODEL` through the LiteLLM proxy — transcription
+only, never answering: the prompt demands a faithful copy in the original
+language, tables as Markdown, `[unreadable]` where it cannot read, and no
+summary or invention. Each transcription is cached per document revision,
+page, model and rendering settings, with its token usage, cost (when the proxy
+reports it) and latency; every access re-checks the conversation, cache hits
+included. `PDF_PAGE_BUDGET_PER_TURN` caps how many pages a turn may transcribe;
+native text and cached pages do not count, and a read that hits the cap says
+exactly which pages remain. Page numbers are physical and 1-based; printed
+labels are reported separately. Long reads stop when the person types "cancel", and what was already
+transcribed survives a cancel or a restart.
+
+### Configuration
+
+Anything that was not read is said, not hidden: refused files, caps that
+applied, and text past `MESSAGE_MAX_INPUT_CHARS` appear as a notice above the
 reply. That setting defaults above Mattermost's own post limit, replacing the
-earlier silent 3,000-character cut. Every ceiling is in `.env.example` under
-`FILE_INPUT_*`; records and extracted text are deleted after
-`FILE_INPUT_RETENTION_DAYS` by a background sweep.
+earlier silent 3,000-character cut. Records, extracted text and page caches are
+deleted after `FILE_INPUT_RETENTION_DAYS`.
 
-Limits worth knowing: images and scanned pages are not stored, so they can be
-looked at only in the message they arrive with; a PDF's pages beyond
-`FILE_INPUT_MAX_PDF_PAGES` are neither read nor sent; and the refusal notices
-are written in English whatever the language of the conversation.
+The pipeline's thresholds are **not** environment variables. They live in
+`ai-core/app/services/documents/policy.py` (`PdfPolicy`, `FileInputPolicy`)
+with documented defaults; a deployment sets only `FILE_INPUT_ENABLED`,
+`FILE_INPUT_MAX_FILE_BYTES`, `FILE_INPUT_RETENTION_DAYS`,
+`FILE_INPUT_VISION_MODEL`, `PDF_OCR_MODEL` and `PDF_PAGE_BUDGET_PER_TURN`. The
+following variables from the first attachments release were removed and now
+have policy defaults (no migration needed; a value left in `.env` is ignored):
+`FILE_INPUT_MAX_FILES`, `FILE_INPUT_MAX_TOTAL_BYTES`, `FILE_INPUT_MAX_PDF_PAGES`
+(there is no page cap any more), `FILE_INPUT_MAX_SHEET_ROWS`,
+`FILE_INPUT_MAX_INLINE_CHARS`, `FILE_INPUT_MAX_TOTAL_INLINE_CHARS`,
+`FILE_INPUT_MAX_STORED_CHARS`, `FILE_INPUT_MAX_IMAGE_PIXELS`,
+`FILE_INPUT_MAX_IMAGE_EDGE`, `FILE_INPUT_SCANNED_PDF_MIN_CHARS_PER_PAGE`,
+`FILE_INPUT_VISION_CAPABLE_PREFIXES`, `FILE_INPUT_DOWNLOAD_TIMEOUT` (the
+transfer timeout is `MATTERMOST_UPLOAD_TIMEOUT`) and
+`FILE_INPUT_RETENTION_SWEEP_SECONDS`.
+
+Limits worth knowing: images are not stored, so a later turn cannot look at
+them again; the search covers only text that exists (the text layer and pages
+already transcribed) and says so; and the refusal notices are written in
+English whatever the language of the conversation.
 
 ## Things that will bite you
 
