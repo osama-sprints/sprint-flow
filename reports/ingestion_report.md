@@ -86,7 +86,7 @@ To prevent duplicate records and redundant embedding API calls upon repeated scr
 To ensure stale or deleted policies do not persist in vector search results:
 
 - **Pruning Function**: `delete_document(document_id: str)` purges all associated chunk records from `policy_document_chunks`.
-- **Re-ingestion Workflow**: When a policy file is replaced, old records under that `document_id` are purged before new chunks are embedded and inserted.
+- **Re-ingestion Workflow**: Every call to `IngestionPipeline.ingest_document()` purges old records under that `document_id` before inserting the newly embedded chunks, so stale content cannot survive a document update.
 
 ---
 

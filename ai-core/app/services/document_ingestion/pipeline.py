@@ -18,6 +18,7 @@ class IngestionPipeline:
         chunks = self.chunker.chunk_document(doc_data, document_id, audience)
         texts = [c["content"] for c in chunks]
         embeddings = await self.embedder.get_embeddings(texts)
+        await self.remove_document(document_id)
         await self.vector_store.upsert_chunks(chunks, embeddings)
         return len(chunks)
 
