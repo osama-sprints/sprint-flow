@@ -169,7 +169,10 @@ class Settings:
         self.SESSION_NAMING_ENABLED = os.getenv("SESSION_NAMING_ENABLED", "true").lower() == "true"
         self.DEFAULT_LLM_TEMPERATURE = float(os.getenv("DEFAULT_LLM_TEMPERATURE", "0.2"))
         # Cap on the model's OUTPUT for a single reply.
-        self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "2000"))
+        # The completion ceiling. Thinking models count their reasoning tokens
+        # against it, so a ceiling sized for the visible reply alone starves
+        # the answer: after reading a document, 2,000 left sixty visible tokens.
+        self.MAX_TOKENS = int(os.getenv("MAX_TOKENS", "8192"))
         # Budget for how much prior conversation is replayed to the model.
         # Kept separate from MAX_TOKENS: these were one setting, so raising the
         # context window also silently raised the maximum reply length.

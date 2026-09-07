@@ -96,6 +96,7 @@ from app.utils import (
     extract_text_content,
     prepare_messages,
     process_llm_response,
+    was_cut_short,
 )
 from app.services import (
     attachments,
@@ -417,6 +418,37 @@ class LangGraphAgent:
                 raise Exception(f"failed to get llm response after trying all models: {str(e)}")
 
             response_message = process_llm_response(response_message)
+
+            # A reply that stopped because it hit the completion ceiling is
+            # not an answer. Thinking models spend part of that ceiling on
+            # reasoning, and after a long read the visible text can be a few
+            # dozen tokens. One retry with a wider ceiling, then a note.
+            if was_cut_short(response_message):
+                logger.warning(
+                    "reply_cut_by_completion_ceiling",
+                    session_id=thread_id,
+                    specialist=spec.node_name,
+                    ceiling=settings.MAX_TOKENS,
+                    visible_chars=len(str(response_message.content)),
+                )
+                try:
+                    retried = await executions.run_cancellable(
+                        self.llm_service.call(
+                            llm_messages,
+                            model_name=vision_model,
+                            tools=tool_group,
+                            max_completion_tokens=settings.MAX_TOKENS * 4,
+                        )
+                    )
+                    response_message = process_llm_response(retried)
+                except executions.ExecutionCancelled:
+                    raise
+                except Exception as retry_error:
+                    logger.warning("reply_ceiling_retry_failed", session_id=thread_id, error=str(retry_error))
+                if was_cut_short(response_message) and isinstance(response_message, AIMessage):
+                    response_message.content = (
+                        str(response_message.content).rstrip() + "\n\n_(The reply was cut short by the length limit.)_"
+                    )
             requested_tools = (
                 [call["name"] for call in response_message.tool_calls]
                 if isinstance(response_message, AIMessage)

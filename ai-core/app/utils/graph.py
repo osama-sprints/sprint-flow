@@ -2,6 +2,7 @@
 
 import tiktoken
 from langchain_core.messages import BaseMessage
+from langchain_core.messages import convert_to_messages
 from langchain_core.messages import trim_messages as _trim_messages
 
 from app.core.config import settings
@@ -83,6 +84,24 @@ def extract_text_content(content: str | list) -> str:
     return "".join(parts)
 
 
+def was_cut_short(response: BaseMessage) -> bool:
+    """Whether the provider stopped the reply at the completion ceiling.
+
+    Only a visible answer counts: a message that ends in tool calls is the
+    start of more work, not a cut reply.
+
+    Args:
+        response: The model's message.
+
+    Returns:
+        bool: True when ``finish_reason`` is ``length`` and there is no tool call.
+    """
+    metadata = getattr(response, "response_metadata", None) or {}
+    if getattr(response, "tool_calls", None):
+        return False
+    return str(metadata.get("finish_reason") or "").lower() in ("length", "max_tokens")
+
+
 def process_llm_response(response: BaseMessage) -> BaseMessage:
     """Normalise a raw LLM response so that ``response.content`` is always a plain string, regardless of the provider's content format.
 
@@ -102,8 +121,19 @@ def process_llm_response(response: BaseMessage) -> BaseMessage:
     return response
 
 
+def _is_human(message: dict) -> bool:
+    return message.get("role") == "user" or message.get("type") == "human"
+
+
 def prepare_messages(messages: list[Message], system_prompt: str) -> list[Message]:
     """Prepare the messages for the LLM.
+
+    The current turn — the person's latest message and everything the graph
+    has added since (tool calls and their results) — is never trimmed. Only
+    the history before it competes for ``MAX_HISTORY_TOKENS``. Trimming the
+    whole list used to drop this turn's tool results and, with them, the
+    person's message itself once a turn's reads outgrew the budget; the model
+    then saw only the system prompt and answered with a greeting.
 
     Args:
         messages (list[Message]): The messages to prepare.
@@ -112,16 +142,35 @@ def prepare_messages(messages: list[Message], system_prompt: str) -> list[Messag
     Returns:
         list[Message]: The prepared messages.
     """
+    dumped = dump_messages(messages)
+    split = next((i for i in range(len(dumped) - 1, -1, -1) if _is_human(dumped[i])), None)
+    history = dumped if split is None else dumped[:split]
+    current = [] if split is None else dumped[split:]
+
     try:
-        trimmed_messages = _trim_messages(
-            dump_messages(messages),
-            strategy="last",
-            token_counter=_count_tokens_tiktoken,
-            max_tokens=settings.MAX_HISTORY_TOKENS,
-            start_on="human",
-            include_system=False,
-            allow_partial=False,
+        current_tokens = _count_tokens_tiktoken(current) if current else 0
+        budget = max(0, settings.MAX_HISTORY_TOKENS - current_tokens)
+        if current_tokens > settings.MAX_HISTORY_TOKENS:
+            logger.warning(
+                "current_turn_exceeds_history_budget",
+                current_tokens=current_tokens,
+                budget=settings.MAX_HISTORY_TOKENS,
+                message_count=len(current),
+            )
+        trimmed_history = (
+            _trim_messages(
+                history,
+                strategy="last",
+                token_counter=_count_tokens_tiktoken,
+                max_tokens=budget,
+                start_on="human",
+                include_system=False,
+                allow_partial=False,
+            )
+            if history and budget > 0
+            else []
         )
+        trimmed_messages = list(trimmed_history) + list(convert_to_messages(current))
     except ValueError as e:
         # Handle unrecognized content blocks (e.g., reasoning blocks from GPT-5)
         if "Unrecognized content block type" in str(e):
