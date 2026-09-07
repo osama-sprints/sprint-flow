@@ -1,9 +1,13 @@
 """Turn an accepted file into what the model can read.
 
 Every reader here is synchronous and CPU-bound; the service runs them in a
-worker thread. Each returns an ``Extracted`` describing either text with its
-provenance markers (page, sheet, table) or a content block that hands the
-bytes to a multimodal model — images, and PDFs that have no text layer.
+worker thread. Each returns an ``Extracted`` describing text with its
+provenance markers (sheet, table) or a content block that hands the bytes to
+a multimodal model (images). A PDF is different: it is not read whole here.
+Its native text is assessed per page and stored, a short opening excerpt is
+shown to the model, and everything else — including rendering and
+transcribing pages without a text layer — happens on demand through the PDF
+tools, page by page.
 """
 
 import base64
@@ -27,17 +31,22 @@ from PIL import (
     Image,
     UnidentifiedImageError,
 )
-from pypdf import (
-    PdfReader,
-    PdfWriter,
-)
-from pypdf.errors import PdfReadError
 
-from app.core.config import settings
 from app.services.attachments.detect import (
     Detection,
     Unsupported,
     decode_text,
+)
+from app.services.documents import policy
+from app.services.documents.pdf import (
+    PageText,
+    PdfError,
+    extract_text,
+    has_labels,
+    metadata,
+    open_pdf,
+    outline,
+    page_count,
 )
 
 
@@ -53,6 +62,8 @@ class Extracted:
         block: OpenAI-style content block carrying the bytes, for visual content.
         visual: Whether ``block`` is set.
         notes: User-facing notes about caps that applied.
+        pages: Per-page native text (PDF), persisted by the caller.
+        metadata: Kind-specific facts (PDF title, contents, coverage).
     """
 
     text: str = ""
@@ -62,6 +73,8 @@ class Extracted:
     block: Optional[Dict[str, Any]] = None
     visual: bool = False
     notes: List[str] = field(default_factory=list)
+    pages: List[PageText] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 def _data_uri(mime: str, data: bytes) -> str:
@@ -70,65 +83,52 @@ def _data_uri(mime: str, data: bytes) -> str:
 
 def _pdf(name: str, data: bytes) -> Extracted:
     try:
-        reader = PdfReader(io.BytesIO(data))
-        if reader.is_encrypted:
-            try:
-                unlocked = bool(reader.decrypt(""))
-            except Exception:
-                unlocked = False
-            if not unlocked:
-                raise Unsupported("it is password-protected")
-        total = len(reader.pages)
-    except Unsupported:
-        raise
-    except (PdfReadError, ValueError, KeyError, TypeError, RecursionError) as e:
-        raise Unsupported("it could not be opened as a PDF") from e
+        pdf = open_pdf(data)
+    except PdfError as e:
+        raise Unsupported(
+            "it is password-protected" if e.kind == "encrypted" else "it could not be opened as a PDF"
+        ) from e
+    try:
+        total = page_count(pdf)
+        if total == 0:
+            raise Unsupported("it has no pages")
+        facts: Dict[str, Any] = {
+            "page_count": total,
+            **metadata(pdf),
+            "toc": outline(pdf, policy.PDF.toc_entries),
+            "labels": has_labels(pdf),
+        }
+        pages = extract_text(pdf, range(1, min(total, policy.PDF.intake_native_pages) + 1))
+    finally:
+        pdf.close()
 
-    if total == 0:
-        raise Unsupported("it has no pages")
+    with_text = [page for page in pages if page.usable]
+    facts["text_pages"] = len(with_text)
+    facts["assessed_pages"] = len(pages)
 
-    cap = settings.FILE_INPUT_MAX_PDF_PAGES
-    read = min(total, cap)
-    notes: List[str] = []
-    if total > cap:
-        notes.append(f"**{name}**: only the first {cap} of {total} pages were read.")
+    # The opening pages, so a short document answers without a tool call.
+    # Everything past this is reached page by page through the PDF tools.
+    inline: List[str] = []
+    budget = policy.PDF.intake_inline_chars
+    for page in pages[: policy.PDF.intake_inline_pages]:
+        if not page.usable or budget <= 0:
+            continue
+        piece = page.text[:budget]
+        budget -= len(piece)
+        inline.append(f"[page {page.page_no}]\n{piece}")
 
-    parts: List[str] = []
-    chars = 0
-    for index in range(read):
-        try:
-            page_text = (reader.pages[index].extract_text() or "").strip()
-        except Exception:
-            page_text = ""
-        chars += len(page_text)
-        parts.append(f"[page {index + 1}]\n{page_text}")
-
-    if chars / read < settings.FILE_INPUT_SCANNED_PDF_MIN_CHARS_PER_PAGE:
-        # No usable text layer: a scan, or a drawing. Hand the pages to the
-        # model as a document so it can read them itself.
-        payload = data
-        if total > cap:
-            writer = PdfWriter()
-            for index in range(read):
-                writer.add_page(reader.pages[index])
-            buffer = io.BytesIO()
-            writer.write(buffer)
-            payload = buffer.getvalue()
-        return Extracted(
-            extraction="pages",
-            summary=f"PDF, {total} page{'s' if total != 1 else ''}, no text layer — read as scanned pages",
-            page_count=total,
-            block={"type": "file", "file": {"filename": name, "file_data": _data_uri("application/pdf", payload)}},
-            visual=True,
-            notes=notes,
-        )
-
+    if len(pages) == total:
+        coverage = "no text layer" if not with_text else f"{len(with_text)} of {total} pages with a text layer"
+    else:
+        coverage = f"text layer assessed for the first {len(pages)} pages"
+    summary = f"PDF, {total} page{'s' if total != 1 else ''}, {coverage}"
     return Extracted(
-        text="\n\n".join(parts),
-        extraction="pypdf",
-        summary=f"PDF, {total} page{'s' if total != 1 else ''}",
+        text="\n\n".join(inline),
+        extraction="pdf",
+        summary=summary,
         page_count=total,
-        notes=notes,
+        pages=pages,
+        metadata=facts,
     )
 
 
@@ -157,7 +157,7 @@ def _xlsx(name: str, data: bytes) -> Extracted:
     except Exception as e:
         raise Unsupported("it could not be opened as an Excel workbook") from e
 
-    cap = settings.FILE_INPUT_MAX_SHEET_ROWS
+    cap = policy.FILE_INPUT.max_sheet_rows
     lines: List[str] = []
     notes: List[str] = []
     sheets = list(workbook.worksheets)
@@ -205,7 +205,7 @@ def _image(detection: Detection, data: bytes) -> Extracted:
     except (UnidentifiedImageError, OSError, ValueError) as e:
         raise Unsupported("it could not be decoded as an image") from e
 
-    limit = settings.FILE_INPUT_MAX_IMAGE_PIXELS
+    limit = policy.FILE_INPUT.max_image_pixels
     if width * height > limit:
         raise Unsupported(f"it is {width}×{height} pixels; the limit is {limit:,} pixels")
 
@@ -215,7 +215,7 @@ def _image(detection: Detection, data: bytes) -> Extracted:
         raise Unsupported("it could not be decoded as an image") from e
 
     source_format = (image.format or detection.extension).upper()
-    edge = settings.FILE_INPUT_MAX_IMAGE_EDGE
+    edge = policy.FILE_INPUT.max_image_edge
     if max(width, height) <= edge:
         payload, mime = data, detection.mime
     else:

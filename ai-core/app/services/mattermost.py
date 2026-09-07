@@ -532,7 +532,7 @@ class MattermostClient:
         received = 0
         try:
             async with client.stream(
-                "GET", f"/files/{file_id}", timeout=settings.FILE_INPUT_DOWNLOAD_TIMEOUT
+                "GET", f"/files/{file_id}", timeout=settings.MATTERMOST_UPLOAD_TIMEOUT
             ) as response:
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes():

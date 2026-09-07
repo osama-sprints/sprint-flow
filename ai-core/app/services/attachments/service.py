@@ -35,6 +35,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.models import (
     Attachment,
+    DocumentPage,
     utcnow,
 )
 from app.services.attachments.detect import (
@@ -43,7 +44,10 @@ from app.services.attachments.detect import (
     extension_of,
 )
 from app.services.attachments.extract import extract
+from app.services.documents import policy
+from app.services.documents.pdf import PageText
 from app.services.domain import attachments as store
+from app.services.domain import document_pages as pages_store
 from app.services.llm.registry import LLMRegistry
 from app.services.mattermost import (
     FileTooLarge,
@@ -70,6 +74,8 @@ class AcceptedAttachment:
         inline_chars: How much of ``text`` goes into this turn's model call.
         block: Content block for visual content.
         visual: Whether ``block`` is set.
+        metadata: Kind-specific facts (PDF title, contents, coverage).
+        page_texts: Per-page native text of a PDF, persisted after the record.
     """
 
     id: str
@@ -86,6 +92,8 @@ class AcceptedAttachment:
     inline_chars: int = 0
     block: Optional[Dict[str, Any]] = None
     visual: bool = False
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    page_texts: List[PageText] = field(default_factory=list)
 
 
 @dataclass
@@ -169,8 +177,10 @@ class TurnAttachments:
             lines.append("")
             lines.append(f"## [{number}] {item.name} — {item.summary}, {format_bytes(item.size_bytes)} — id {item.id}")
             if item.visual:
-                what = "an image" if item.kind == "image" else "a document of scanned pages"
-                lines.append(f"Provided to you as {what} in this message.")
+                lines.append("Provided to you as an image in this message.")
+                continue
+            if item.kind == "pdf":
+                lines.extend(_document_card(item))
                 continue
             shown = item.text[: item.inline_chars]
             if item.inline_chars >= item.text_chars:
@@ -184,6 +194,43 @@ class TurnAttachments:
             lines.append(shown)
             lines.append(">>>")
         return "\n".join(lines)
+
+
+def _document_card(item: AcceptedAttachment) -> List[str]:
+    """How a PDF is introduced: structure and coverage, then the opening pages."""
+    facts = item.metadata
+    lines: List[str] = []
+    details = [f"{facts.get('page_count', item.page_count)} pages"]
+    if facts.get("title"):
+        details.append(f"title: {facts['title']}")
+    if facts.get("author"):
+        details.append(f"author: {facts['author']}")
+    text_pages = facts.get("text_pages")
+    if text_pages is not None:
+        details.append(
+            "no text layer — pages must be transcribed" if text_pages == 0 else f"{text_pages} pages with a text layer"
+        )
+    lines.append("; ".join(details) + ".")
+    toc = facts.get("toc") or []
+    if toc:
+        shown = ", ".join(
+            f"{'  ' * int(e.get('level', 0))}{e.get('title')} (p.{e['page']})"
+            if e.get("page")
+            else str(e.get("title"))
+            for e in toc[:12]
+        )
+        lines.append(f"Contents: {shown}{' …' if len(toc) > 12 else ''}")
+    lines.append(
+        f'This PDF is read page by page: inspect_pdf("{item.id}") for structure and coverage, '
+        f'search_pdf("{item.id}", "…") to find pages, read_pdf_pages("{item.id}", start, end) to read them '
+        '(mode="vision" for scanned pages, tables or diagrams). Cite the pages you read.'
+    )
+    if item.text:
+        lines.append("Opening pages:")
+        lines.append("<<<")
+        lines.append(item.text)
+        lines.append(">>>")
+    return lines
 
 
 current_attachments: ContextVar[Optional[TurnAttachments]] = ContextVar("current_attachments", default=None)
@@ -221,11 +268,11 @@ def format_bytes(size: int) -> str:
 
 def _budget_inline(accepted: Sequence[AcceptedAttachment]) -> None:
     """Decide how much of each text goes into this turn's call, in order."""
-    remaining = settings.FILE_INPUT_MAX_TOTAL_INLINE_CHARS
+    remaining = policy.FILE_INPUT.max_total_inline_chars
     for item in accepted:
         if item.visual:
             continue
-        item.inline_chars = max(0, min(len(item.text), settings.FILE_INPUT_MAX_INLINE_CHARS, remaining))
+        item.inline_chars = max(0, min(len(item.text), policy.FILE_INPUT.max_inline_chars, remaining))
         remaining -= item.inline_chars
 
 
@@ -278,10 +325,13 @@ def _row(
         row.sha256 = accepted.sha256
         row.extraction = accepted.extraction
         row.page_count = accepted.page_count
-        row.text = accepted.text if not accepted.visual else None
+        # A PDF's text lives per page in document_pages; the record keeps only
+        # the facts the card is built from.
+        row.text = accepted.text if not (accepted.visual or accepted.kind == "pdf") else None
         row.text_chars = accepted.text_chars
         row.text_truncated = accepted.text_chars > len(accepted.text)
         row.visual = accepted.visual
+        row.metadata_ = dict(accepted.metadata)
     return row
 
 
@@ -323,7 +373,7 @@ async def ingest(
         turn.notices.append("Reading attachments is switched off on this assistant, so I answered the text only.")
         return turn
 
-    limit = settings.FILE_INPUT_MAX_FILES
+    limit = policy.FILE_INPUT.max_files
     if len(ids) > limit:
         turn.notices.append(
             f"Only the first {limit} of {len(ids)} attachments were read; send the others in a separate message."
@@ -381,11 +431,11 @@ async def ingest(
                 size_bytes=size,
             )
             continue
-        if total + size > settings.FILE_INPUT_MAX_TOTAL_BYTES:
+        if total + size > policy.FILE_INPUT.max_total_bytes:
             refuse(
                 file_id,
                 name,
-                f"together the attachments exceed {format_bytes(settings.FILE_INPUT_MAX_TOTAL_BYTES)}",
+                f"together the attachments exceed {format_bytes(policy.FILE_INPUT.max_total_bytes)}",
                 claimed_mime=claimed,
                 size_bytes=size,
             )
@@ -422,10 +472,12 @@ async def ingest(
             summary=extracted.summary,
             extraction=extracted.extraction,
             page_count=extracted.page_count,
-            text=extracted.text[: settings.FILE_INPUT_MAX_STORED_CHARS],
+            text=extracted.text[: policy.FILE_INPUT.max_stored_chars],
             text_chars=text_chars,
             block=extracted.block,
             visual=extracted.visual,
+            metadata=dict(extracted.metadata),
+            page_texts=list(extracted.pages),
         )
         turn.accepted.append(accepted)
         turn.notices.extend(extracted.notes)
@@ -448,6 +500,7 @@ async def ingest(
 
     try:
         await store.save_attachments(rows)
+        await _persist_pages(turn.accepted)
     except Exception as e:
         # The turn can still be answered from memory; only the read tools and
         # later turns lose this file.
@@ -456,6 +509,28 @@ async def ingest(
             turn.notices.append("I read the attachments but could not save them for later turns.")
 
     return turn
+
+
+async def _persist_pages(accepted: Sequence[AcceptedAttachment]) -> None:
+    """Store each PDF's native text per page, so search and reads start warm."""
+    rows: List[DocumentPage] = []
+    for item in accepted:
+        for page in item.page_texts:
+            rows.append(
+                DocumentPage(
+                    attachment_id=item.id,
+                    sha256=item.sha256,
+                    page_no=page.page_no,
+                    label=page.label,
+                    method="native",
+                    text=page.text,
+                    chars=page.chars,
+                    usable=page.usable,
+                    warnings=list(page.warnings),
+                )
+            )
+    if rows:
+        await pages_store.upsert_pages(rows)
 
 
 def state_text(text: str, turn: TurnAttachments, *, limit: Optional[int] = None) -> str:
@@ -522,7 +597,7 @@ def augment_llm_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]
 
 
 def _is_vision_capable(model_name: str) -> bool:
-    return any(model_name.startswith(prefix) for prefix in settings.FILE_INPUT_VISION_CAPABLE_PREFIXES)
+    return any(model_name.startswith(prefix) for prefix in policy.FILE_INPUT.vision_capable_prefixes)
 
 
 def vision_model_override(current_model: str) -> Optional[str]:

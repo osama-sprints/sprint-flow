@@ -23,7 +23,7 @@ the security boundary.
 from langchain_core.tools.base import BaseTool
 
 from .ask_human import ask_human
-from .attachments import ATTACHMENT_TOOLS
+from .attachments import ATTACHMENT_TOOLS as _ATTACHMENT_READ_TOOLS
 from .back_office import TOOLS as BACK_OFFICE_ADMIN_TOOLS
 from .back_office import (
     list_cohort_members,
@@ -37,7 +37,11 @@ from .mattermost_admin import (
     mattermost_find_or_create_team,
     mattermost_send_welcome_dm,
 )
+from .pdf import PDF_TOOLS
 from .rich_media import RICH_MEDIA_TOOLS
+
+# Reading back what the person attached: stored text, and PDFs page by page.
+ATTACHMENT_TOOLS: list[BaseTool] = [*_ATTACHMENT_READ_TOOLS, *PDF_TOOLS]
 
 # The general route keeps exactly the pre-Sprint-1 tool set, so falling back to
 # it is falling back to the behaviour that already worked.

@@ -87,6 +87,9 @@ class RecordingOp:
     def drop_table(self, name: str) -> None:
         self.dropped.append(name)
 
+    def drop_column(self, table: str, name: str) -> None:
+        """A later revision may also remove a column it added; not a table drop."""
+
 
 # ---------------------------------------------------------------------------
 # Import surface and table list

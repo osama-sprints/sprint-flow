@@ -31,6 +31,7 @@ from app.services import (
     executions,
     rich_media,
 )
+from app.services.documents import service as documents
 from app.services.agent import agent
 from app.services.identity import resolve_requester
 from app.services.mattermost import mattermost_client
@@ -254,6 +255,7 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
     )
     attachments.bind(turn_files)
     notices.extend(turn_files.notices)
+    documents.begin_turn()
     prompt_text = attachments.state_text(text, turn_files)
 
     try:
@@ -297,6 +299,7 @@ async def answer_and_reply(message: IncomingMessage, *, retry_of: str | None = N
         current_requester.set(None)
         rich_media.end_turn()
         attachments.clear()
+        documents.end_turn()
 
     posted = await _deliver(message, with_notices(reply, notices), envelope)
     await executions.finish(outcome, error=error, reply_post_id=posted.get("id") if posted else None)

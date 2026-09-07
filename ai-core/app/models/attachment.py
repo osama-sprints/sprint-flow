@@ -10,12 +10,17 @@ background sweep deletes what has lapsed, extracted text included.
 """
 
 from datetime import datetime
+from typing import (
+    Any,
+    Dict,
+)
 
 from sqlalchemy import (
     BigInteger,
     Index,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field
 
 from app.models.domain_base import (
@@ -51,6 +56,8 @@ class Attachment(DomainBase, table=True):
         text_chars: Length of the text before the cap.
         text_truncated: Whether the cap cut it.
         visual: Whether the content was handed to the model as an image or pages.
+        metadata_: Kind-specific facts — for a PDF its title, author, table of
+            contents and how many pages carry a text layer.
         expires_at: When the retention sweep may delete this row.
     """
 
@@ -85,4 +92,5 @@ class Attachment(DomainBase, table=True):
     text_chars: int = Field(default=0, nullable=False)
     text_truncated: bool = Field(default=False, nullable=False)
     visual: bool = Field(default=False, nullable=False)
+    metadata_: Dict[str, Any] = Field(default_factory=dict, sa_type=JSONB, sa_column_kwargs={"name": "metadata"})
     expires_at: datetime | None = Field(default=None, sa_type=TZ_DATETIME)

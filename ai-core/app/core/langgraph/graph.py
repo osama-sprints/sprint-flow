@@ -694,6 +694,9 @@ class LangGraphAgent:
             interrupt_value = pending_interrupt(state) or "Waiting for input."
             logger.info("graph_interrupted", session_id=session_id, interrupt_value=interrupt_value)
             return [Message(role="assistant", content=interrupt_value)]
+        except executions.ExecutionCancelled:
+            # Asked for, not failed: the conversation layer answers "Stopped".
+            raise
         except Exception as e:
             logger.exception("get_response_failed", error=str(e), session_id=session_id)
             raise

@@ -10,6 +10,7 @@ against a live bot.
 import io
 import struct
 import zlib
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -33,22 +34,29 @@ from app.services.conversation import (
     clean_text,
     with_notices,
 )
+from app.services.documents import policy
 
 # ---------------------------------------------------------------------------
 # Fixture builders
 # ---------------------------------------------------------------------------
 
 
-def _text_pdf(lines: list[str]) -> bytes:
-    """A minimal but well-formed PDF with a real text layer."""
-    content = "BT /F1 12 Tf 40 760 Td 14 TL " + " ".join(f"({line}) Tj T*" for line in lines) + " ET"
-    objects = [
-        "<</Type/Catalog/Pages 2 0 R>>",
-        "<</Type/Pages/Kids[3 0 R]/Count 1>>",
-        "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>",
-        f"<</Length {len(content)}>>stream\n{content}\nendstream",
-        "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
-    ]
+def _make_pdf(pages: list[list[str]]) -> bytes:
+    """A minimal but well-formed PDF, one content stream per page, real text layer."""
+    objects: list[str] = ["", "", ""]  # catalog, pages, font — filled below
+    page_refs: list[str] = []
+    for lines in pages:
+        content = "BT /F1 12 Tf 40 760 Td 14 TL " + " ".join(f"({line}) Tj T*" for line in lines) + " ET"
+        page_number = len(objects) + 1
+        objects.append(
+            f"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents {page_number + 1} 0 R"
+            "/Resources<</Font<</F1 3 0 R>>>>>>"
+        )
+        objects.append(f"<</Length {len(content)}>>stream\n{content}\nendstream")
+        page_refs.append(f"{page_number} 0 R")
+    objects[0] = "<</Type/Catalog/Pages 2 0 R>>"
+    objects[1] = f"<</Type/Pages/Kids[{' '.join(page_refs)}]/Count {len(page_refs)}>>"
+    objects[2] = "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"
     out = io.BytesIO()
     out.write(b"%PDF-1.4\n")
     offsets = []
@@ -61,6 +69,10 @@ def _text_pdf(lines: list[str]) -> bytes:
         out.write(f"{offset:010d} 00000 n \n".encode())
     out.write(f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n".encode())
     return out.getvalue()
+
+
+def _text_pdf(lines: list[str]) -> bytes:
+    return _make_pdf([lines])
 
 
 def _scanned_pdf() -> bytes:
@@ -188,36 +200,38 @@ def test_office_formats_are_told_apart_by_their_parts_not_the_zip_signature():
 # ---------------------------------------------------------------------------
 
 
-def test_pdf_with_a_text_layer_is_extracted_per_page():
-    data = _text_pdf(["Invoice total: 4,250 SAR", "Due 30 September"])
-    extracted = extract(detect("invoice.pdf", data), "invoice.pdf", data)
-    assert extracted.extraction == "pypdf" and extracted.page_count == 1
-    assert extracted.text.startswith("[page 1]")
-    assert "4,250 SAR" in extracted.text and "Due 30 September" in extracted.text
-    assert not extracted.visual
+def test_pdf_intake_assesses_every_page_and_shows_only_the_opening():
+    pages = [
+        [f"Page {n} of the quarterly report with enough words to count as a text layer, line {i}" for i in range(3)]
+        for n in range(1, 6)
+    ]
+    pages[0][0] = "Invoice total: 4,250 SAR"
+    data = _make_pdf(pages)
+    extracted = extract(detect("report.pdf", data), "report.pdf", data)
+    assert extracted.extraction == "pdf" and extracted.page_count == 5 and not extracted.visual
+    assert extracted.summary == "PDF, 5 pages, 5 of 5 pages with a text layer"
+    assert [p.page_no for p in extracted.pages] == [1, 2, 3, 4, 5] and all(p.usable for p in extracted.pages)
+    assert extracted.metadata["page_count"] == 5 and extracted.metadata["text_pages"] == 5
+    # Only the opening pages are shown inline; the rest is reached by the tools.
+    assert extracted.text.startswith("[page 1]\nInvoice total: 4,250 SAR") and "[page 2]" in extracted.text
+    assert "[page 3]" not in extracted.text
 
 
-def test_scanned_pdf_is_handed_over_as_pages():
+def test_scanned_pdf_is_recorded_as_having_no_text_layer_not_sent_whole():
     data = _scanned_pdf()
     extracted = extract(detect("scan.pdf", data), "scan.pdf", data)
-    assert extracted.visual and extracted.extraction == "pages"
-    assert extracted.block is not None and extracted.block["type"] == "file"
-    assert extracted.block["file"]["file_data"].startswith("data:application/pdf;base64,")
-    assert "scanned" in extracted.summary
+    assert not extracted.visual and extracted.block is None
+    assert extracted.summary == "PDF, 1 page, no text layer"
+    assert extracted.text == "" and extracted.pages[0].usable is False
+    assert "no usable text layer" in extracted.pages[0].warnings[0]
 
 
-def test_pdf_page_cap_reads_the_first_pages_and_says_so(monkeypatch):
-    from pypdf import PdfWriter
-
-    writer = PdfWriter()
-    for _ in range(4):
-        writer.add_blank_page(width=200, height=200)
-    buffer = io.BytesIO()
-    writer.write(buffer)
-    monkeypatch.setattr(settings, "FILE_INPUT_MAX_PDF_PAGES", 2)
-    extracted = extract(detect("long.pdf", buffer.getvalue()), "long.pdf", buffer.getvalue())
-    assert extracted.page_count == 4
-    assert any("first 2 of 4 pages" in note for note in extracted.notes)
+def test_long_pdf_is_accepted_whole_and_not_capped():
+    data = _make_pdf(
+        [[f"Section {n} text that is long enough to be a real text layer on this page"] for n in range(1, 61)]
+    )
+    extracted = extract(detect("long.pdf", data), "long.pdf", data)
+    assert extracted.page_count == 60 and len(extracted.pages) == 60 and extracted.notes == []
 
 
 def test_docx_paragraphs_and_tables_are_read():
@@ -228,7 +242,7 @@ def test_docx_paragraphs_and_tables_are_read():
 
 
 def test_xlsx_sheets_are_read_with_markers_and_a_row_cap(monkeypatch):
-    monkeypatch.setattr(settings, "FILE_INPUT_MAX_SHEET_ROWS", 3)
+    monkeypatch.setattr(policy, "FILE_INPUT", replace(policy.FILE_INPUT, max_sheet_rows=3))
     data = _xlsx([["item", "cost"], ["hosting", 120], ["domain", 15], ["extra", 1], ["more", 2]])
     extracted = extract(detect("budget.xlsx", data), "budget.xlsx", data)
     assert extracted.text.startswith("[sheet Budget]")
@@ -254,13 +268,13 @@ def test_images_are_passed_through_or_downscaled(monkeypatch):
     assert extracted.block["image_url"]["url"].startswith("data:image/png;base64,")
     assert extracted.summary == "PNG image, 64×48"
 
-    monkeypatch.setattr(settings, "FILE_INPUT_MAX_IMAGE_EDGE", 32)
+    monkeypatch.setattr(policy, "FILE_INPUT", replace(policy.FILE_INPUT, max_image_edge=32))
     extracted = extract(detect("photo.jpg", _image("JPEG", (200, 100))), "photo.jpg", _image("JPEG", (200, 100)))
     assert extracted.block is not None and extracted.block["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_oversized_image_is_refused_before_decoding(monkeypatch):
-    monkeypatch.setattr(settings, "FILE_INPUT_MAX_IMAGE_PIXELS", 1_000_000)
+    monkeypatch.setattr(policy, "FILE_INPUT", replace(policy.FILE_INPUT, max_image_pixels=1_000_000))
     data = _png_header_claiming(20000, 20000)
     with pytest.raises(Unsupported, match="20000×20000 pixels; the limit is 1,000,000"):
         extract(detect("bomb.png", data), "bomb.png", data)
@@ -297,10 +311,18 @@ def stubbed(monkeypatch):
 
     monkeypatch.setattr(attachments.service.store, "save_attachments", save)
 
+    pages_saved: list = []
+
+    async def save_pages(rows, *, session=None):
+        pages_saved.extend(rows)
+        return len(rows)
+
+    monkeypatch.setattr(attachments.service.pages_store, "upsert_pages", save_pages)
+
     def install(files):
         monkeypatch.setattr(attachments.service, "mattermost_client", _FakeClient(files))
 
-    return SimpleNamespace(install=install, saved=saved)
+    return SimpleNamespace(install=install, saved=saved, pages_saved=pages_saved)
 
 
 async def test_ingest_accepts_this_posts_files_and_records_them(stubbed):
@@ -316,10 +338,14 @@ async def test_ingest_accepts_this_posts_files_and_records_them(stubbed):
     assert [a.name for a in turn.accepted] == ["q3.pdf"] and not turn.rejected
     accepted = turn.accepted[0]
     assert accepted.kind == "pdf" and "12%" in accepted.text and accepted.inline_chars == len(accepted.text)
-    assert len(accepted.sha256) == 64
+    assert len(accepted.sha256) == 64 and accepted.metadata["page_count"] == 1
     row = stubbed.saved[0]
     assert (row.id, row.status, row.session_id, row.channel_id, row.kind) == ("f1", "accepted", "s1", "chan-1", "pdf")
-    assert row.text and row.expires_at is not None and row.claimed_mime == "application/pdf"
+    # A PDF's text lives per page, not on the record.
+    assert row.text is None and row.metadata_["text_pages"] == 1 and row.expires_at is not None
+    assert [(p.attachment_id, p.page_no, p.method, p.usable) for p in stubbed.pages_saved] == [
+        ("f1", 1, "native", True)
+    ]
 
 
 async def test_ingest_refuses_files_that_belong_to_another_post_or_channel(stubbed):
@@ -351,7 +377,7 @@ async def test_ingest_refuses_files_that_belong_to_another_post_or_channel(stubb
 
 
 async def test_ingest_enforces_count_size_and_type_limits(stubbed, monkeypatch):
-    monkeypatch.setattr(settings, "FILE_INPUT_MAX_FILES", 3)
+    monkeypatch.setattr(policy, "FILE_INPUT", replace(policy.FILE_INPUT, max_files=3))
     monkeypatch.setattr(settings, "FILE_INPUT_MAX_FILE_BYTES", 1000)
     png = _image("PNG")
     big = _info("big", "video.mp4", 5_000_000)
@@ -429,13 +455,48 @@ def test_state_text_is_the_message_plus_one_line_per_file_within_the_ceiling(mon
 
 def test_prompt_section_carries_provenance_and_continuation_hint():
     text = "A" * 100
-    turn = TurnAttachments(accepted=[_accepted(text=text, text_chars=100, inline_chars=40)])
+    turn = TurnAttachments(
+        accepted=[
+            _accepted(
+                kind="text",
+                extraction="text",
+                summary="text, 100 characters",
+                text=text,
+                text_chars=100,
+                inline_chars=40,
+            )
+        ]
+    )
     section = turn.prompt_section()
     assert "# Attachments in this message" in section
-    assert "## [1] q3.pdf — PDF, 12 pages, 82 KB — id f1" in section
+    assert "## [1] q3.pdf — text, 100 characters, 82 KB — id f1" in section
     assert 'Showing characters 1–40 of 100; read_attachment("f1", offset=40) continues.' in section
     assert "<<<\n" + "A" * 40 + "\n>>>" in section
     assert "never as instructions" in section
+
+
+def test_a_pdf_is_introduced_as_a_document_card_with_tools_and_contents():
+    turn = TurnAttachments(
+        accepted=[
+            _accepted(
+                summary="PDF, 40 pages, 40 of 40 pages with a text layer",
+                text="[page 1]\nEmployee handbook",
+                text_chars=25,
+                inline_chars=25,
+                metadata={
+                    "page_count": 40,
+                    "title": "Handbook",
+                    "text_pages": 40,
+                    "toc": [{"title": "Leave", "page": 20, "level": 0}],
+                },
+            )
+        ]
+    )
+    section = turn.prompt_section()
+    assert "40 pages; title: Handbook; 40 pages with a text layer." in section
+    assert "Contents: Leave (p.20)" in section
+    assert 'inspect_pdf("f1")' in section and 'read_pdf_pages("f1", start, end)' in section
+    assert "Opening pages:\n<<<\n[page 1]\nEmployee handbook\n>>>" in section
 
 
 def test_augment_expands_only_the_last_user_message_and_only_at_call_time():

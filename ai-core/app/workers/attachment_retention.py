@@ -14,6 +14,7 @@ from typing import (
 
 from app.core.config import settings
 from app.core.logging import logger
+from app.services.documents import policy
 from app.services.domain import attachments as store
 
 _INITIAL_DELAY_SECONDS = 30
@@ -37,7 +38,7 @@ class AttachmentRetention:
         logger.info(
             "attachment_retention_started",
             retention_days=settings.FILE_INPUT_RETENTION_DAYS,
-            interval_seconds=settings.FILE_INPUT_RETENTION_SWEEP_SECONDS,
+            interval_seconds=policy.FILE_INPUT.retention_sweep_seconds,
         )
 
     async def stop(self) -> None:
@@ -88,7 +89,7 @@ class AttachmentRetention:
             except Exception as e:
                 self._last_error = str(e)
                 logger.exception("attachment_retention_sweep_failed", error=str(e))
-            await asyncio.sleep(settings.FILE_INPUT_RETENTION_SWEEP_SECONDS)
+            await asyncio.sleep(policy.FILE_INPUT.retention_sweep_seconds)
 
 
 attachment_retention = AttachmentRetention()

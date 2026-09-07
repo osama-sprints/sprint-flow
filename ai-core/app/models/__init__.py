@@ -12,6 +12,10 @@ from app.models.ceremony_type import CeremonyType
 from app.models.cohort import Cohort
 from app.models.cohort_membership import CohortMembership
 from app.models.daily_standup import DailyStandup
+from app.models.document_page import (
+    DocumentPage,
+    DocumentPageRead,
+)
 from app.models.domain_base import (
     DomainBase,
     require_aware,
@@ -43,7 +47,13 @@ INITIAL_DOMAIN_TABLES: tuple[str, ...] = (
 )
 
 # Tables added after 0001, newest revision last.
-LATER_DOMAIN_TABLES: tuple[str, ...] = ("rich_artifacts", "attachments", "executions")
+LATER_DOMAIN_TABLES: tuple[str, ...] = (
+    "rich_artifacts",
+    "attachments",
+    "executions",
+    "document_pages",
+    "document_page_reads",
+)
 
 # Every application-owned table, in dependency order. Verification scripts
 # compare against this list.
@@ -60,6 +70,8 @@ __all__ = [
     "Cohort",
     "CohortMembership",
     "DailyStandup",
+    "DocumentPage",
+    "DocumentPageRead",
     "DomainBase",
     "EscalationTicket",
     "Execution",

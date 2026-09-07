@@ -55,8 +55,10 @@ async def list_attachments() -> str:
         detail = f"{row.kind}, {format_bytes(row.size_bytes)}"
         if row.page_count:
             detail += f", {row.page_count} page(s)/sheet(s)"
-        if row.visual:
-            detail += "; image or scanned pages, shown only in its own message"
+        if row.kind == "pdf":
+            detail += "; read page by page with inspect_pdf / search_pdf / read_pdf_pages"
+        elif row.visual:
+            detail += "; image, shown only in its own message"
         elif row.text:
             detail += f"; {row.text_chars:,} characters of text stored"
         lines.append(f"- {row.name} — {detail} — id {row.id}")
@@ -91,6 +93,11 @@ async def read_attachment(attachment_id: str, offset: int = 0, length: int = 800
     if row is None or row.status != "accepted":
         return tool_result(
             ResultCode.ATTACHMENT_NOT_FOUND, "No readable file with that id exists in this conversation."
+        )
+    if row.kind == "pdf":
+        return tool_result(
+            ResultCode.ATTACHMENT_UNAVAILABLE,
+            f"{row.name} is a PDF and is read page by page: use inspect_pdf, search_pdf and read_pdf_pages with this id.",
         )
     if row.visual or not row.text:
         return tool_result(

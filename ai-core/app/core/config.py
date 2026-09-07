@@ -282,42 +282,25 @@ class Settings:
         # artifact. Empty means artifact reads are refused outright.
         self.RICH_MEDIA_PLUGIN_TOKEN = os.getenv("RICH_MEDIA_PLUGIN_TOKEN", "")
 
-        # Files and images people attach to a message. Every ceiling is a
-        # product decision, not a technical one, so each is configurable; the
-        # defaults suit a team chat rather than a document pipeline.
+        # Files and images people attach to a message. Every threshold of the
+        # pipeline (pages per read, render size, inline text, image edge…)
+        # lives in code with documented defaults — app/services/documents/
+        # policy.py — so a deployment decides only what a deployment must.
         self.FILE_INPUT_ENABLED = os.getenv("FILE_INPUT_ENABLED", "true").lower() == "true"
-        self.FILE_INPUT_MAX_FILES = int(os.getenv("FILE_INPUT_MAX_FILES", "5"))
         self.FILE_INPUT_MAX_FILE_BYTES = int(os.getenv("FILE_INPUT_MAX_FILE_BYTES", str(20 * 1024 * 1024)))
-        self.FILE_INPUT_MAX_TOTAL_BYTES = int(os.getenv("FILE_INPUT_MAX_TOTAL_BYTES", str(40 * 1024 * 1024)))
-        self.FILE_INPUT_MAX_PDF_PAGES = int(os.getenv("FILE_INPUT_MAX_PDF_PAGES", "50"))
-        self.FILE_INPUT_MAX_SHEET_ROWS = int(os.getenv("FILE_INPUT_MAX_SHEET_ROWS", "500"))
-        # How much extracted text goes into the model call inline, per file and
-        # per message. The rest is stored and reachable through read_attachment.
-        self.FILE_INPUT_MAX_INLINE_CHARS = int(os.getenv("FILE_INPUT_MAX_INLINE_CHARS", "12000"))
-        self.FILE_INPUT_MAX_TOTAL_INLINE_CHARS = int(os.getenv("FILE_INPUT_MAX_TOTAL_INLINE_CHARS", "40000"))
-        self.FILE_INPUT_MAX_STORED_CHARS = int(os.getenv("FILE_INPUT_MAX_STORED_CHARS", "400000"))
-        # Images: a decompression-bomb ceiling, and the longest edge sent to
-        # the model (larger pictures are scaled down before encoding).
-        self.FILE_INPUT_MAX_IMAGE_PIXELS = int(os.getenv("FILE_INPUT_MAX_IMAGE_PIXELS", str(30_000_000)))
-        self.FILE_INPUT_MAX_IMAGE_EDGE = int(os.getenv("FILE_INPUT_MAX_IMAGE_EDGE", "2048"))
-        # A PDF whose text layer averages fewer characters per page than this
-        # is treated as scanned and handed to the model as pages, not text.
-        self.FILE_INPUT_SCANNED_PDF_MIN_CHARS_PER_PAGE = int(
-            os.getenv("FILE_INPUT_SCANNED_PDF_MIN_CHARS_PER_PAGE", "40")
-        )
-        # Where a turn carrying images or scanned pages goes when the current
-        # model cannot see. It must be in the model chain (default + fallbacks)
-        # to be usable; otherwise the turn stays on the current model.
-        self.FILE_INPUT_VISION_MODEL = os.getenv("FILE_INPUT_VISION_MODEL", "gemini/gemini-3.5-flash")
-        self.FILE_INPUT_VISION_CAPABLE_PREFIXES = parse_list_from_env(
-            "FILE_INPUT_VISION_CAPABLE_PREFIXES",
-            ["gemini/", "gemini-", "gpt-4o", "gpt-4.1", "gpt-5", "openai/gpt-4o", "openai/gpt-4.1", "openai/gpt-5"],
-        )
-        self.FILE_INPUT_DOWNLOAD_TIMEOUT = int(os.getenv("FILE_INPUT_DOWNLOAD_TIMEOUT", "120"))
-        # Extracted text and the record of each file are deleted after this
-        # long. The bytes themselves are never copied out of Mattermost.
+        # Records and extracted text are deleted after this long; the bytes
+        # themselves are never copied out of Mattermost.
         self.FILE_INPUT_RETENTION_DAYS = int(os.getenv("FILE_INPUT_RETENTION_DAYS", "30"))
-        self.FILE_INPUT_RETENTION_SWEEP_SECONDS = int(os.getenv("FILE_INPUT_RETENTION_SWEEP_SECONDS", "21600"))
+        # Where a turn carrying images goes when the current model cannot
+        # see. It must be in the model chain (default + fallbacks) to apply.
+        self.FILE_INPUT_VISION_MODEL = os.getenv("FILE_INPUT_VISION_MODEL", "gemini/gemini-3.5-flash")
+
+        # PDFs are read page by page on demand. Two decisions are the
+        # deployment's: which model transcribes rendered pages, and how many
+        # pages one turn may render and transcribe (a cost ceiling; native
+        # text is not counted, and cached pages are free).
+        self.PDF_OCR_MODEL = os.getenv("PDF_OCR_MODEL", "gemini/gemini-3.1-flash-lite")
+        self.PDF_PAGE_BUDGET_PER_TURN = int(os.getenv("PDF_PAGE_BUDGET_PER_TURN", "60"))
 
         # Longest message text accepted for one turn. Mattermost caps a post
         # at 16,383 characters, so the default means nothing a person can type

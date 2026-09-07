@@ -70,7 +70,7 @@ EXPECTED_NODES = {
 
 # Shared by every group on purpose: they stage visual output and write nothing.
 # Read-only access to files the person attached; shared by every group.
-ATTACHMENT_TOOL_NAMES = {"list_attachments", "read_attachment"}
+ATTACHMENT_TOOL_NAMES = {"list_attachments", "read_attachment", "inspect_pdf", "search_pdf", "read_pdf_pages"}
 
 RICH_MEDIA_TOOL_NAMES = {
     "send_mermaid_diagram",
