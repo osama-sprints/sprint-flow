@@ -42,6 +42,7 @@ from app.services.documents import policy
 from app.services.documents.pdf import (
     PageText,
     PdfError,
+    close_pdf,
     extract_text,
     has_labels,
     metadata,
@@ -99,7 +100,7 @@ def _pdf(name: str, data: bytes) -> Extracted:
         }
         pages = extract_text(pdf, range(1, min(total, policy.PDF.intake_native_pages) + 1))
     finally:
-        pdf.close()
+        close_pdf(pdf)
 
     with_text = [page for page in pages if page.usable]
     facts["text_pages"] = len(with_text)

@@ -46,6 +46,7 @@ from app.services.documents.pdf import (
     DocumentCache,
     PageText,
     PdfError,
+    close_pdf,
     compress_ranges,
     extract_text,
     has_labels,
@@ -193,6 +194,7 @@ class SearchResult:
         hits: Matches, in page order.
         searched: ``(first, last)`` page scanned.
         unsearched: Pages in the window with no readable text, as ranges.
+        empty_pages: Pages already transcribed and found blank or unreadable.
         transcribed_now: Pages transcribed by this call so they could be searched.
         budget_skipped: Pages left untranscribed because the turn's budget ran out.
         next_cursor: Page to continue from, when pages remain.
@@ -206,6 +208,7 @@ class SearchResult:
     hits: List[Hit]
     searched: tuple[int, int]
     unsearched: str
+    empty_pages: str
     transcribed_now: str
     budget_skipped: str
     next_cursor: Optional[int]
@@ -272,7 +275,7 @@ async def _native_pages(row: Attachment, data: bytes, page_numbers: List[int]) -
             try:
                 return extract_text(pdf, missing)
             finally:
-                pdf.close()
+                close_pdf(pdf)
 
         rows = [_native_row(row, page) for page in await asyncio.to_thread(_extract)]
         await pages_store.upsert_pages(rows)
@@ -281,31 +284,53 @@ async def _native_pages(row: Attachment, data: bytes, page_numbers: List[int]) -
 
 
 async def _transcribe_page(row: Attachment, data: bytes, page_no: int, label: Optional[str]) -> DocumentPage:
+    """Render and transcribe one page.
+
+    Never raises: a failure becomes an unusable row carrying the reason, which
+    the caller shows this turn but does not cache.
+
+    Args:
+        row: The document.
+        data: Its bytes.
+        page_no: Physical page, 1-based.
+        label: Printed label, when known.
+
+    Returns:
+        DocumentPage: The vision row, usable or not.
+    """
     model = settings.PDF_OCR_MODEL
     started = time.monotonic()
+    warnings: List[str] = []
+    latency_ms: Optional[int] = None
+    text, usable = "", False
+    usage: Dict[str, Any] = {"model": model}
 
     def _render() -> bytes:
         pdf = open_pdf(data)
         try:
             return render_page(pdf, page_no)
         finally:
-            pdf.close()
+            close_pdf(pdf)
 
-    image = await asyncio.to_thread(_render)
-    warnings: List[str] = []
-    latency_ms: Optional[int] = None
     try:
-        result = await ocr.transcribe(image, model=model, page_no=page_no)
-        text = result.text
-        usage = result.usage
-        latency_ms = result.latency_ms
-        if ocr.UNREADABLE_MARKER in text:
-            warnings.append("some text on this page was unreadable")
-        usable = text.strip() != ocr.EMPTY_PAGE_MARKER
+        image = await asyncio.to_thread(_render)
     except Exception as e:
-        logger.warning("pdf_page_transcription_failed", attachment_id=row.id, page=page_no, error=str(e))
-        text, usage, usable = "", {"model": model, "error": str(e)[:200]}, False
-        warnings.append("the page could not be transcribed")
+        logger.warning("pdf_page_render_failed", attachment_id=row.id, page=page_no, error=str(e))
+        usage["error"] = f"render: {str(e)[:180]}"
+        warnings.append("the page could not be rendered")
+    else:
+        try:
+            result = await ocr.transcribe(image, model=model, page_no=page_no)
+            text = result.text
+            usage = result.usage
+            latency_ms = result.latency_ms
+            if ocr.UNREADABLE_MARKER in text:
+                warnings.append("some text on this page was unreadable")
+            usable = text.strip() != ocr.EMPTY_PAGE_MARKER
+        except Exception as e:
+            logger.warning("pdf_page_transcription_failed", attachment_id=row.id, page=page_no, error=str(e))
+            usage["error"] = str(e)[:200]
+            warnings.append("the page could not be transcribed")
     return DocumentPage(
         attachment_id=row.id,
         sha256=row.sha256,
@@ -322,6 +347,18 @@ async def _transcribe_page(row: Attachment, data: bytes, page_no: int, label: Op
         # The model call's own latency; rendering is accounted separately.
         latency_ms=latency_ms if latency_ms is not None else int((time.monotonic() - started) * 1000),
     )
+
+
+def transcription_failed(page: DocumentPage) -> bool:
+    """Whether a vision row records a failed attempt rather than a page's content.
+
+    Args:
+        page: A vision row.
+
+    Returns:
+        bool: True when the transcription or the render failed.
+    """
+    return bool((page.usage or {}).get("error"))
 
 
 def _bound(text: str, limit: int) -> tuple[str, bool]:
@@ -358,7 +395,7 @@ async def inspect(document_id: str) -> Dict[str, Any]:
                     "labels": has_labels(pdf),
                 }
             finally:
-                pdf.close()
+                close_pdf(pdf)
 
         facts = await asyncio.to_thread(_facts)
         total = int(facts["page_count"])
@@ -439,10 +476,13 @@ async def _transcribe_many(
                 await executions.progress(f"Reading page {page_no} of {row.name}")
                 label = native[page_no].label if page_no in native else None
                 result = await executions.run_cancellable(_transcribe_page(row, data, page_no, label))
-                # Cache as we go: a cancel or a crash keeps what was paid for.
-                await pages_store.upsert_pages([result])
                 cached[page_no] = result
                 done_pages.append(page_no)
+                # Cache as we go: a cancel or a crash keeps what was paid for.
+                # A failure is shown this turn but never cached — the next
+                # request must try again, not inherit the outage.
+                if not transcription_failed(result):
+                    await pages_store.upsert_pages([result])
 
         await asyncio.gather(*(_one(n) for n in allowed))
     return cached, sorted(done_pages), skipped
@@ -458,12 +498,14 @@ async def _open_total(row: Attachment, data: bytes) -> int:
         try:
             return page_count(pdf)
         finally:
-            pdf.close()
+            close_pdf(pdf)
 
     return await asyncio.to_thread(_count)
 
 
-async def read_pages(document_id: str, start: int, end: Optional[int], mode: str = "auto") -> ReadResult:
+async def read_pages(
+    document_id: str, start: int, end: Optional[int], mode: str = "auto", *, char_offset: int = 0
+) -> ReadResult:
     """Read a page or an inclusive range.
 
     Args:
@@ -471,6 +513,8 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
         start: First page, 1-based.
         end: Last page, inclusive; None for a single page.
         mode: auto (native text, vision where there is none), text, or vision.
+        char_offset: For a single page whose text was cut by the result ceiling,
+            the character to continue from.
 
     Returns:
         ReadResult: Pages with provenance, continuation and coverage.
@@ -531,11 +575,18 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
         if chosen is None:
             pages.append(PageResult(page_no=n, label=None, method="none", text="", warnings=["nothing could be read"]))
             continue
-        text, cut = _bound(chosen.text, min(policy.PDF.result_chars_per_page, remaining_chars))
+        offset = max(0, char_offset) if len(numbers) == 1 else 0
+        text, cut = _bound(chosen.text[offset:], min(policy.PDF.result_chars_per_page, remaining_chars))
         remaining_chars -= len(text)
         page_warnings = list(chosen.warnings) + warnings
+        if offset:
+            page_warnings.append(f"continuing from character {offset:,}")
         if cut:
-            page_warnings.append("text shortened to fit; the rest is on the page itself")
+            resume = offset + len(text) - 2  # the bound appends " …"
+            page_warnings.append(
+                f"text shortened to fit ({len(chosen.text):,} characters on the page); "
+                f'read_pdf_pages("{row.id}", {n}, {n}, mode="{mode}", char_offset={resume}) continues'
+            )
         pages.append(
             PageResult(
                 page_no=n,
@@ -554,8 +605,13 @@ async def read_pages(document_id: str, start: int, end: Optional[int], mode: str
         await pages_store.record_reads(row.id, context.session_id, shown)
     read = await pages_store.pages_read(row.id, context.session_id) if context else set(shown)
 
+    # Where to continue: pages the batch or the size ceiling left, never the
+    # budget-skipped ones — those wait for another turn, and pointing at them
+    # would send the agent round the same call again.
     next_page: Optional[int] = None
-    pending = [int(x) for entry in not_processed for x in _expand(entry["pages"])]
+    pending = [
+        int(x) for entry in not_processed if entry["reason"] in ("range", "size") for x in _expand(entry["pages"])
+    ]
     if pending:
         next_page = min(pending)
     logger.info(
@@ -659,7 +715,9 @@ async def ask_pages(document_id: str, question: str, start: int, end: Optional[i
         )
     budget = _budget()
     if budget.remaining < len(numbers):
-        raise BudgetExhausted(numbers[budget.remaining :])
+        # Nothing is shown rather than a partial range the answer would then
+        # misdescribe, so every requested page is reported as not looked at.
+        raise BudgetExhausted(numbers)
     budget.used += len(numbers)
 
     def _render_all() -> List[Tuple[int, bytes]]:
@@ -667,7 +725,7 @@ async def ask_pages(document_id: str, question: str, start: int, end: Optional[i
         try:
             return [(n, render_page(pdf, n)) for n in numbers]
         finally:
-            pdf.close()
+            close_pdf(pdf)
 
     executions.check_cancel()
     await executions.progress("Looking at pages")
@@ -717,6 +775,29 @@ def _expand(ranges: str) -> List[int]:
 
 
 _ARABIC_MARKS = re.compile(r"[ً-ْـٰ]")
+_LETTER_FOLDS = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"})
+
+
+def normalise_with_map(text: str) -> tuple[str, List[int]]:
+    """Fold text for matching and remember where each folded character came from.
+
+    Args:
+        text: Any text.
+
+    Returns:
+        tuple: the folded text, and for each of its characters the index in
+        ``text`` it was produced from.
+    """
+    pieces: List[str] = []
+    origin: List[int] = []
+    for index, char in enumerate(text):
+        for piece in unicodedata.normalize("NFKC", char):
+            if _ARABIC_MARKS.match(piece):
+                continue
+            folded = piece.translate(_LETTER_FOLDS).casefold()
+            pieces.append(folded)
+            origin.extend([index] * len(folded))
+    return "".join(pieces), origin
 
 
 def normalise(text: str) -> str:
@@ -728,10 +809,7 @@ def normalise(text: str) -> str:
     Returns:
         str: Comparable form; lengths are not preserved.
     """
-    text = unicodedata.normalize("NFKC", text)
-    text = _ARABIC_MARKS.sub("", text)
-    text = text.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace("ى", "ي").replace("ة", "ه")
-    return text.casefold()
+    return normalise_with_map(text)[0]
 
 
 def _snippet(text: str, position: int, length: int) -> str:
@@ -776,10 +854,20 @@ async def search(
     numbers = list(range(first, last + 1))
 
     native = await _native_pages(row, data, numbers)
-    vision_rows = {
-        p.page_no: p for p in await pages_store.pages_for(row.id, row.sha256, numbers, method="vision") if p.usable
+    stored = await pages_store.pages_for(row.id, row.sha256, numbers, method="vision")
+    vision_rows = {p.page_no: p for p in stored if p.usable}
+    # Pages this model already transcribed and found empty are not "missing":
+    # transcribing them again would fill every batch with the same blanks.
+    transcribed_empty = {
+        p.page_no
+        for p in stored
+        if not p.usable and p.model == settings.PDF_OCR_MODEL and p.render_key == policy.PDF.render_key
     }
-    missing = [n for n in numbers if n not in vision_rows and not (n in native and native[n].usable)]
+    missing = [
+        n
+        for n in numbers
+        if n not in vision_rows and n not in transcribed_empty and not (n in native and native[n].usable)
+    ]
 
     transcribed_now: List[int] = []
     budget_skipped: List[int] = []
@@ -787,6 +875,7 @@ async def search(
         batch = missing[: policy.PDF.search_transcribe_pages_per_call]
         fresh_rows, transcribed_now, budget_skipped = await _transcribe_many(row, data, batch, native)
         vision_rows.update({n: p for n, p in fresh_rows.items() if p.usable})
+        transcribed_empty |= {n for n, p in fresh_rows.items() if not p.usable and not transcription_failed(p)}
 
     hits: List[Hit] = []
     unsearched: List[int] = []
@@ -797,17 +886,15 @@ async def search(
         if page is None:
             unsearched.append(n)
             continue
-        haystack = normalise(page.text)
+        haystack, origin = normalise_with_map(page.text)
         position = haystack.find(needle)
         if position < 0:
             continue
-        original = page.text
-        raw_position = original.casefold().find(query.strip().casefold())
-        snippet = (
-            _snippet(original, raw_position, len(query))
-            if raw_position >= 0
-            else _snippet(haystack, position, len(needle))
-        )
+        # The snippet is always cut from the page's own text, located through
+        # the map, so a hit found by folding is quoted as printed.
+        start_at = origin[position]
+        end_at = origin[min(position + len(needle), len(origin)) - 1] + 1
+        snippet = _snippet(page.text, start_at, max(1, end_at - start_at))
         hits.append(Hit(page_no=n, label=page.label, method=page.method, snippet=snippet))
         if len(hits) >= policy.PDF.search_max_hits:
             capped = True
@@ -829,7 +916,8 @@ async def search(
         query=query,
         hits=hits,
         searched=(first, stopped_at),
-        unsearched=compress_ranges(n for n in unsearched if n <= stopped_at),
+        unsearched=compress_ranges(n for n in unsearched if n <= stopped_at and n not in transcribed_empty),
+        empty_pages=compress_ranges(n for n in transcribed_empty if n <= stopped_at),
         transcribed_now=compress_ranges(transcribed_now),
         budget_skipped=compress_ranges(budget_skipped),
         next_cursor=next_cursor,
@@ -867,7 +955,7 @@ async def facts_for_intake(name: str, data: bytes) -> tuple[Dict[str, Any], List
             pages = extract_text(pdf, range(1, min(total, policy.PDF.intake_native_pages) + 1))
             return facts, pages
         finally:
-            pdf.close()
+            close_pdf(pdf)
 
     return await asyncio.to_thread(_work)
 

@@ -156,7 +156,7 @@ async def test_ask_pages_counts_against_the_turn_budget(world, monkeypatch):
     await documents.ask_pages("d1", "q", 1, 2)
     with pytest.raises(documents.BudgetExhausted) as exhausted:
         await documents.ask_pages("d1", "q", 3, 4)
-    assert exhausted.value.pages == [4]
+    assert exhausted.value.pages == [3, 4]  # all or nothing: no page was looked at
     assert len(world.vision.calls) == 1
 
 
@@ -207,3 +207,85 @@ async def test_progressive_search_reports_pages_the_budget_could_not_reach(world
     text = pdf_tools._search_text(result)
     assert "left untranscribed because this turn's transcription budget is used up" in text
     assert "3–4" in text
+
+
+async def test_failed_transcriptions_are_shown_but_never_cached(world, monkeypatch):
+    attempts = {"n": 0}
+
+    async def flaky(image, *, model, page_no):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise ocr.OcrFailed("proxy 503")
+        return ocr.Transcription(
+            text=f"page {page_no} recovered",
+            model=model,
+            prompt_tokens=1,
+            completion_tokens=1,
+            cost_usd=0.0,
+            latency_ms=5,
+        )
+
+    monkeypatch.setattr(documents.ocr, "transcribe", flaky)
+    world.add("scan", scanned_pdf(1))
+    first = await documents.read_pages("scan", 1, 1)
+    assert first.pages[0].text == "" and "could not be transcribed" in first.pages[0].warnings[0]
+    assert [r for r in world.pages.rows if r.method == "vision"] == []  # the outage was not written down
+
+    documents.begin_turn()
+    second = await documents.read_pages("scan", 1, 1)
+    assert second.pages[0].text == "page 1 recovered" and attempts["n"] == 2
+
+
+async def test_progressive_search_does_not_stall_on_pages_already_found_empty(world, monkeypatch):
+    monkeypatch.setattr(policy, "PDF", replace(policy.PDF, search_transcribe_pages_per_call=2))
+    world.add("scan", scanned_pdf(4))
+    world.ocr.text_for = {1: "[empty page]", 2: "[empty page]", 3: "the cancellation clause", 4: "[empty page]"}
+    first = await documents.search("scan", "cancellation", transcribe_missing=True)
+    assert first.transcribed_now == "1–2" and first.hits == [] and first.empty_pages == "1–2"
+    second = await documents.search("scan", "cancellation", transcribe_missing=True)
+    assert second.transcribed_now == "3–4" and [h.page_no for h in second.hits] == [3]
+    assert sorted(world.ocr.calls) == [1, 2, 3, 4]  # the blanks were not transcribed again
+    third = await documents.search("scan", "cancellation", transcribe_missing=True)
+    assert third.transcribed_now == "" and third.empty_pages == "1–2, 4" and third.unsearched == ""
+
+
+async def test_budget_skipped_pages_are_not_offered_as_a_continuation(world, monkeypatch):
+    monkeypatch.setattr(settings, "PDF_PAGE_BUDGET_PER_TURN", 0)
+    world.add("scan", scanned_pdf(2))
+    result = await documents.read_pages("scan", 1, 2)
+    assert result.next_page is None and result.not_processed == [{"reason": "budget", "pages": "1–2"}]
+    text = pdf_tools._read_text(result)
+    assert "Continue with read_pdf_pages" not in text and "Do not call again for the skipped pages" in text
+
+
+async def test_a_dense_page_can_be_read_on_from_the_cut(world, monkeypatch):
+    monkeypatch.setattr(policy, "PDF", replace(policy.PDF, result_chars_per_page=200, result_chars_total=1000))
+    world.add("d1", make_pdf([[f"Line {i} of a very dense page with plenty of words to read." for i in range(40)]]))
+    first = await documents.read_pages("d1", 1, 1)
+    assert first.pages[0].text.endswith("…") and any("char_offset=" in w for w in first.pages[0].warnings)
+    hint = next(w for w in first.pages[0].warnings if "char_offset=" in w)
+    offset = int(hint.split("char_offset=")[1].split(")")[0])
+    second = await documents.read_pages("d1", 1, 1, char_offset=offset)
+    assert second.pages[0].text and not second.pages[0].text.startswith(first.pages[0].text[:20])
+    assert any("continuing from character" in w for w in second.pages[0].warnings)
+
+
+async def test_arabic_hits_are_quoted_as_printed(world):
+    from app.models import DocumentPage
+
+    row = world.add("d1", make_pdf(text_pages(2)))
+    world.pages.rows.append(
+        DocumentPage(
+            id="ar",
+            attachment_id="d1",
+            sha256=row.sha256,
+            page_no=2,
+            method="native",
+            text="يجب على الموظف تقديم طلب الإجازة قبل أسبوع من الموعد",
+            chars=40,
+            usable=True,
+        )
+    )
+    result = await documents.search("d1", "الاجازة")
+    assert [h.page_no for h in result.hits] == [2]
+    assert "الإجازة" in result.hits[0].snippet and "الاجازه" not in result.hits[0].snippet

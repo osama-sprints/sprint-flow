@@ -391,7 +391,9 @@ async def test_transcription_budget_is_enforced_per_turn_and_reported(world, mon
     monkeypatch.setattr(settings, "PDF_PAGE_BUDGET_PER_TURN", 2)
     world.add("scan", scanned_pdf(3))
     result = await documents.read_pages("scan", 1, 3)
-    assert [p.page_no for p in result.pages] == [1, 2] and result.next_page == 3
+    # A budget-skipped page is reported, not offered as a continuation: the budget
+    # will not have changed within this turn.
+    assert [p.page_no for p in result.pages] == [1, 2] and result.next_page is None
     assert result.not_processed == [{"reason": "budget", "pages": "3"}] and result.budget_remaining == 0
     assert len(world.ocr.calls) == 2
 

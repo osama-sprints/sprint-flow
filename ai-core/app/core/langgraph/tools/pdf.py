@@ -119,6 +119,8 @@ def _read_text(result: ReadResult) -> str:
             )
     if result.next_page is not None:
         head.append(f'Continue with read_pdf_pages("{doc.id}", {result.next_page}, {end}).')
+    elif any(e["reason"] == "budget" for e in result.not_processed):
+        head.append("Do not call again for the skipped pages in this turn; the budget will not have changed.")
     head.append(f"Read in this conversation so far: {result.coverage or 'nothing'} of {result.total_pages} pages.")
     head.append(f"Transcription budget left this turn: {result.budget_remaining}.")
 
@@ -145,6 +147,10 @@ def _search_text(result: SearchResult) -> str:
     ]
     if result.transcribed_now:
         lines.append(f"Transcribed in this call so they could be searched: pages {result.transcribed_now}.")
+    if result.empty_pages:
+        lines.append(
+            f"Transcribed earlier and found blank or unreadable (nothing to search): pages {result.empty_pages}."
+        )
     if result.unsearched:
         if result.budget_skipped:
             lines.append(
@@ -217,7 +223,9 @@ async def inspect_pdf(document_id: str) -> str:
 
 @tool
 @guarded_tool
-async def read_pdf_pages(document_id: str, start_page: int, end_page: Optional[int] = None, mode: str = "auto") -> str:
+async def read_pdf_pages(
+    document_id: str, start_page: int, end_page: Optional[int] = None, mode: str = "auto", char_offset: int = 0
+) -> str:
     """Read one page or an inclusive range of a PDF, with provenance.
 
     Page numbers are physical and 1-based (page 1 is the first page in the
@@ -233,13 +241,19 @@ async def read_pdf_pages(document_id: str, start_page: int, end_page: Optional[i
         start_page: First page, 1-based.
         end_page: Last page, inclusive. Omit for a single page.
         mode: "auto", "text" or "vision".
+        char_offset: For a single dense page whose text was cut, the character to continue from
+            (the previous result gives the number).
 
     Returns:
         The pages' text, how each was obtained, what was not served, and coverage so far.
     """
     try:
         result = await documents.read_pages(
-            document_id, int(start_page), None if end_page is None else int(end_page), mode
+            document_id,
+            int(start_page),
+            None if end_page is None else int(end_page),
+            mode,
+            char_offset=max(0, int(char_offset or 0)),
         )
     except DocumentUnavailable as e:
         return tool_result(ResultCode.PDF_NOT_FOUND, str(e))

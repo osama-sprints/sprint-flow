@@ -31,7 +31,8 @@ import pypdfium2 as pdfium
 
 from app.services.documents import policy
 
-_LOCK = threading.Lock()
+# Re-entrant: a caller may hold the document open across several engine calls.
+_LOCK = threading.RLock()
 _WHITESPACE = re.compile(r"\s+")
 _REPLACEMENT = re.compile(r"�|\(cid:\d+\)")
 
@@ -102,10 +103,21 @@ def open_pdf(data: bytes) -> pdfium.PdfDocument:
         PdfError: ``encrypted`` when a password is needed, ``damaged`` otherwise.
     """
     try:
-        return pdfium.PdfDocument(data)
+        with _LOCK:
+            return pdfium.PdfDocument(data)
     except pdfium.PdfiumError as e:
         text = str(e).lower()
         raise PdfError("encrypted" if "password" in text else "damaged", str(e)) from e
+
+
+def close_pdf(pdf: pdfium.PdfDocument) -> None:
+    """Close a document under the engine lock.
+
+    Args:
+        pdf: An open document.
+    """
+    with _LOCK:
+        pdf.close()
 
 
 def assess(text: str) -> tuple[int, bool, List[str]]:
