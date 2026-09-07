@@ -40,6 +40,7 @@ class RequesterContext:
     username: str = ""
     email: str | None = None
     channel_id: str = ""
+    team_id: str = ""
     channel_type: str = ""
     user_id: int | None = None
     is_superadmin: bool = False

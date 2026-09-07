@@ -183,6 +183,7 @@ async def resolve_requester(
     mattermost_user_id: str,
     username: str = "",
     channel_id: str = "",
+    team_id: str = "",
     channel_type: str = "",
 ) -> RequesterContext:
     """Build the turn's requester context from stored data. Never raises.
@@ -191,6 +192,7 @@ async def resolve_requester(
         mattermost_user_id: The id on the Mattermost event.
         username: The handle the transport supplied, if any.
         channel_id: Where the message arrived.
+        team_id: The team the message belongs to.
         channel_type: O, P, D or G.
 
     Returns:
@@ -200,6 +202,7 @@ async def resolve_requester(
         mattermost_user_id=mattermost_user_id,
         username=username,
         channel_id=channel_id,
+        team_id=team_id,
         channel_type=channel_type,
     )
     if not mattermost_user_id:
@@ -228,6 +231,7 @@ async def resolve_requester(
         username=user.username or username,
         email=user.email,
         channel_id=channel_id,
+        team_id=team_id,
         channel_type=channel_type,
         user_id=user.id,
         is_superadmin=user.is_superadmin,
