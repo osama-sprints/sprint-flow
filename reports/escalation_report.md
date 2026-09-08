@@ -38,6 +38,8 @@ the learner-support specialist as the `escalate_to_human` tool
 - `app/services/escalation.py` — the orchestrator described above.
 - `app/core/langgraph/tools/escalation.py` — the tool, added to
   `LEARNER_SUPPORT_TOOLS`.
+- `get_open_escalation_ticket_for_learner_thread` (`app/services/domain/escalations.py`) — the idempotency check.
+- Migration `0003_escalation_open_thread_unique` — the idempotency race guard.
 
 ## choosing_the_human
 
@@ -62,6 +64,34 @@ and in `open_escalation(ticket_type=...)` — a future caller that structurally
 knows it is asking on behalf of an operational flow (not by reading the
 message) can pass `EscalationType.OPS` explicitly. Nothing about today's
 integration needs to.
+
+## idempotency
+
+Re-running against the same thread — a retried webhook delivery, or the
+model calling the tool twice for one turn — must not open a second ticket or
+send a second DM.
+
+Two layers, matching the pattern this repo already uses for the same class of
+problem in `back_office.create_cohort` / migration `0002_sprints_name_ci`:
+
+1. **Check-then-act.** Before touching the cohort, role, or Mattermost at all,
+   `open_escalation` looks for a non-resolved ticket already covering this
+   learner thread (`get_open_escalation_ticket_for_learner_thread`). If one
+   exists, nothing new is created or sent — the result describes that
+   ticket's actual current state (`ESCALATION_ALREADY_OPEN`) instead.
+2. **The race.** Two concurrent calls can both pass step 1 before either
+   writes. Migration `0003_escalation_open_thread_unique` adds a partial
+   unique index — `UNIQUE (learner_thread_id) WHERE status <> 'resolved'` —
+   so the database itself refuses the second insert. `create_escalation_ticket`
+   is wrapped in `try/except IntegrityError`; on conflict, the losing call
+   re-reads and returns the winner's ticket instead of raising, the same
+   shape as `back_office.create_cohort`'s existing race handling.
+
+The index is partial, not a plain unique constraint, because a thread can
+legitimately be escalated more than once over its lifetime: once a ticket is
+`resolved`, a follow-up question in the same conversation opens a new one.
+Only one ticket may be *in flight* (`open` or `waiting_human`) per thread at
+a time.
 
 ## missing_human
 

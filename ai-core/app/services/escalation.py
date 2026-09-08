@@ -24,7 +24,7 @@ gets an honest, non-alarming acknowledgement. See ``missing_human`` in
 """
 
 from dataclasses import dataclass
-
+from sqlalchemy.exc import IntegrityError
 from app.core.langgraph.tools.results import ResultCode
 from app.core.logging import logger
 from app.core.requester import RequesterContext
@@ -156,6 +156,26 @@ def _assigned_but_unreachable_message(ticket: EscalationTicket) -> str:
     )
 
 
+def _message_for_existing_ticket(ticket: EscalationTicket, ticket_type: EscalationType) -> str:
+    """Compose the acknowledgement for a replayed trigger, matching the existing ticket's real state.
+
+    Used for both the check-then-act idempotency path and the raced-insert
+    path, just describing what's already true for this ticket, exactly as if it were freshly opened.
+
+    Args:
+        ticket: The pre-existing, non-resolved ticket for this thread.
+        ticket_type: The type ``open_escalation`` was called with, only used
+            to pick the right role label if the ticket has no human at all.
+
+    Returns:
+        str: The sentence relayed to the learner.
+    """
+    if ticket.status == EscalationStatus.WAITING_HUMAN.value:
+        return _handed_off_message(ticket)
+    if ticket.assigned_human_id is not None:
+        return _assigned_but_unreachable_message(ticket)
+    return _no_human_message(ticket, ROLE_FOR_TICKET_TYPE[ticket_type])
+
 async def open_escalation(
     question: str,
     *,
@@ -199,7 +219,24 @@ async def open_escalation(
         # broke, not that the learner did anything wrong.
         raise RuntimeError("escalation_attempted_for_unsynced_learner")
 
+    effective_thread_id = context.learner_thread_id or context.channel_id
+    existing = await escalation_repo.get_open_escalation_ticket_for_learner_thread(effective_thread_id)
+    if existing is not None:
+        # Idempotency: a retried webhook delivery, or the model calling this
+        # tool twice for one turn, must not open a second ticket or send a
+        # second DM. Same thread, already in flight — describe its real
+        # state rather than doing the work again.
+        logger.info(
+            "escalation_idempotent_replay", ticket_ref=existing.ticket_ref, learner_thread_id=effective_thread_id
+        )
+        return EscalationResult(
+            ResultCode.ESCALATION_ALREADY_OPEN,
+            _message_for_existing_ticket(existing, EscalationType(existing.ticket_type)),
+            existing,
+        )
+
     cohort = await cohort_repo.get_cohort_by_channel_id(context.channel_id)
+
     if cohort is None or cohort.id is None:
         raise ValidationFailed("I can only escalate a question asked inside a cohort's own channel.")
     require_active_cohort(cohort)
@@ -208,15 +245,35 @@ async def open_escalation(
     members = await cohort_repo.list_cohort_members(cohort.id, active_only=True)
     holder = next((member for member in members if member.role.key == role_key.value), None)
 
-    ticket = await escalation_repo.create_escalation_ticket(
-        cohort_id=cohort.id,
-        learner_id=learner.id,
-        ticket_type=ticket_type,
-        question=cleaned_question,
-        learner_channel_id=context.channel_id,
-        learner_thread_id=context.learner_thread_id or context.channel_id,
-        assigned_human_id=holder.user.id if holder else None,
-    )
+    try:
+        ticket = await escalation_repo.create_escalation_ticket(
+            cohort_id=cohort.id,
+            learner_id=learner.id,
+            ticket_type=ticket_type,
+            question=cleaned_question,
+            learner_channel_id=context.channel_id,
+            learner_thread_id=effective_thread_id,
+            assigned_human_id=holder.user.id if holder else None,
+        )
+    except IntegrityError:
+        # Lost a race with an identical, concurrent trigger for the same
+        # thread: the partial unique index (0003_escalation_open_thread_unique)
+        # held, so report the winner instead of opening a second ticket —
+        # the same shape as `back_office.create_cohort`'s race handling.
+        raced = await escalation_repo.get_open_escalation_ticket_for_learner_thread(effective_thread_id)
+        if raced is None:
+            raise
+        logger.info(
+            "escalation_idempotent_replay",
+            ticket_ref=raced.ticket_ref,
+            learner_thread_id=effective_thread_id,
+            raced=True,
+        )
+        return EscalationResult(
+            ResultCode.ESCALATION_ALREADY_OPEN,
+            _message_for_existing_ticket(raced, ticket_type),
+            raced,
+        )
 
     if holder is None:
         logger.warning(
