@@ -2,7 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import Text
+from sqlalchemy import (
+    Index,
+    Text,
+    text,
+)
 from sqlmodel import Field
 
 from app.models.domain_base import (
@@ -43,6 +47,14 @@ class EscalationTicket(DomainBase, table=True):
     """
 
     __tablename__ = "escalation_tickets"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        Index(
+            "ux_escalation_tickets_open_thread",
+            "learner_thread_id",
+            unique=True,
+            postgresql_where=text("status <> 'resolved'"),
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     ticket_ref: str = Field(unique=True, index=True, max_length=32)

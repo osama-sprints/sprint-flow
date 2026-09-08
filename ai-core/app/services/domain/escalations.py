@@ -95,6 +95,34 @@ async def get_escalation_ticket(ticket_ref: str, session: AsyncSession | None = 
         return result.first()
 
 
+async def get_open_escalation_ticket_for_learner_thread(
+    learner_thread_id: str, session: AsyncSession | None = None
+) -> EscalationTicket | None:
+    """Find a not-yet-resolved ticket already covering this learner thread, if any.
+
+    Backs the idempotency check in ``app.services.escalation.open_escalation``:
+    a retried trigger for the same conversation must reuse the existing ticket
+    rather than opening a second one or sending a second DM. Enforced at the
+    database level too, by a partial unique index on ``learner_thread_id``
+    where ``status <> 'resolved'``, this query is the check-then-act half, the index is the race guard.
+
+    Args:
+        learner_thread_id: Root post id of the learner's conversation thread.
+        session: Optional session to reuse.
+
+    Returns:
+        EscalationTicket | None: The existing open/waiting_human ticket, or
+        None when this thread has no in-flight escalation.
+    """
+    async with session_scope(session) as s:
+        result = await s.exec(
+            select(EscalationTicket)
+            .where(EscalationTicket.learner_thread_id == learner_thread_id)
+            .where(EscalationTicket.status != EscalationStatus.RESOLVED.value)
+            .order_by(EscalationTicket.created_at.desc())  # type: ignore[arg-type]
+        )
+        return result.first()
+
 async def get_escalation_ticket_by_human_thread(
     human_dm_thread_id: str, session: AsyncSession | None = None
 ) -> EscalationTicket | None:

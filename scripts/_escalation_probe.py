@@ -259,6 +259,30 @@ async def scenario() -> None:
     print("--- cross-cohort scoping: cohort B is untouched by A's escalation")
     check("cross-cohort: B's tech lead received no DM", fake.dm_channels.get(lead_b.mattermost_user_id) is None)
 
+    print("--- idempotency: replaying the same thread does not duplicate anything")
+    before = (await ticket_count(), len(fake.posts))
+    bind(learner.mattermost_user_id, cohort_a.mattermost_channel_id, thread_id=f"{PREFIX}thread-1")
+    replay_result = await escalation_tools.escalate_to_human.ainvoke(
+        {"question": "How many late days do I have left?"}
+    )
+    check(
+        "idempotency: replay reports ESCALATION_ALREADY_OPEN",
+        result_code_of(replay_result) == ResultCode.ESCALATION_ALREADY_OPEN,
+        replay_result,
+    )
+    check("idempotency: no new ticket row was added", await ticket_count() == before[0])
+    check("idempotency: no second DM was sent", len(fake.posts) == before[1])
+    check(
+        "idempotency: replay message still describes the real (handed-off) state honestly",
+        ticket.ticket_ref in replay_result and "looped in a colleague" in replay_result.lower(),
+        replay_result,
+    )
+    check(
+        "idempotency: DB-level guard exists (partial unique index enforced even under a raced insert)",
+        await escalation_repo.get_open_escalation_ticket_for_learner_thread(f"{PREFIX}thread-1") is not None,
+    )
+    unbind()
+
     print("--- no human assigned for the required role")
     cohort_c = await make_cohort("c")
     assert cohort_c.id is not None
@@ -282,6 +306,16 @@ async def scenario() -> None:
     check(
         "no human: ticket stays open with no assigned human",
         len(no_human_ticket) == 1 and no_human_ticket[0].status == "open" and no_human_ticket[0].assigned_human_id is None,
+    )
+    before = (await ticket_count(), len(fake.posts))
+    bind(learner_c.mattermost_user_id, cohort_c.mattermost_channel_id)
+    no_human_replay = await escalation_tools.escalate_to_human.ainvoke({"question": "What's the leave policy?"})
+    check(
+        "idempotency (no-human case): replay is ALREADY_OPEN, no duplicate row, message stays honest",
+        result_code_of(no_human_replay) == ResultCode.ESCALATION_ALREADY_OPEN
+        and await ticket_count() == before[0]
+        and "tech lead" in no_human_replay.lower(),
+        no_human_replay,
     )
     unbind()
 
@@ -314,6 +348,16 @@ async def scenario() -> None:
         len(unreachable_tickets) == 1
         and unreachable_tickets[0].assigned_human_id == lead_d.id
         and unreachable_tickets[0].status == "open",
+    )
+    before = (await ticket_count(), len(fake.posts))
+    bind(learner_d.mattermost_user_id, cohort_d.mattermost_channel_id)
+    unreachable_replay = await escalation_tools.escalate_to_human.ainvoke({"question": "Is the demo cancelled?"})
+    check(
+        "idempotency (unreachable case): replay is ALREADY_OPEN, no duplicate row, still honest",
+        result_code_of(unreachable_replay) == ResultCode.ESCALATION_ALREADY_OPEN
+        and await ticket_count() == before[0]
+        and "couldn't reach them" in unreachable_replay.lower(),
+        unreachable_replay,
     )
     unbind()
 

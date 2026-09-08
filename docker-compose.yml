@@ -1,8 +1,8 @@
 # SprintFlow — virtual corporate workspace.
 #
-#   postgres     one cluster, two databases (mattermost + sprintflow)
-#   mattermost   the chat UI people actually use
-#   ai-core      FastAPI + LangGraph orchestrator; all LLM calls via LiteLLM
+#   postgres   one cluster, two databases (mattermost + sprintflow)
+#   mattermost the chat UI people actually use
+#   ai-core    FastAPI + LangGraph orchestrator; all LLM calls via LiteLLM
 #
 # Long-term memory (mem0) lives in an EXTERNAL Qdrant instance, so no vector
 # extension is ever loaded into the cluster Mattermost depends on.
@@ -30,7 +30,7 @@ services:
     # transactional data and ai-core's LangGraph checkpointer. The vector
     # workload lives in an external Qdrant instance, so nothing exotic is ever
     # loaded into the cluster Mattermost boots against.
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: sprintflow-postgres
     restart: unless-stopped
     environment:
@@ -131,7 +131,7 @@ services:
     # needs it — publishing it would expose /docs, /openapi.json and /metrics
     # unauthenticated on the host.
     # To debug from the host, tunnel instead of republishing:
-    #   docker compose exec ai-core python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/health').read())"
+    #    docker compose exec ai-core python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8000/health').read())"
     env_file:
       - .env
     environment:
@@ -145,8 +145,10 @@ services:
     volumes:
       - ./ai-core/app:/app/app
       - ./ai-core/alembic:/app/alembic
+      - ./ai-core/scripts:/app/scripts
       - ./ai-core/logs:/app/logs
       - ./ai-core/tests:/app/tests
+      - ./data:/app/data:ro
     healthcheck:
       # python:3.13-slim has no curl. urlopen raises on 503, which is what we
       # want: /health returns 503 when the database is unreachable.
@@ -175,3 +177,5 @@ networks:
 
 volumes:
   postgres-data:
+    name: sprintflow-postgres-data
+    driver: local

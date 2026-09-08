@@ -26,6 +26,7 @@ class CapabilityRoute(str, Enum):
     LEARNER_SUPPORT = "learner_support"
     BACK_OFFICE = "back_office"
     GENERAL = "general"
+    POLICY_SUPPORT = "policy_support"
 
 
 class GraphState(BaseModel):
