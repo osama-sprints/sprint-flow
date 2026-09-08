@@ -206,8 +206,8 @@ ROUTING_RULES: List[Rule] = [
             r"\b(?:which|what)\b.{0,20}\b(?:cohort|sprint|role|team)\b.{0,20}\b(?:am\s+i|i'?m|are\s+we|do\s+i|is\s+mine)\b",
             r"\b(?:assignment|deadline|due\s+date|submission|submit|grade|grading|quiz|lecture|course|"
             r"curriculum|syllabus|module|exam|project|homework|feedback)\b",
-            r"\b(?:policy|policies|allowed|permitted|rule|rules|guideline|guidelines|leave|holiday|vacation|"
-            r"absence|absent|day\s+off|time\s+off|sick|late)\b",
+            """r"\b(?:policy|policies|allowed|permitted|rule|rules|guideline|guidelines|leave|holiday|vacation|"
+            r"absence|absent|day\s+off|time\s+off|sick|late)\b","""
             r"\b(?:blocked|blocker|stuck|struggling|confused|help\s+me|how\s+do\s+i|how\s+can\s+i|how\s+should\s+i|"
             r"where\s+do\s+i|where\s+can\s+i|who\s+do\s+i\s+ask|who\s+should\s+i\s+ask|who\s+can\s+i\s+ask|"
             r"can\s+i\s+get\s+help)\b",
@@ -227,6 +227,17 @@ ROUTING_RULES: List[Rule] = [
             r"\b(?:remove|kick)\b.{0,40}\b(?:from\s+(?:the\s+)?team|user)\b",
         ),
         confidence=0.9,
+    ),
+    Rule(
+        name="policy_support",
+        route=CapabilityRoute.POLICY_SUPPORT,
+        mutation=False,
+        requires_cohort_authority=False,
+        patterns=_compile(
+            r"\b(policy|policies|guideline|guidelines|rule|rules)\b",
+            r"\b(leave|holiday|vacation|absence|absent|day\s+off|time\s+off|sick|late)\b",
+            r"\b(allowed|permitted|playbook|refund|fee)\b",
+        ),
     ),
 ]
 
