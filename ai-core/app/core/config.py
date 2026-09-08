@@ -358,6 +358,20 @@ class Settings:
         # cohort: "refuse" (default, the scheduling report justifies it) or "warn".
         self.SCHEDULING_CONFLICT_POLICY = os.getenv("SCHEDULING_CONFLICT_POLICY", "refuse").strip().lower()
 
+        # --- Google Meet integration (ceremony scheduling) -----------------------
+        # Set GOOGLE_MEET_ENABLED=true and supply credentials to attach a Google
+        # Meet link to ceremonies when the user asks.  Set to false (default) to
+        # disable entirely; all scheduling still works without it.
+        self.GOOGLE_MEET_ENABLED = os.getenv("GOOGLE_MEET_ENABLED", "false").lower() in ("true", "1", "t", "yes")
+        # Service account credentials as a JSON *string* (not a file path) —
+        # safe for container environments. Copy the contents of your
+        # service-account-key.json here.
+        self.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS = os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", "")
+        # The Google Calendar to create events on. Use "primary" for the service
+        # account's own calendar, or a shared calendar's id (found in Calendar
+        # settings → "Calendar ID").
+        self.GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+
         # --- Sprint 1 / proactive onboarding (s1e5) ------------------------------
         self.ONBOARDING_ENABLED = os.getenv("ONBOARDING_ENABLED", "true").lower() in ("true", "1", "t", "yes")
         # Delay between the welcome and the follow-up check-in.

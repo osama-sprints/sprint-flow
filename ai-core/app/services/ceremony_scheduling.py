@@ -116,6 +116,7 @@ class ScheduleProposal:
     local_display: str
     utc_display: str
     conflict_warning: str | None = None
+    with_meet: bool = False
 
     def describe(self) -> str:
         """One sentence naming what will be stored.
@@ -453,6 +454,7 @@ async def prepare_schedule(
     time_expression: str,
     agenda: str | None = None,
     duration_minutes: int | None = None,
+    with_meet: bool = False,
     requester: RequesterContext | None = None,
     now: datetime | None = None,
     conflict_policy: str | None = None,
@@ -538,6 +540,7 @@ async def prepare_schedule(
         local_display=interpretation.local_display,
         utc_display=interpretation.utc_display,
         conflict_warning=verdict,
+        with_meet=with_meet,
     )
 
 
@@ -601,6 +604,30 @@ async def commit_schedule(
         scheduled_at=ceremony.scheduled_at.isoformat(),
         organizer_id=ceremony.organizer_id,
     )
+
+    if proposal.with_meet:
+        from app.services.google_meet import create_meet_event
+        from app.services.domain import identity as identity_repo
+
+        org_user = await identity_repo.get_user(user.id)
+        org_email = org_user.email if org_user else None
+
+        link = await create_meet_event(
+            title=proposal.ceremony_type_label,
+            start=proposal.scheduled_at,
+            duration_minutes=proposal.duration_minutes,
+            description=proposal.agenda,
+            organizer_email=org_email,
+        )
+        if link:
+            await ceremony_repo.update_ceremony(
+                ceremony.id, # type: ignore[arg-type]
+                amended_by_id=user.id,
+                changes={"meet_link": link},
+                reason="Generated Google Meet link",
+            )
+            ceremony.meet_link = link
+
     return ceremony
 
 

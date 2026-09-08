@@ -35,6 +35,7 @@ AMENDABLE_FIELDS: frozenset[str] = frozenset(
         "time_zone",
         "sprint_id",
         "channel_id",
+        "meet_link",
     }
 )
 
@@ -96,6 +97,7 @@ async def create_ceremony(
     sprint_id: int | None = None,
     time_expression: str | None = None,
     time_zone: str | None = None,
+    meet_link: str | None = None,
     session: AsyncSession | None = None,
 ) -> Ceremony:
     """Persist a ceremony. Conflict and authorisation checks belong to the caller.
@@ -111,6 +113,7 @@ async def create_ceremony(
         sprint_id: The sprint, if named.
         time_expression: What the organiser typed.
         time_zone: IANA zone used for interpretation.
+        meet_link: Google Meet join URL, if attached.
         session: Optional session to reuse.
 
     Returns:
@@ -131,6 +134,7 @@ async def create_ceremony(
         sprint_id=sprint_id,
         time_expression=time_expression,
         time_zone=time_zone,
+        meet_link=meet_link,
     )
     async with session_scope(session) as s:
         s.add(ceremony)

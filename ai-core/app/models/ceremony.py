@@ -56,3 +56,5 @@ class Ceremony(DomainBase, table=True):
     status: str = Field(default=CeremonyStatus.SCHEDULED.value, nullable=False, max_length=32, index=True)
     time_expression: str | None = Field(default=None, max_length=512)
     time_zone: str | None = Field(default=None, max_length=64)
+    # Google Meet join URL, set after a Meet event is created for this ceremony.
+    meet_link: str | None = Field(default=None, max_length=512)

@@ -93,6 +93,7 @@ async def schedule_ceremony(
     time_expression: str,
     agenda: str | None = None,
     duration_minutes: int | None = None,
+    with_meet: bool = False,
 ) -> str:
     """Schedule an agile ceremony (standup, sprint planning, sprint review, retrospective, open Q&A) for the current channel.
 
@@ -109,11 +110,15 @@ async def schedule_ceremony(
     time (in their timezone and in UTC) before anything is stored; nothing is
     scheduled until they say yes. Repeating the request after a "no" is fine.
 
+    Pass ``with_meet=True`` when the person asks for a Google Meet link. A join URL
+    will be created and included in the confirmation.
+
     Args:
         ceremony_type: The kind of ceremony: standup, planning, review, retro or q&a (aliases accepted).
         time_expression: The person's words describing when, verbatim.
         agenda: Agenda text if the person gave one.
         duration_minutes: Length in minutes if the person gave one; otherwise the type's default.
+        with_meet: Whether to create and attach a Google Meet link.
 
     Returns:
         str: ``[CEREMONY_SCHEDULED]`` with the ceremony id and the time in both zones, or a
@@ -124,6 +129,7 @@ async def schedule_ceremony(
         time_expression=time_expression,
         agenda=agenda,
         duration_minutes=duration_minutes,
+        with_meet=with_meet,
     )
     if isinstance(outcome, SchedulingProblem):
         return _problem(outcome)
@@ -138,9 +144,10 @@ async def schedule_ceremony(
     if isinstance(committed, SchedulingProblem):
         return _problem(committed)
     warning = f" {outcome.conflict_warning}" if outcome.conflict_warning else ""
+    meet = f"\n🔗 Join: {committed.meet_link}" if committed.meet_link else ""
     return tool_result(
         ResultCode.CEREMONY_SCHEDULED,
-        f"Scheduled ceremony #{committed.id}: {outcome.describe()}.{warning}",
+        f"Scheduled ceremony #{committed.id}: {outcome.describe()}.{warning}{meet}",
     )
 
 

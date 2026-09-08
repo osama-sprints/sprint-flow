@@ -348,6 +348,7 @@ def downgrade() -> None:
         "onboarding_steps",
         "escalation_tickets",
         "daily_standups",
+        "ceremony_reminders",
         "ceremony_amendments",
         "ceremonies",
         "sprints",

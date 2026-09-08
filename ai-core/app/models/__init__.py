@@ -6,6 +6,7 @@ of autogenerate or verification by accident.
 """
 
 from app.models.ceremony import Ceremony
+from app.models.ceremony_reminder import CeremonyReminder
 from app.models.ceremony_amendment import CeremonyAmendment
 from app.models.ceremony_type import CeremonyType
 from app.models.cohort import Cohort
@@ -33,6 +34,7 @@ DOMAIN_TABLES: tuple[str, ...] = (
     "sprints",
     "ceremonies",
     "ceremony_amendments",
+    "ceremony_reminders",
     "daily_standups",
     "escalation_tickets",
     "onboarding_steps",
@@ -42,6 +44,7 @@ __all__ = [
     "DOMAIN_TABLES",
     "Ceremony",
     "CeremonyAmendment",
+    "CeremonyReminder",
     "CeremonyType",
     "Cohort",
     "CohortMembership",

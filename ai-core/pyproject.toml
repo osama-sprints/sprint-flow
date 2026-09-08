@@ -57,6 +57,12 @@ cache = [
     "redis>=7.4.0",
     "valkey[libvalkey]>=6.1.0",
 ]
+# Install with: uv sync --extra meet
+# Required when GOOGLE_MEET_ENABLED=true
+meet = [
+    "google-api-python-client>=2.150.0",
+    "google-auth>=2.38.0",
+]
 
 [dependency-groups]
 dev = [
