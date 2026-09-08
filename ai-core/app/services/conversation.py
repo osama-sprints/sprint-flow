@@ -158,6 +158,7 @@ async def answer_and_reply(message: IncomingMessage) -> None:
         username=message.user_name,
         channel_id=channel_id,
         channel_type=message.channel_type,
+        thread_root_id=message.root_id or message.post_id,
     )
     current_requester.set(requester)
 

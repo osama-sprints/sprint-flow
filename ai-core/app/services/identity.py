@@ -184,6 +184,7 @@ async def resolve_requester(
     username: str = "",
     channel_id: str = "",
     channel_type: str = "",
+    thread_root_id: str = "",
 ) -> RequesterContext:
     """Build the turn's requester context from stored data. Never raises.
 
@@ -192,6 +193,11 @@ async def resolve_requester(
         username: The handle the transport supplied, if any.
         channel_id: Where the message arrived.
         channel_type: O, P, D or G.
+        learner_thread_id: The post id a proactive reply to this turn must be
+        threaded under (mirrors ``IncomingMessage`` in ``app.services.conversation``:
+        the trigger's ``root_id`` when already in a thread, else its
+        ``post_id``). Used only by tools that must correlate a later,
+        out-of-band reply back to this conversation (escalation).
 
     Returns:
         RequesterContext: Always returned; degraded (no ``user_id``) when the sync failed.
@@ -201,6 +207,7 @@ async def resolve_requester(
         username=username,
         channel_id=channel_id,
         channel_type=channel_type,
+        learner_thread_id=thread_root_id,
     )
     if not mattermost_user_id:
         return base
@@ -233,4 +240,5 @@ async def resolve_requester(
         is_superadmin=user.is_superadmin,
         timezone=user.timezone,
         cohort_roles=MappingProxyType(roles),
+        learner_thread_id=thread_root_id,
     )

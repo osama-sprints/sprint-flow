@@ -34,6 +34,11 @@ class RequesterContext:
         is_superadmin: Whether the email is on the ``ADMIN_EMAILS`` allowlist.
         timezone: IANA zone from the Mattermost profile, or None.
         cohort_roles: ``{cohort_id: role_key}`` for active memberships (routing hint).
+        learner_thread_id: The post id a proactive reply to this turn must be
+            threaded under (mirrors ``IncomingMessage`` in ``app.services.conversation``:
+            the trigger's ``root_id`` when already in a thread, else its
+            ``post_id``). Used only by tools that must correlate a later,
+            out-of-band reply back to this conversation (escalation).
     """
 
     mattermost_user_id: str
@@ -45,6 +50,7 @@ class RequesterContext:
     is_superadmin: bool = False
     timezone: str | None = None
     cohort_roles: Mapping[int, str] = field(default_factory=lambda: MappingProxyType({}))
+    learner_thread_id: str = ""
 
     @property
     def is_admin(self) -> bool:
