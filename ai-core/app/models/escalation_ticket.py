@@ -33,6 +33,7 @@ class EscalationTicket(DomainBase, table=True):
         status_changed_at: When the status last changed.
         question: The learner's question, verbatim.
         answer: The answer posted back, once resolved.
+        raw_human_response: The reviewer's decision, verbatim, kept separately from the synthesized `answer` shown to the learner.
         learner_channel_id: Channel of the learner's conversation.
         learner_thread_id: Root post id the answer must be posted under.
         human_dm_channel_id: The DM channel opened with the human.
@@ -53,6 +54,7 @@ class EscalationTicket(DomainBase, table=True):
     status_changed_at: datetime = Field(default_factory=utcnow, nullable=False, sa_type=TZ_DATETIME)
     question: str = Field(sa_type=Text)
     answer: str | None = Field(default=None, sa_type=Text)
+    raw_human_response: str | None = Field(default=None, sa_type=Text)
     learner_channel_id: str = Field(max_length=64)
     learner_thread_id: str = Field(max_length=64)
     human_dm_channel_id: str | None = Field(default=None, max_length=64)

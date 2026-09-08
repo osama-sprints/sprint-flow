@@ -145,6 +145,7 @@ async def set_escalation_status(
     status: EscalationStatus,
     *,
     answer: str | None = None,
+    raw_human_response: str | None = None,
     assigned_human_id: int | None = None,
     human_dm_channel_id: str | None = None,
     human_dm_thread_id: str | None = None,
@@ -174,6 +175,8 @@ async def set_escalation_status(
             ticket.status_changed_at = now
         if answer is not None:
             ticket.answer = answer
+        if raw_human_response is not None:            # <-- new
+            ticket.raw_human_response = raw_human_response  # <-- new
         if assigned_human_id is not None:
             ticket.assigned_human_id = assigned_human_id
         if human_dm_channel_id is not None:
@@ -187,3 +190,33 @@ async def set_escalation_status(
         await s.flush()
         await s.refresh(ticket)
         return ticket
+
+
+async def list_waiting_tickets_for_human(
+    assigned_human_id: int, session: AsyncSession | None = None
+) -> list[EscalationTicket]:
+    """Every ticket currently waiting on a specific human's decision.
+ 
+    Used by the closure attribution logic to decide whether an unthreaded,
+    unreferenced reply is genuinely ambiguous (more than one candidate) or
+    simply not an escalation reply at all (zero candidates).
+ 
+    Args:
+        assigned_human_id: ``users.id`` of the reviewer.
+        session: Optional session to reuse.
+ 
+    Returns:
+        list[EscalationTicket]: Tickets with status ``waiting_human`` assigned
+        to this person, oldest first.
+    """
+    async with session_scope(session) as s:
+        result = await s.exec(
+            select(EscalationTicket)
+            .where(
+                EscalationTicket.assigned_human_id == assigned_human_id,
+                EscalationTicket.status == EscalationStatus.WAITING_HUMAN.value,
+            )
+            .order_by(EscalationTicket.created_at, EscalationTicket.id)  # type: ignore[arg-type]
+        )
+        return list(result.all())
+ 
