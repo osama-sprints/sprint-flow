@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
 set -e
 
 # Print initial environment values (before loading .env)
@@ -85,7 +86,7 @@ echo "Debug Mode: ${DEBUG:-false}"
 # Set AI_CORE_MIGRATE_ON_START=false to opt out (e.g. a one-off shell).
 if [[ "${AI_CORE_MIGRATE_ON_START:-true}" == "true" ]]; then
     echo "Applying database migrations: alembic upgrade head"
-    /app/.venv/bin/alembic upgrade head
+    uv run alembic upgrade head
     echo "Database schema is at head"
 else
     echo "Skipping database migrations (AI_CORE_MIGRATE_ON_START=${AI_CORE_MIGRATE_ON_START})"

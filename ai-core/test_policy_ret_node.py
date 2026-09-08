@@ -27,7 +27,7 @@ async def run_task4_tests():
 
     # 2. Refusal/Escalation Test -> Must trigger open_escalation and route to END
     with patch("app.core.langgraph.nodes.get_grounded_answer_or_refusal", new_callable=AsyncMock) as mock_ret, \
-         patch("app.core.langgraph.nodes.open_escalation", new_callable=AsyncMock) as mock_esc:
+         patch("app.core.langgraph.nodes.create_escalation_ticket", new_callable=AsyncMock) as mock_esc:
         
         mock_ret.return_value = ("no_match", [])
         mock_esc.return_value = {"ticket_id": "ESC-999"}

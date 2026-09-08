@@ -2,7 +2,7 @@ from typing import Any , Dict , List , Tuple
 from app.core.logging import logger
 
 try :
-    from app.services.vector_store import similarity_search
+    from app.services.document_ingestion.vector_store import similarity_search
 except ImportError :
     async def similarity_search ( query : str , audience : str , top_k : int = 5 ) -> List [ Tuple [ Dict [ str , Any ] , float ] ] :
         logger.warning ( "Vector store is not available. Returning empty results." )

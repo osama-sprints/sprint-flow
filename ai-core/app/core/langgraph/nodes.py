@@ -3,13 +3,7 @@ from langgraph.graph import END
 from app.services.policy_retrieval import get_grounded_answer_or_refusal
 from enum import Enum
 from typing import Any, Dict
-
-class EscalationType(str, Enum):
-    OPS = "ops"
-    LEARNER = "learner"
-
-async def open_escalation(question: str, ticket_type: EscalationType, reason: str) -> Dict[str, Any]:
-    return {"ticket_id": "ESC-12345", "status": "created"}
+from app.services.domain.escalations import create_escalation_ticket, EscalationType
 
 async def policy_retrieval_node(state : dict)->Command:
     messages = state.get("messages", [])
@@ -31,7 +25,7 @@ async def policy_retrieval_node(state : dict)->Command:
             goto="policy_support_llm_node"
         )
     else:
-        ticket_result = await open_escalation(
+        ticket_result = await create_escalation_ticket(
             question=last_message,
             ticket_type=EscalationType.OPS,
             reason=status
