@@ -12,6 +12,11 @@ from app.services.ceremony_scheduling import ScheduleProposal
 
 
 @pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture
 def mock_google_settings(monkeypatch):
     monkeypatch.setattr(settings, "GOOGLE_MEET_ENABLED", True)
     monkeypatch.setattr(settings, "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", '{"type": "service_account"}')
