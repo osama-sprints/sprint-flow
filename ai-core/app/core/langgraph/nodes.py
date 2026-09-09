@@ -3,7 +3,7 @@ from langgraph.graph import END
 from langgraph.types import Command
 
 from app.core.requester import current_requester
-from app.services.domain.escalations import EscalationType, open_escalation
+from app.services.escalation import EscalationType, open_escalation
 from app.services.policy_retrieval import get_grounded_answer_or_refusal
 
 
