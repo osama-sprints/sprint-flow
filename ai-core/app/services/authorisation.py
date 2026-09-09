@@ -187,7 +187,11 @@ async def require_channel_authority(
     user_id = decision.user.id if decision.user else None
     if not decision.allowed:
         logger.warning(
-            "authorisation_refused_channel", user_id=user_id, channel_id=channel_id, action=action, reason=decision.reason
+            "authorisation_refused_channel",
+            user_id=user_id,
+            channel_id=channel_id,
+            action=action,
+            reason=decision.reason,
         )
         raise AuthorisationRefused(decision.reason, action=action, channel_id=channel_id)
     logger.info("authorisation_granted", user_id=user_id, channel_id=channel_id, action=action, reason=decision.reason)

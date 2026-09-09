@@ -46,8 +46,10 @@ async def verify_audience_filter() -> None:
 async def verify_source_file_provenance() -> None:
     async with database_service.engine.connect() as conn:
         result = await conn.execute(
-            text("SELECT document_id, metadata FROM policy_document_chunks "
-                 "WHERE document_id IN ('acc_faqs', 'ops_circle_chatbot_scripts')")
+            text(
+                "SELECT document_id, metadata FROM policy_document_chunks "
+                "WHERE document_id IN ('acc_faqs', 'ops_circle_chatbot_scripts')"
+            )
         )
         rows = result.fetchall()
 
@@ -101,9 +103,7 @@ async def verify_pipeline():
     logger.info("Verifying pgvector extension and policy_document_chunks table...")
     async with database_service.engine.connect() as conn:
         # Check pgvector extension
-        ext_check = await conn.execute(
-            text("SELECT extname FROM pg_extension WHERE extname = 'vector';")
-        )
+        ext_check = await conn.execute(text("SELECT extname FROM pg_extension WHERE extname = 'vector';"))
         assert ext_check.fetchone() is not None, "pgvector extension is NOT installed!"
         logger.info("✓ pgvector extension is active.")
 
@@ -124,6 +124,7 @@ async def verify_pipeline():
     await verify_audience_filter()
     await verify_pruning()
     logger.info("All ingestion verification assertions passed!")
+
 
 if __name__ == "__main__":
     try:

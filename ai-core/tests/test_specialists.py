@@ -198,7 +198,12 @@ def build_legacy_graph(fake: FakeLLMService, saver: MemorySaver):
 def test_compiled_graph_has_the_contracted_node_names():
     _, graph = make_agent([])
     assert EXPECTED_NODES <= set(graph.nodes.keys())
-    assert {spec.node_name for spec in SPECIALISTS.values()} == {"learner_support", "back_office", "chat", "policy_support"}
+    assert {spec.node_name for spec in SPECIALISTS.values()} == {
+        "learner_support",
+        "back_office",
+        "chat",
+        "policy_support",
+    }
     assert {spec.tools_node_name for spec in SPECIALISTS.values()} == {
         "learner_support_tools",
         "back_office_tools",
@@ -216,7 +221,9 @@ def test_learner_route_never_executes_a_back_office_tool():
             AIMessage(content="I can't create channels; please ask your tech lead or scrum master."),
         ]
     )
-    visited, state = asyncio.run(run_turn(graph, user_turn("create a channel"), config_for("a"), REQUESTERS["learner"]))
+    visited, state = asyncio.run(
+        run_turn(graph, user_turn("create a channel"), config_for("a"), REQUESTERS["learner"])
+    )
 
     assert visited == ["supervisor", "learner_support", "learner_support_tools", "learner_support"]
     assert "back_office_tools" not in visited

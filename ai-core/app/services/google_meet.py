@@ -103,7 +103,7 @@ def _build_service() -> Any | None:
             logger.warning(
                 "google_meet_no_impersonate_email",
                 hint="Set GOOGLE_IMPERSONATE_EMAIL in .env to a real Google account email. "
-                     "Meet link creation will fail without domain-wide delegation.",
+                "Meet link creation will fail without domain-wide delegation.",
             )
 
         return build("calendar", "v3", credentials=creds, cache_discovery=False)  # type: ignore[misc]

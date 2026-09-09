@@ -49,14 +49,12 @@ from app.models.enums import (
     SprintStatus,
     normalise_role_key,
 )
-from app.services import onboarding
 from app.services.authorisation import (
     ValidationFailed,
     require_channel_authority,
     require_channel_membership,
     require_requester,
     require_requester_user,
-    require_superadmin,
 )
 from app.services.domain import channels as channel_repo
 from app.services.domain import sprints as sprint_repo
@@ -376,7 +374,6 @@ async def open_sprint(
     """
     requester = _bound_requester()
     channel_id = requester.channel_id
-    team_id = requester.team_id
     if not channel_id:
         raise ValidationFailed("Cannot create a sprint outside of a channel context.")
 
@@ -400,7 +397,6 @@ async def open_sprint(
 
     try:
         sprint = await sprint_repo.create_sprint(
-            team_id=team_id,
             channel_id=channel_id,
             name=name,
             start_date=start,
@@ -450,8 +446,7 @@ async def _open_existing_sprint(sprint: Sprint, channel_id: str, actor: User) ->
         )
     if sprint.status == SprintStatus.COMPLETED.value:
         raise ValidationFailed(
-            f"Sprint '{sprint.name}' in this channel is already completed ({window}); "
-            "choose a new sprint name."
+            f"Sprint '{sprint.name}' in this channel is already completed ({window}); choose a new sprint name."
         )
 
     overlaps = await sprint_repo.find_overlapping_sprints(
@@ -548,7 +543,7 @@ async def list_channel_members() -> ChannelMembersResult:
     members = await channel_repo.list_channel_roles(channel_id, active_only=True)
     logger.info("back_office_members_listed", user_id=decision.user.id, channel_id=channel_id, count=len(members))
     if not members:
-        text = f"This channel has no SprintFlow roles assigned yet."
+        text = "This channel has no SprintFlow roles assigned yet."
     else:
         rows = [f"- @{m.user.username} — {m.role.label}" for m in members]
         text = f"Assigned roles in this channel ({len(members)}):\n" + "\n".join(rows)

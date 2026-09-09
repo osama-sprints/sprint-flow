@@ -122,6 +122,11 @@ def parse_dict_of_lists_from_env(prefix, default_dict=None):
 class Settings:
     """Application settings without using pydantic."""
 
+    POLICY_CHUNK_SIZE: int
+    POLICY_CHUNK_OVERLAP: int
+    POLICY_EMBEDDING_MODEL: str
+    POLICY_EMBEDDING_DIM: int
+
     def __init__(self):
         """Initialize application settings from environment variables.
 

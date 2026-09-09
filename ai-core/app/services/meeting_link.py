@@ -84,6 +84,7 @@ async def create_meeting_link(
     if provider == "google_meet":
         # Delegate to the existing Google Meet service.
         from app.services.google_meet import create_meet_event
+
         return await create_meet_event(
             title=title,
             start=start,

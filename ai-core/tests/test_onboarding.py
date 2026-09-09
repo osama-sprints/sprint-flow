@@ -170,9 +170,7 @@ def step(channel_id: str | None, kind: str = "welcome") -> OnboardingStep:
 
 
 def membership(channel_id: str, role: str = "learner", joined: datetime = NOW) -> MembershipInfo:
-    return MembershipInfo(
-        team_id="team_1", channel_id=channel_id, role_key=role, joined_at=joined
-    )
+    return MembershipInfo(team_id="team_1", channel_id=channel_id, role_key=role, joined_at=joined)
 
 
 def test_halted_workspace_step_without_memberships_proceeds():
@@ -180,8 +178,7 @@ def test_halted_workspace_step_without_memberships_proceeds():
 
 
 def test_halted_workspace_step_when_every_channel_inactive():
-    pass # No longer applicable: we don't fetch inactive channels anymore in the onboarding context
-
+    pass  # No longer applicable: we don't fetch inactive channels anymore in the onboarding context
 
 
 def test_halted_workspace_step_proceeds_with_one_active_channel():
@@ -190,20 +187,24 @@ def test_halted_workspace_step_proceeds_with_one_active_channel():
 
 
 def test_halted_channel_step_when_channel_inactive():
-    pass # No longer applicable
-
+    pass  # No longer applicable
 
 
 def test_halted_channel_step_when_channel_missing():
-    pass # No longer applicable
-
+    pass  # No longer applicable
 
 
 def test_halted_channel_step_when_membership_missing():
-    assert is_halted(step("Backend-01", "orientation"), OnboardingContext(role=None, memberships=())) == "membership_missing"
+    assert (
+        is_halted(step("Backend-01", "orientation"), OnboardingContext(role=None, memberships=()))
+        == "membership_missing"
+    )
     other = make_role("learner")
     wrong = RoleContext(role_key="learner", role_label="Learner", team_id="t1", channel_id="Other")
-    assert is_halted(step("Backend-01", "orientation"), OnboardingContext(role=wrong, memberships=())) == "membership_missing"
+    assert (
+        is_halted(step("Backend-01", "orientation"), OnboardingContext(role=wrong, memberships=()))
+        == "membership_missing"
+    )
     assert is_halted(step("Backend-01", "orientation"), OnboardingContext(role=other, memberships=())) is None
 
 

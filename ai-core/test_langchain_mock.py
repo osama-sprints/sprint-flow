@@ -9,13 +9,16 @@ print("After set _get_requester:", _get_requester())
 
 try:
     print("Calling invoke...")
-    res = schedule_ceremony.invoke({
-        "ceremony_type": "standup",
-        "raw_time": "tomorrow at 10 AM UTC",
-        "organizer_id": "admin_user",
-        "agenda": "Weekly sync",
-    })
+    res = schedule_ceremony.invoke(
+        {
+            "ceremony_type": "standup",
+            "raw_time": "tomorrow at 10 AM UTC",
+            "organizer_id": "admin_user",
+            "agenda": "Weekly sync",
+        }
+    )
     print("RES:", res)
 except Exception as e:
     import traceback
+
     traceback.print_exc()

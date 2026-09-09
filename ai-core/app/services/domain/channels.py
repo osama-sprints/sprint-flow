@@ -6,7 +6,6 @@ This module answers the two questions every privileged action asks first:
 
 from typing import NamedTuple
 
-from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession

@@ -120,6 +120,7 @@ async def get_open_escalation_ticket_for_learner_thread(
         )
         return result.first()
 
+
 async def get_escalation_ticket_by_human_thread(
     human_dm_thread_id: str, session: AsyncSession | None = None
 ) -> EscalationTicket | None:
@@ -200,7 +201,7 @@ async def set_escalation_status(
             ticket.status_changed_at = now
         if answer is not None:
             ticket.answer = answer
-        if raw_human_response is not None:            # <-- new
+        if raw_human_response is not None:  # <-- new
             ticket.raw_human_response = raw_human_response  # <-- new
         if assigned_human_id is not None:
             ticket.assigned_human_id = assigned_human_id
@@ -221,15 +222,15 @@ async def list_waiting_tickets_for_human(
     assigned_human_id: int, session: AsyncSession | None = None
 ) -> list[EscalationTicket]:
     """Every ticket currently waiting on a specific human's decision.
- 
+
     Used by the closure attribution logic to decide whether an unthreaded,
     unreferenced reply is genuinely ambiguous (more than one candidate) or
     simply not an escalation reply at all (zero candidates).
- 
+
     Args:
         assigned_human_id: ``users.id`` of the reviewer.
         session: Optional session to reuse.
- 
+
     Returns:
         list[EscalationTicket]: Tickets with status ``waiting_human`` assigned
         to this person, oldest first.
@@ -244,4 +245,3 @@ async def list_waiting_tickets_for_human(
             .order_by(EscalationTicket.created_at, EscalationTicket.id)  # type: ignore[arg-type]
         )
         return list(result.all())
- 

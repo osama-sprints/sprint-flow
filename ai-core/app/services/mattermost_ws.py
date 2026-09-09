@@ -333,7 +333,7 @@ class MattermostWebSocketListener:
                 if user is None:
                     logger.error("onboarding_arrival_lost_profile_unreadable", user_id=user_id)
                 else:
-                    await onboarding.start_journey(user)
+                    await onboarding.start_journey(user, settings.MATTERMOST_DEFAULT_TEAM)
             except Exception as e:
                 logger.exception("onboarding_arrival_failed", user_id=user_id, error=str(e))
 
@@ -476,7 +476,7 @@ class MattermostWebSocketListener:
 
         raw_message = str(post.get("message") or "")
         root_id = str(post.get("root_id") or "")
- 
+
         # Sprint 2 / escalation closure: a reviewer's reply must never reach
         # the normal chat pipeline -- it would be answered by the general
         # agent instead of being attributed to the ticket it resolves. This
@@ -496,7 +496,7 @@ class MattermostWebSocketListener:
                 return
         except Exception as e:
             logger.exception("escalation_closure_check_failed", error=str(e))
- 
+
         # Routing decision comes before any expensive work. Most public-channel
         # chatter is discarded here without an API call, let alone a model call.
         if not await self._should_handle(channel_type, raw_message, root_id):

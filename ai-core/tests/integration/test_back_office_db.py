@@ -106,7 +106,9 @@ async def counts() -> tuple[int, int, tuple[Any, ...]]:
         sprints = (await conn.execute(text("SELECT count(*) FROM sprints"))).scalar_one()
         rows = (
             await conn.execute(
-                text("SELECT user_id, channel_id, role_id, status FROM channel_memberships ORDER BY user_id, channel_id")
+                text(
+                    "SELECT user_id, channel_id, role_id, status FROM channel_memberships ORDER BY user_id, channel_id"
+                )
             )
         ).all()
     return channels, sprints, tuple(tuple(r) for r in rows)
@@ -278,7 +280,9 @@ def test_scoped_reads(loop, world):
     refused(loop, back_office.list_channel_members(world.channel_b.name))
     bind(world.superadmin)
     everything = loop.run_until_complete(back_office.list_channel_roles_for_requester())
-    assert everything.is_superadmin and {world.channel_a.id, world.channel_b.id} <= {c.id for c, _ in everything.entries}
+    assert everything.is_superadmin and {world.channel_a.id, world.channel_b.id} <= {
+        c.id for c, _ in everything.entries
+    }
 
 
 def test_inactive_channel_is_a_validation_failure_for_an_authorised_requester(loop, world):

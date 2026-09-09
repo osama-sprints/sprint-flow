@@ -97,7 +97,7 @@ def _load_templates(directory: Path) -> dict[tuple[str, str], str]:
         for variant in ROLE_VARIANTS:
             path = directory / f"{kind.value}_{variant}.md"
             if not path.is_file():
-                continue # Ignore missing templates if any to prevent import crash, but should exist
+                continue  # Ignore missing templates if any to prevent import crash, but should exist
             loaded[(kind.value, variant)] = path.read_text(encoding="utf-8").strip()
     return loaded
 
@@ -399,7 +399,11 @@ async def start_journey(user: User, team_id: str, *, now: datetime | None = None
         user_id=user.id, team_id=team_id, channel_id=None, step_kind=OnboardingStepKind.WELCOME, due_at=arrived_at
     )
     await outbox.enqueue_step(
-        user_id=user.id, team_id=team_id, channel_id=None, step_kind=OnboardingStepKind.FOLLOW_UP, due_at=follow_up_due(arrived_at)
+        user_id=user.id,
+        team_id=team_id,
+        channel_id=None,
+        step_kind=OnboardingStepKind.FOLLOW_UP,
+        due_at=follow_up_due(arrived_at),
     )
     if not created:
         logger.info(
@@ -430,7 +434,9 @@ def _claim_in_flight(step: OnboardingStep) -> bool:
     return utcnow() - step.claimed_at < timedelta(seconds=settings.ONBOARDING_CLAIM_LEASE_SECONDS)
 
 
-async def on_role_assigned(user_id: int, channel_id: str, *, team_id: str = "sprints-community", now: datetime | None = None) -> None:
+async def on_role_assigned(
+    user_id: int, channel_id: str, *, team_id: str = "sprints-community", now: datetime | None = None
+) -> None:
     """React to a role assignment: queue the channel orientation unless the welcome will carry it.
 
     Called by the back-office ``assign_role`` tool after its commit. Three cases:
@@ -464,7 +470,11 @@ async def on_role_assigned(user_id: int, channel_id: str, *, team_id: str = "spr
         return
 
     step, created = await outbox.enqueue_step(
-        user_id=user_id, team_id=team_id, channel_id=channel_id, step_kind=OnboardingStepKind.ORIENTATION, due_at=now or utcnow()
+        user_id=user_id,
+        team_id=team_id,
+        channel_id=channel_id,
+        step_kind=OnboardingStepKind.ORIENTATION,
+        due_at=now or utcnow(),
     )
     logger.info(
         "onboarding_orientation_enqueued",

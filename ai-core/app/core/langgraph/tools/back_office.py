@@ -27,7 +27,7 @@ async def assign_role(person: str, role: str) -> str:
 
     Use this when someone asks to add a person to the channel's roster, promote them, or
     change their role. Authority is channel-scoped and enforced by the tool from
-    stored data: superadmins, and tech leads or scrum masters of the current channel, 
+    stored data: superadmins, and tech leads or scrum masters of the current channel,
     may assign roles here. Relay an ``[AUTHORISATION_REFUSED]`` result
     verbatim. A person holds exactly one role per channel: repeating the same
     assignment changes nothing, a different role replaces the previous one and

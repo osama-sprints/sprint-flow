@@ -108,7 +108,12 @@ def test_conflict_policy_setting_defaults_to_refuse(value, expected):
 
 def requester(zone: str | None) -> RequesterContext:
     return RequesterContext(
-        mattermost_user_id="mm-1", username="alice", timezone=zone, team_id="team_123", channel_id="chan_abc", channel_roles=MappingProxyType({})
+        mattermost_user_id="mm-1",
+        username="alice",
+        timezone=zone,
+        team_id="team_123",
+        channel_id="chan_abc",
+        channel_roles=MappingProxyType({}),
     )
 
 
@@ -271,10 +276,7 @@ def test_render_calendar_lists_every_field_in_both_zones():
     )
     text = render_calendar(view)
     lines = text.splitlines()
-    assert (
-        lines[0]
-        == "All ceremonies (including cancelled) (times shown in Africa/Cairo and UTC):"
-    )
+    assert lines[0] == "All ceremonies (including cancelled) (times shown in Africa/Cairo and UTC):"
     assert lines[1] == (
         "- #1 Daily Standup — Friday 4 September 2026, 15:00 (Africa/Cairo) / 2026-09-04 12:00 UTC — 15 min — "
         "organiser @alice — agenda: Standup — status: scheduled"
@@ -285,9 +287,7 @@ def test_render_calendar_lists_every_field_in_both_zones():
 
 def test_render_calendar_without_zone_shows_utc_only():
     view = CalendarView(
-        team_id="team_123",
-        channel_id="chan_abc",
-        entries=(CalendarEntry(ceremony(1), "Daily Standup", "@a"),)
+        team_id="team_123", channel_id="chan_abc", entries=(CalendarEntry(ceremony(1), "Daily Standup", "@a"),)
     )
     text = render_calendar(view)
     assert "times shown in UTC" in text
