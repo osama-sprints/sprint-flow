@@ -58,11 +58,12 @@ from app.core.logging import logger
 try:
     from google.oauth2 import service_account  # type: ignore[import-untyped]
     from googleapiclient.discovery import build  # type: ignore[import-untyped]
-    from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
     _GOOGLE_LIBS_AVAILABLE = True
 except ImportError:
     _GOOGLE_LIBS_AVAILABLE = False
+    service_account = None
+    build = None
 
 _SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -87,8 +88,8 @@ def _build_service() -> Any | None:
 
     try:
         info = json.loads(raw)
-        creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
-        return build("calendar", "v3", credentials=creds, cache_discovery=False)
+        creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)  # type: ignore[union-attr]
+        return build("calendar", "v3", credentials=creds, cache_discovery=False)  # type: ignore[misc]
     except Exception as e:
         logger.exception("google_meet_build_service_failed", error=str(e))
         return None

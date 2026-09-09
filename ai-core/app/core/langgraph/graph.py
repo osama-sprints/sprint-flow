@@ -573,7 +573,10 @@ class LangGraphAgent:
                 # Langfuse trace attributes (use langfuse_ prefix for automatic attribution)
                 "langfuse_user_id": user_id,
                 "langfuse_session_id": session_id,
-                "langfuse_tags": ["chat", "production" if settings.ENVIRONMENT.value == "production" else "development"],
+                "langfuse_tags": [
+                    "chat",
+                    "production" if settings.ENVIRONMENT.value == "production" else "development",
+                ],
                 # Application metadata for debugging and monitoring
                 "user_id": user_id,
                 "username": username,

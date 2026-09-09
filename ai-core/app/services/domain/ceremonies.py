@@ -93,7 +93,6 @@ async def create_ceremony(
     scheduled_at: datetime,
     duration_minutes: int,
     agenda: str | None = None,
-    sprint_id: int | None = None,
     time_expression: str | None = None,
     time_zone: str | None = None,
     meet_link: str | None = None,
@@ -109,7 +108,6 @@ async def create_ceremony(
         scheduled_at: Timezone-aware start instant.
         duration_minutes: Length.
         agenda: Free text.
-        sprint_id: The sprint, if named.
         time_expression: What the organiser typed.
         time_zone: IANA zone used for interpretation.
         meet_link: Google Meet join URL, if attached.
@@ -130,7 +128,6 @@ async def create_ceremony(
         scheduled_at=scheduled_at,
         duration_minutes=duration_minutes,
         agenda=agenda,
-        sprint_id=sprint_id,
         time_expression=time_expression,
         time_zone=time_zone,
         meet_link=meet_link,

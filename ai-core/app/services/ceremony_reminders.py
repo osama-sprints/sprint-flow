@@ -30,23 +30,17 @@ from datetime import (
 )
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.logging import logger
 from app.models import (
     Ceremony,
     Cohort,
-    CohortMembership,
-    User,
     utcnow,
 )
 from app.models.ceremony_reminder import CeremonyReminder
-from app.models.enums import (
-    CeremonyStatus,
-    MembershipStatus,
-)
 from app.services.database import session_scope
 from app.services.domain import ceremonies as ceremony_repo
 from app.services.domain import cohorts as cohort_repo
@@ -71,9 +65,7 @@ _TIME_LABELS: dict[str, str] = {"24h": "24 hours", "1h": "1 hour"}
 # ---------------------------------------------------------------------------
 
 
-async def _get_cohort_by_channel_id(
-    channel_id: str, session: AsyncSession | None = None
-) -> Cohort | None:
+async def _get_cohort_by_channel_id(channel_id: str, session: AsyncSession | None = None) -> Cohort | None:
     """Fetch the cohort that owns this Mattermost channel, if any.
 
     The link between a distributed ceremony and a cohort is
@@ -87,9 +79,7 @@ async def _get_cohort_by_channel_id(
         Cohort | None: The cohort, or None when no cohort is linked to the channel.
     """
     async with session_scope(session) as s:
-        result = await s.exec(
-            select(Cohort).where(Cohort.mattermost_channel_id == channel_id)
-        )
+        result = await s.exec(select(Cohort).where(Cohort.mattermost_channel_id == channel_id))
         return result.first()
 
 
@@ -234,6 +224,7 @@ async def get_channel_members(channel_id: str) -> list[str]:
         )
         return []
 
+    assert cohort.id is not None
     members = await cohort_repo.list_cohort_members(cohort.id, active_only=True)
     return [m.user.mattermost_user_id for m in members if m.user.mattermost_user_id]
 

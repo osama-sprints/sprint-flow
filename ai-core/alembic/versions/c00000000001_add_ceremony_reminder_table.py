@@ -40,7 +40,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["ceremony_id"],
             ["ceremonies.id"],
-            name=op.f("ceremony_reminders_ceremony_id_fkey"),
+            name="fk_ceremony_reminders_ceremony_id_ceremonies",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_ceremony_reminders")),
         sa.UniqueConstraint(

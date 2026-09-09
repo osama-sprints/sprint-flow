@@ -12,9 +12,8 @@ Documentation: https://langfuse.com/docs/integrations/langchain
 """
 
 from typing import Optional
-from functools import wraps
 
-from langfuse import Langfuse, get_client, observe, propagate_attributes
+from langfuse import Langfuse, get_client, observe
 from langfuse.langchain import CallbackHandler
 
 from app.core.config import settings
@@ -23,16 +22,16 @@ from app.core.logging import logger
 
 def langfuse_init():
     """Initialize Langfuse with best practices.
-    
+
     Creates a singleton Langfuse client that is used throughout the application.
     Should be called once at application startup.
-    
+
     Follows Langfuse 3.x patterns:
     - Uses environment variables for configuration
     - Verifies authentication on initialization
     - Handles sampling and debug settings
     - Uses singleton pattern via get_client()
-    
+
     Best practices implemented:
     - Async-safe batching and queueing
     - Graceful degradation if Langfuse is unavailable
@@ -49,7 +48,7 @@ def langfuse_init():
         langfuse_client = Langfuse(
             public_key=settings.LANGFUSE_PUBLIC_KEY,
             secret_key=settings.LANGFUSE_SECRET_KEY,
-            baseurl=settings.LANGFUSE_HOST,
+            host=settings.LANGFUSE_HOST,
             environment=settings.ENVIRONMENT.value,
             debug=settings.LANGFUSE_DEBUG,
             sample_rate=settings.LANGFUSE_SAMPLE_RATE,
@@ -83,27 +82,27 @@ def get_langfuse_callback_handler(
     tags: Optional[list[str]] = None,
 ) -> CallbackHandler:
     """Create a Langfuse CallbackHandler for LangChain/LangGraph tracing.
-    
+
     Creates a handler for tracing LangChain/LangGraph operations.
-    
+
     Note: Trace attributes (user_id, session_id, tags) are passed via the
     `metadata` dict in the LangChain config, not in the handler constructor.
     This function signature supports both patterns for convenience.
-    
+
     Args:
         user_id: Deprecated - use metadata['langfuse_user_id'] instead
         session_id: Deprecated - use metadata['langfuse_session_id'] instead
         tags: Deprecated - use metadata['langfuse_tags'] instead
-        
+
     Returns:
         CallbackHandler: Configured handler ready for use with LangChain components
-        
+
     Best practices:
     - Handler is stateless and can be reused across requests
     - Trace attributes go in the config metadata dict:
       config = {"callbacks": [handler], "metadata": {"langfuse_user_id": "...", ...}}
     - The handler automatically captures LLM calls, tools, and timing
-    
+
     Example usage in LangGraph:
         handler = get_langfuse_callback_handler()
         config = {
@@ -130,15 +129,15 @@ async def trace_agent_turn(
     input_data: Optional[dict] = None,
 ) -> None:
     """Decorator for tracing agent turns with automatic span creation.
-    
+
     Creates a Langfuse span for the decorated function, useful for
     wrapping high-level agent operations that contain LangChain calls.
-    
+
     Args:
         user_id: User identifier for trace
         session_id: Session identifier for grouping
         input_data: Input data to log with the span
-        
+
     Example:
         @trace_agent_turn(user_id="user_123", session_id="session_456")
         async def process_user_message(message: str):
@@ -150,13 +149,13 @@ async def trace_agent_turn(
 
 def shutdown_langfuse():
     """Gracefully shutdown Langfuse client.
-    
+
     Flushes any pending events to ensure all traces are sent before
     application termination. Should be called during application shutdown.
-    
+
     In production environments, this ensures that short-lived traces
     (e.g., in serverless functions) are properly recorded.
-    
+
     Best practices:
     - Call in FastAPI lifespan shutdown handler
     - Safe to call even if Langfuse is disabled

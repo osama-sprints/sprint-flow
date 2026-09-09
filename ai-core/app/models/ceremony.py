@@ -46,7 +46,7 @@ class Ceremony(DomainBase, table=True):
     # Scoping for distributed/channel-native design
     team_id: str = Field(index=True, nullable=False, max_length=64, default="sprints-community")
     channel_id: str = Field(index=True, nullable=False, max_length=64)
-    
+
     ceremony_type_id: int = Field(foreign_key="ceremony_types.id")
     organizer_id: int = Field(foreign_key="users.id", index=True)
     scheduled_at: datetime = Field(sa_type=TZ_DATETIME, nullable=False, index=True)

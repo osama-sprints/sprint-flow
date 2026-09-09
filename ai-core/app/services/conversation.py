@@ -129,7 +129,6 @@ async def is_own_post(user_id: str, user_name: str = "") -> bool:
     return bool(bot_user_id) and user_id == bot_user_id
 
 
-
 async def answer_and_reply(message: IncomingMessage) -> None:
     """Run the agent for one message and post the answer back to Mattermost.
 

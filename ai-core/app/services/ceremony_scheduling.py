@@ -95,10 +95,11 @@ class ScheduleProposal:
         scheduled_at: The start instant, UTC.
         duration_minutes: Length.
         agenda: Free text, if given.
-        time_expression: What the person typed.
-        zone: The zone the expression was interpreted in.
-        local_display: The instant as the person sees it.
-        utc_display: The instant in UTC.
+        time_expression: The natural language string that was interpreted.
+        zone: The zone used to interpret it.
+        local_display: How to format the time for the organiser (e.g. "tomorrow at 2pm PST").
+        utc_display: How to format the time unambiguously in UTC.
+        with_meet: Whether to attach a Google Meet link.
         conflict_warning: Overlap description under the ``warn`` policy, else None.
     """
 
@@ -466,6 +467,7 @@ async def prepare_schedule(
         time_expression: The person's words, verbatim.
         agenda: Free text.
         duration_minutes: Length; defaults to the type's default.
+        with_meet: Whether to attach a Google Meet link.
         requester: The bound requester; defaults to ``current_requester``.
         now: The current instant; defaults to now.
         conflict_policy: Override of ``SCHEDULING_CONFLICT_POLICY`` (tests).
@@ -621,7 +623,7 @@ async def commit_schedule(
         )
         if link:
             await ceremony_repo.update_ceremony(
-                ceremony.id, # type: ignore[arg-type]
+                ceremony.id,  # type: ignore[arg-type]
                 amended_by_id=user.id,
                 changes={"meet_link": link},
                 reason="Generated Google Meet link",
@@ -684,7 +686,7 @@ async def prepare_amendment(
     ceremony = await ceremony_repo.get_ceremony(ceremony_id)
     if ceremony is None or ceremony.id is None:
         raise ValidationFailed(f"There is no ceremony #{ceremony_id}.")
-    
+
     if ceremony.channel_id != context.channel_id:
         raise ValidationFailed(f"Ceremony #{ceremony_id} is not in this channel.")
 

@@ -111,9 +111,7 @@ async def lifespan(app: FastAPI):
     # Proactive ceremony reminders: DMs sent 24 h and 1 h before each ceremony.
     # The CeremonyReminder table guarantees at-most-once delivery on restart.
     try:
-        ceremony_reminder_task = asyncio.create_task(
-            reminder_poller(), name="ceremony-reminder-poller"
-        )
+        ceremony_reminder_task = asyncio.create_task(reminder_poller(), name="ceremony-reminder-poller")
     except Exception as e:
         ceremony_reminder_task = None
         logger.exception("ceremony_reminder_poller_start_failed", error=str(e))

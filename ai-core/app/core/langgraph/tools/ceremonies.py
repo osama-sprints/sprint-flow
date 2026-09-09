@@ -232,9 +232,7 @@ async def list_ceremonies(include_past: bool = False, include_cancelled: bool = 
     Returns:
         str: ``[OK]`` followed by one line per ceremony, or a refusal when the person is not a member.
     """
-    view = await scheduling.list_calendar(
-        include_past=include_past, include_cancelled=include_cancelled
-    )
+    view = await scheduling.list_calendar(include_past=include_past, include_cancelled=include_cancelled)
     return tool_result(ResultCode.OK, scheduling.render_calendar(view))
 
 
