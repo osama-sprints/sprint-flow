@@ -78,6 +78,13 @@ _GENERAL_CONTEXT = (
     "This message did not match a specialised area. Respond helpfully as a general assistant "
     "with the tools you have; if it needs rights the requester lacks, say so plainly."
 )
+_POLICY_SUPPORT_CONTEXT = (
+    "Answer strictly using ONLY the provided document snippets below. "
+    "After every claim or statement, include an explicit citation in the exact format: "
+    "[Source: <document_id>, §<section_title>, p.<page_number>]. "
+    "If the provided text does not contain enough information to answer any part of the question, "
+    "state clearly that the documentation does not cover it instead of speculating or adding outside knowledge."
+)
 
 SPECIALISTS: Dict[str, Specialist] = {
     CapabilityRoute.LEARNER_SUPPORT.value: Specialist(
@@ -93,6 +100,13 @@ SPECIALISTS: Dict[str, Specialist] = {
         tools_node_name="back_office_tools",
         tool_group="back_office",
         prompt_context=_BACK_OFFICE_CONTEXT,
+    ),
+    CapabilityRoute.POLICY_SUPPORT.value: Specialist(
+        route=CapabilityRoute.POLICY_SUPPORT,
+        node_name="policy_support",
+        tools_node_name="policy_support_tools",
+        tool_group="policy_support",
+        prompt_context=_POLICY_SUPPORT_CONTEXT,
     ),
     CapabilityRoute.GENERAL.value: Specialist(
         route=CapabilityRoute.GENERAL,

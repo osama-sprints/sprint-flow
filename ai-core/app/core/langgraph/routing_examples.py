@@ -29,6 +29,7 @@ from app.core.requester import RequesterContext
 from app.schemas.graph import CapabilityRoute
 
 LEARNER = CapabilityRoute.LEARNER_SUPPORT.value
+POLICY = CapabilityRoute.POLICY_SUPPORT.value
 BACK_OFFICE = CapabilityRoute.BACK_OFFICE.value
 GENERAL = CapabilityRoute.GENERAL.value
 
@@ -166,13 +167,13 @@ ROUTING_EXAMPLES: Tuple[RoutingExample, ...] = (
     RoutingExample("is the retro cancelled?", "authority", (LEARNER,), "learner_calendar"),
     # ---- learner questions ---------------------------------------------------------
     RoutingExample("what's the deadline for the assignment?", "learner", (LEARNER,), "learner_support"),
-    RoutingExample("what is the leave policy?", "learner", (LEARNER,), "learner_support"),
+    RoutingExample("what is the leave policy?", "learner", (POLICY,), "policy_support"),
     RoutingExample("I'm blocked on the docker setup, who do I ask?", "learner", (LEARNER,), "learner_support"),
     RoutingExample("how do I submit my project?", "learner", (LEARNER,), "learner_support"),
     RoutingExample("which channel am I in?", "learner", (LEARNER,), "learner_support"),
     RoutingExample("what's my role?", "learner", (LEARNER,), "learner_support"),
     RoutingExample("who is my tech lead?", "learner", (LEARNER,), "learner_support"),
-    RoutingExample("can I take a day off next week?", "learner", (LEARNER,), "learner_support"),
+    RoutingExample("can I take a day off next week?", "learner", (POLICY,), "policy_support"),
     RoutingExample("what is a sprint?", "learner", (LEARNER,), "learner_support"),
     # ---- directory reads (gated like the member-listing tool) ----------------------
     RoutingExample("list channels", "authority", (LEARNER,), "channel_directory"),

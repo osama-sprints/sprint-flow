@@ -1,10 +1,3 @@
-"""Stable import surface for every application-owned ORM model.
-
-Import this package (not the individual modules) wherever complete SQLModel
-metadata matters — Alembic's ``env.py`` does — so a table can never be left out
-of autogenerate or verification by accident.
-"""
-
 from app.models.ceremony import Ceremony
 from app.models.ceremony_reminder import CeremonyReminder
 from app.models.ceremony_amendment import CeremonyAmendment
@@ -18,12 +11,11 @@ from app.models.domain_base import (
 )
 from app.models.escalation_ticket import EscalationTicket
 from app.models.onboarding_step import OnboardingStep
+from app.models.policy import PolicyDocumentChunk
 from app.models.role import Role
 from app.models.sprint import Sprint
 from app.models.user import User
 
-# Every application-owned table, in dependency order. Verification scripts and
-# the migration compare against this list.
 DOMAIN_TABLES: tuple[str, ...] = (
     "users",
     "roles",
@@ -36,6 +28,7 @@ DOMAIN_TABLES: tuple[str, ...] = (
     "daily_standups",
     "escalation_tickets",
     "onboarding_steps",
+    "policy_document_chunks",
 )
 
 __all__ = [
@@ -49,6 +42,7 @@ __all__ = [
     "DomainBase",
     "EscalationTicket",
     "OnboardingStep",
+    "PolicyDocumentChunk",
     "Role",
     "Sprint",
     "User",

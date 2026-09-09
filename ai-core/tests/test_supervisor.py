@@ -97,8 +97,8 @@ def test_reads_dict_shaped_and_block_shaped_messages():
         )
     finally:
         current_requester.reset(token)
-    assert as_dict["route"] == as_blocks["route"] == CapabilityRoute.LEARNER_SUPPORT.value
-    assert as_dict["matched_rule"] == "learner_support"
+    assert as_dict["route"] == as_blocks["route"] == CapabilityRoute.POLICY_SUPPORT.value
+    assert as_dict["matched_rule"] == "policy_support"
 
 
 def test_only_the_last_message_is_classified():

@@ -14,7 +14,7 @@ the security boundary.
 """
 
 from langchain_core.tools.base import BaseTool
-
+from .escalation import escalate_to_human
 from .ask_human import ask_human
 from .back_office import TOOLS as BACK_OFFICE_ADMIN_TOOLS
 from .back_office import (
@@ -49,6 +49,7 @@ LEARNER_SUPPORT_TOOLS: list[BaseTool] = [
     list_ceremonies,
     list_channel_roles_for_requester,
     list_channel_members,
+    escalate_to_human,
 ]
 
 # Back office: channel, role, sprint administration (s1e2) and ceremony

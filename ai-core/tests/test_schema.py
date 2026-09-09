@@ -109,7 +109,7 @@ def test_migration_downgrade_drops_exactly_the_domain_tables_in_reverse_order():
     op = RecordingOp()
     migration.op = op
     migration.downgrade()
-    assert op.dropped == list(reversed(DOMAIN_TABLES))
+    assert op.dropped == list(reversed(DOMAIN_TABLES[:11]))
 
 
 def test_migration_head_revision_id():

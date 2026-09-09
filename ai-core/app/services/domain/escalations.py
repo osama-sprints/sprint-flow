@@ -30,11 +30,10 @@ def format_ticket_ref(ticket_id: int) -> str:
 
 async def create_escalation_ticket(
     *,
-    channel_id: int,
+    channel_id: str,
     learner_id: int,
     ticket_type: EscalationType,
     question: str,
-    learner_channel_id: str,
     learner_thread_id: str,
     assigned_human_id: int | None = None,
     sprint_id: int | None = None,
@@ -43,11 +42,10 @@ async def create_escalation_ticket(
     """Open a ticket and allocate its reference.
 
     Args:
-        channel_id: The channel the learner asked in.
+        channel_id: The Mattermost channel the learner asked in.
         learner_id: Who asked.
         ticket_type: ``tech`` or ``ops``.
         question: The question, verbatim.
-        learner_channel_id: Channel of the learner's conversation.
         learner_thread_id: Root post id the answer must be posted under.
         assigned_human_id: The human it is routed to, if already known.
         sprint_id: The sprint in progress, if any.
@@ -63,7 +61,6 @@ async def create_escalation_ticket(
         assigned_human_id=assigned_human_id,
         ticket_type=ticket_type.value,
         question=question,
-        learner_channel_id=learner_channel_id,
         learner_thread_id=learner_thread_id,
         sprint_id=sprint_id,
     )
@@ -95,6 +92,34 @@ async def get_escalation_ticket(ticket_ref: str, session: AsyncSession | None = 
         return result.first()
 
 
+async def get_open_escalation_ticket_for_learner_thread(
+    learner_thread_id: str, session: AsyncSession | None = None
+) -> EscalationTicket | None:
+    """Find a not-yet-resolved ticket already covering this learner thread, if any.
+
+    Backs the idempotency check in ``app.services.escalation.open_escalation``:
+    a retried trigger for the same conversation must reuse the existing ticket
+    rather than opening a second one or sending a second DM. Enforced at the
+    database level too, by a partial unique index on ``learner_thread_id``
+    where ``status <> 'resolved'``, this query is the check-then-act half, the index is the race guard.
+
+    Args:
+        learner_thread_id: Root post id of the learner's conversation thread.
+        session: Optional session to reuse.
+
+    Returns:
+        EscalationTicket | None: The existing open/waiting_human ticket, or
+        None when this thread has no in-flight escalation.
+    """
+    async with session_scope(session) as s:
+        result = await s.exec(
+            select(EscalationTicket)
+            .where(EscalationTicket.learner_thread_id == learner_thread_id)
+            .where(EscalationTicket.status != EscalationStatus.RESOLVED.value)
+            .order_by(EscalationTicket.created_at.desc())  # type: ignore[arg-type]
+        )
+        return result.first()
+
 async def get_escalation_ticket_by_human_thread(
     human_dm_thread_id: str, session: AsyncSession | None = None
 ) -> EscalationTicket | None:
@@ -115,7 +140,7 @@ async def get_escalation_ticket_by_human_thread(
 
 
 async def list_escalation_tickets(
-    channel_id: int | None = None,
+    channel_id: str | None = None,
     *,
     status: EscalationStatus | None = None,
     session: AsyncSession | None = None,
@@ -145,6 +170,7 @@ async def set_escalation_status(
     status: EscalationStatus,
     *,
     answer: str | None = None,
+    raw_human_response: str | None = None,
     assigned_human_id: int | None = None,
     human_dm_channel_id: str | None = None,
     human_dm_thread_id: str | None = None,
@@ -174,6 +200,8 @@ async def set_escalation_status(
             ticket.status_changed_at = now
         if answer is not None:
             ticket.answer = answer
+        if raw_human_response is not None:            # <-- new
+            ticket.raw_human_response = raw_human_response  # <-- new
         if assigned_human_id is not None:
             ticket.assigned_human_id = assigned_human_id
         if human_dm_channel_id is not None:
@@ -187,3 +215,33 @@ async def set_escalation_status(
         await s.flush()
         await s.refresh(ticket)
         return ticket
+
+
+async def list_waiting_tickets_for_human(
+    assigned_human_id: int, session: AsyncSession | None = None
+) -> list[EscalationTicket]:
+    """Every ticket currently waiting on a specific human's decision.
+ 
+    Used by the closure attribution logic to decide whether an unthreaded,
+    unreferenced reply is genuinely ambiguous (more than one candidate) or
+    simply not an escalation reply at all (zero candidates).
+ 
+    Args:
+        assigned_human_id: ``users.id`` of the reviewer.
+        session: Optional session to reuse.
+ 
+    Returns:
+        list[EscalationTicket]: Tickets with status ``waiting_human`` assigned
+        to this person, oldest first.
+    """
+    async with session_scope(session) as s:
+        result = await s.exec(
+            select(EscalationTicket)
+            .where(
+                EscalationTicket.assigned_human_id == assigned_human_id,
+                EscalationTicket.status == EscalationStatus.WAITING_HUMAN.value,
+            )
+            .order_by(EscalationTicket.created_at, EscalationTicket.id)  # type: ignore[arg-type]
+        )
+        return list(result.all())
+ 

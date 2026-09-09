@@ -97,7 +97,7 @@ from app.utils import (
     prepare_messages,
     process_llm_response,
 )
-
+from app.core.langgraph.nodes import policy_retrieval_node
 PostgresConnPool = AsyncConnectionPool[AsyncConnection[DictRow]]
 
 # Only transient failures are worth retrying. A validation error, an
@@ -510,6 +510,7 @@ class LangGraphAgent:
                 destinations=(spec.node_name,),
                 retry_policy=RetryPolicy(max_attempts=3, retry_on=_TRANSIENT_ERRORS),
             )
+        graph_builder.add_node("policy_retrieval_node", policy_retrieval_node)
 
         graph_builder.set_entry_point("supervisor")
         graph_builder.add_conditional_edges(

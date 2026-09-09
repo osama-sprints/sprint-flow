@@ -198,10 +198,11 @@ def build_legacy_graph(fake: FakeLLMService, saver: MemorySaver):
 def test_compiled_graph_has_the_contracted_node_names():
     _, graph = make_agent([])
     assert EXPECTED_NODES <= set(graph.nodes.keys())
-    assert {spec.node_name for spec in SPECIALISTS.values()} == {"learner_support", "back_office", "chat"}
+    assert {spec.node_name for spec in SPECIALISTS.values()} == {"learner_support", "back_office", "chat", "policy_support"}
     assert {spec.tools_node_name for spec in SPECIALISTS.values()} == {
         "learner_support_tools",
         "back_office_tools",
+        "policy_support_tools",
         "tool_call",
     }
 

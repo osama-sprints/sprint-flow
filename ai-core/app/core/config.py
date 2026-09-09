@@ -451,3 +451,7 @@ class Settings:
 
 # Create settings instance
 settings = Settings()
+settings.POLICY_CHUNK_SIZE = int(os.getenv("POLICY_CHUNK_SIZE", "500"))
+settings.POLICY_CHUNK_OVERLAP = int(os.getenv("POLICY_CHUNK_OVERLAP", "50"))
+settings.POLICY_EMBEDDING_MODEL = os.getenv("POLICY_EMBEDDING_MODEL", "gemini/gemini-embedding-001")
+settings.POLICY_EMBEDDING_DIM = int(os.getenv("POLICY_EMBEDDING_DIM", "1536"))
