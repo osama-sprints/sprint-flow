@@ -40,6 +40,7 @@ class IncomingMessage(BaseModel):
     """One inbound Mattermost message, normalised across both transports."""
 
     channel_id: str = Field(..., description="Channel the message arrived in")
+    team_id: str = Field(default="", description="Team the message belongs to")
     post_id: str = Field(default="", description="The triggering post")
     text: str = Field(..., description="Cleaned message body")
     user_id: str = Field(default="", description="Author's Mattermost user id — scopes long-term memory")
@@ -157,6 +158,7 @@ async def answer_and_reply(message: IncomingMessage) -> None:
         mattermost_user_id=message.user_id,
         username=message.user_name,
         channel_id=channel_id,
+        team_id=message.team_id,
         channel_type=message.channel_type,
         thread_root_id=message.root_id or message.post_id,
     )

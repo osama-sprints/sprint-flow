@@ -28,7 +28,7 @@ async def policy_retrieval_node(state: dict) -> Command:
     requester = current_requester.get()
 
     if requester and (
-        requester.is_superadmin or requester.has_any_cohort_authority()
+        requester.is_superadmin or requester.has_any_channel_authority()
     ):
         audience = None 
     else:

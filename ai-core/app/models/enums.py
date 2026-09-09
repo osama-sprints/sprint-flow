@@ -9,7 +9,7 @@ from enum import StrEnum
 
 
 class RoleKey(StrEnum):
-    """Cohort-scoped role keys. A person holds one of these per cohort."""
+    """Channel-scoped role keys. A person holds one of these per channel."""
 
     LEARNER = "learner"
     TECH_LEAD = "tech_lead"
@@ -25,10 +25,10 @@ ROLE_LABELS: dict[RoleKey, str] = {
 }
 
 ROLE_DESCRIPTIONS: dict[RoleKey, str] = {
-    RoleKey.LEARNER: "Takes part in the cohort's sprints, standups and ceremonies.",
-    RoleKey.TECH_LEAD: "Resolves technical escalations and may administer the cohort.",
-    RoleKey.OPS_SUPPORT: "Resolves policy and operational escalations for the cohort.",
-    RoleKey.SCRUM_MASTER: "Runs the agile ceremonies and may administer the cohort.",
+    RoleKey.LEARNER: "Takes part in the channel's sprints, standups and ceremonies.",
+    RoleKey.TECH_LEAD: "Resolves technical escalations and may administer the channel.",
+    RoleKey.OPS_SUPPORT: "Resolves policy and operational escalations for the channel.",
+    RoleKey.SCRUM_MASTER: "Runs the agile ceremonies and may administer the channel.",
 }
 
 # Words people use for a role, lower-cased, mapped to the machine key.
@@ -49,9 +49,9 @@ ROLE_ALIASES: dict[str, RoleKey] = {
     "scrummaster": RoleKey.SCRUM_MASTER,
 }
 
-# Roles that may administer the cohort they hold the role in: assign roles,
+# Roles that may administer the channel they hold the role in: assign roles,
 # open sprints and schedule ceremonies. Everything else is read-only.
-COHORT_ADMIN_ROLES: frozenset[RoleKey] = frozenset({RoleKey.TECH_LEAD, RoleKey.SCRUM_MASTER})
+CHANNEL_ADMIN_ROLES: frozenset[RoleKey] = frozenset({RoleKey.TECH_LEAD, RoleKey.SCRUM_MASTER})
 
 
 class CeremonyTypeKey(StrEnum):
@@ -112,7 +112,7 @@ CEREMONY_TYPE_ALIASES: dict[str, CeremonyTypeKey] = {
 
 
 class MembershipStatus(StrEnum):
-    """Lifecycle of a cohort membership."""
+    """Lifecycle of a channel membership."""
 
     ACTIVE = "active"
     INACTIVE = "inactive"

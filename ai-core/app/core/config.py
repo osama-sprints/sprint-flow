@@ -153,7 +153,14 @@ class Settings:
         )
         self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
-        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL for backwards compatibility
+        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        self.LANGFUSE_DEBUG = os.getenv("LANGFUSE_DEBUG", "false").lower() in ("true", "1", "t", "yes")
+        # Sample rate for traces (1.0 = 100%, reduce for high-volume apps to lower costs)
+        try:
+            self.LANGFUSE_SAMPLE_RATE = float(os.getenv("LANGFUSE_SAMPLE_RATE", "1.0"))
+        except ValueError:
+            self.LANGFUSE_SAMPLE_RATE = 1.0
 
         # LLM Configuration — ALL traffic goes through the LiteLLM proxy.
         # There are no direct provider SDKs or provider keys in this stack:
@@ -348,8 +355,29 @@ class Settings:
         # Nor further ahead than this.
         self.SCHEDULING_MAX_HORIZON_DAYS = int(os.getenv("SCHEDULING_MAX_HORIZON_DAYS", "365"))
         # What happens when a new ceremony overlaps an existing one for the same
-        # cohort: "refuse" (default, the scheduling report justifies it) or "warn".
+        # channel: "refuse" (default, the scheduling report justifies it) or "warn".
         self.SCHEDULING_CONFLICT_POLICY = os.getenv("SCHEDULING_CONFLICT_POLICY", "refuse").strip().lower()
+
+        # --- Google Meet integration (ceremony scheduling) -----------------------
+        # Set GOOGLE_MEET_ENABLED=true and supply credentials to attach a Google
+        # Meet link to ceremonies when the user asks.  Set to false (default) to
+        # disable entirely; all scheduling still works without it.
+        self.GOOGLE_MEET_ENABLED = os.getenv("GOOGLE_MEET_ENABLED", "false").lower() in ("true", "1", "t", "yes")
+        # Service account credentials as a JSON *string* (not a file path) —
+        # safe for container environments. Copy the contents of your
+        # service-account-key.json here.
+        self.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS = os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", "")
+        # The Google Calendar to create events on. Use "primary" for the service
+        # account's own calendar, or a shared calendar's id (found in Calendar
+        # settings → "Calendar ID").
+        self.GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+        # A real Google/Workspace account email for the service account to impersonate
+        # via domain-wide delegation. Required to create Meet links — service accounts
+        # cannot generate Meet conferencing without acting as a real user.
+        self.GOOGLE_IMPERSONATE_EMAIL = os.getenv("GOOGLE_IMPERSONATE_EMAIL", "").strip()
+        # Which video-meeting backend to use: "jitsi" (default, no credentials
+        # needed) or "google_meet" (requires Workspace + domain-wide delegation).
+        self.MEETING_LINK_PROVIDER = os.getenv("MEETING_LINK_PROVIDER", "jitsi").strip()
 
         # --- Sprint 1 / proactive onboarding (s1e5) ------------------------------
         self.ONBOARDING_ENABLED = os.getenv("ONBOARDING_ENABLED", "true").lower() in ("true", "1", "t", "yes")

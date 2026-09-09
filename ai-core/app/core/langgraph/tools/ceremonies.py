@@ -89,16 +89,15 @@ def _confirm(question: str, *, scheduled_at: datetime | None) -> bool | None:
 @tool
 @guarded_tool
 async def schedule_ceremony(
-    cohort: str,
     ceremony_type: str,
     time_expression: str,
     agenda: str | None = None,
     duration_minutes: int | None = None,
-    sprint_name: str | None = None,
+    with_meet: bool = False,
 ) -> str:
-    """Schedule an agile ceremony (standup, sprint planning, sprint review, retrospective, open Q&A) for a cohort.
+    """Schedule an agile ceremony (standup, sprint planning, sprint review, retrospective, open Q&A) for the current channel.
 
-    Only a tech lead or scrum master of the cohort (or a platform administrator) may
+    Only a tech lead or scrum master of the channel (or a platform administrator) may
     schedule; the tool checks this itself and answers ``[AUTHORISATION_REFUSED]`` otherwise.
 
     Pass the person's own words for the time as ``time_expression``, verbatim (for
@@ -111,25 +110,26 @@ async def schedule_ceremony(
     time (in their timezone and in UTC) before anything is stored; nothing is
     scheduled until they say yes. Repeating the request after a "no" is fine.
 
+    Pass ``with_meet=True`` when the person asks for a Google Meet link. A join URL
+    will be created and included in the confirmation.
+
     Args:
-        cohort: The cohort's name (or numeric id) as the person referred to it.
         ceremony_type: The kind of ceremony: standup, planning, review, retro or q&a (aliases accepted).
         time_expression: The person's words describing when, verbatim.
         agenda: Agenda text if the person gave one.
         duration_minutes: Length in minutes if the person gave one; otherwise the type's default.
-        sprint_name: The sprint to attach the ceremony to, if the person named one.
+        with_meet: Whether to create and attach a Google Meet link.
 
     Returns:
         str: ``[CEREMONY_SCHEDULED]`` with the ceremony id and the time in both zones, or a
         result code explaining why not (clarification, conflict, refusal, validation).
     """
     outcome = await scheduling.prepare_schedule(
-        cohort=cohort,
         ceremony_type=ceremony_type,
         time_expression=time_expression,
         agenda=agenda,
         duration_minutes=duration_minutes,
-        sprint_name=sprint_name,
+        with_meet=with_meet,
     )
     if isinstance(outcome, SchedulingProblem):
         return _problem(outcome)
@@ -144,9 +144,10 @@ async def schedule_ceremony(
     if isinstance(committed, SchedulingProblem):
         return _problem(committed)
     warning = f" {outcome.conflict_warning}" if outcome.conflict_warning else ""
+    meet = f"\n🔗 Join: {committed.meet_link}" if committed.meet_link else ""
     return tool_result(
         ResultCode.CEREMONY_SCHEDULED,
-        f"Scheduled ceremony #{committed.id}: {outcome.describe()}.{warning}",
+        f"Scheduled ceremony #{committed.id}: {outcome.describe()}.{warning}{meet}",
     )
 
 
@@ -161,7 +162,7 @@ async def amend_ceremony(
 ) -> str:
     """Change the time or agenda of an existing ceremony, or cancel it.
 
-    Only a tech lead or scrum master of the ceremony's cohort (or a platform
+    Only a tech lead or scrum master of the ceremony's channel (or a platform
     administrator) may amend; the tool checks this itself. Find the ceremony id with
     ``list_ceremonies`` first if the person did not give one.
 
@@ -217,24 +218,21 @@ async def amend_ceremony(
 
 @tool
 @guarded_tool
-async def list_ceremonies(cohort: str, include_past: bool = False, include_cancelled: bool = False) -> str:
-    """List what is scheduled for a cohort: each ceremony's id, type, time (in the person's timezone and UTC), duration, organiser, agenda and status.
+async def list_ceremonies(include_past: bool = False, include_cancelled: bool = False) -> str:
+    """List what is scheduled for the current channel: each ceremony's id, type, time (in the person's timezone and UTC), duration, organiser, agenda and status.
 
-    Any member of the cohort may read its calendar; reading is not privileged. Use
+    Any member of the channel may read its calendar; reading is not privileged. Use
     this to answer "what's scheduled", "when is the next retro", and to find a
     ceremony's id before amending it.
 
     Args:
-        cohort: The cohort's name (or numeric id).
         include_past: Also include ceremonies that already took place.
         include_cancelled: Also include cancelled ceremonies.
 
     Returns:
         str: ``[OK]`` followed by one line per ceremony, or a refusal when the person is not a member.
     """
-    view = await scheduling.list_calendar(
-        cohort=cohort, include_past=include_past, include_cancelled=include_cancelled
-    )
+    view = await scheduling.list_calendar(include_past=include_past, include_cancelled=include_cancelled)
     return tool_result(ResultCode.OK, scheduling.render_calendar(view))
 
 

@@ -1,6 +1,10 @@
 """This file contains the main application entry point."""
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import (
+    asynccontextmanager,
+    suppress,
+)
 from datetime import (
     UTC,
     datetime,
@@ -30,7 +34,7 @@ from app.core.middleware import (
     MetricsMiddleware,
     ProfilingMiddleware,
 )
-from app.core.observability import langfuse_init
+from app.core.observability import langfuse_init, shutdown_langfuse
 from app.services.agent import agent
 from app.services.database import database_service
 from app.services.domain.reference_data import seed_reference_data
@@ -38,6 +42,7 @@ from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
 from app.services.memory import memory_service
 from app.workers.onboarding_dispatcher import onboarding_dispatcher
+from app.services.ceremony_reminders import reminder_poller
 
 # Load environment variables
 load_dotenv()
@@ -45,8 +50,8 @@ langfuse_init()
 
 # The table whose absence means the domain migrations never ran. /health
 # reports 503 in that case so the container cannot look healthy while every
-# cohort-aware feature is broken.
-_SCHEMA_SENTINEL_TABLE = "cohorts"
+# channel-aware feature is broken.
+_SCHEMA_SENTINEL_TABLE = "sprints"
 
 
 @asynccontextmanager
@@ -103,9 +108,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("onboarding_dispatcher_start_failed", error=str(e))
 
+    # Proactive ceremony reminders: DMs sent 24 h and 1 h before each ceremony.
+    # The CeremonyReminder table guarantees at-most-once delivery on restart.
+    try:
+        ceremony_reminder_task = asyncio.create_task(reminder_poller(), name="ceremony-reminder-poller")
+    except Exception as e:
+        ceremony_reminder_task = None
+        logger.exception("ceremony_reminder_poller_start_failed", error=str(e))
+
     yield
 
     # Cleanup on shutdown
+    if ceremony_reminder_task is not None and not ceremony_reminder_task.done():
+        ceremony_reminder_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await ceremony_reminder_task
     await onboarding_dispatcher.stop()
     await mattermost_ws_listener.stop()
     await cache_service.close()
@@ -114,6 +131,8 @@ async def lifespan(app: FastAPI):
     if agent._connection_pool:
         await agent._connection_pool.close()
         logger.info("connection_pool_closed")
+    # Flush pending Langfuse traces before shutdown
+    shutdown_langfuse()
     logger.info("application_shutdown")
 
 

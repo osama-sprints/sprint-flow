@@ -6,17 +6,17 @@ ticket, and posting a courteous answer into the learner's thread — lives
 elsewhere and consumes exactly what this module writes to
 ``escalation_tickets`` (see ``app.services.domain.escalations``).
 
-Design, in one paragraph: a learner's message arrives in a cohort's channel.
+Design, in one paragraph: a learner's message arrives in a channel's channel.
 When the agent has no grounded answer, it calls ``open_escalation``. This
-module resolves the cohort from the channel (never from anything the learner
-typed), resolves the human from the **stored** cohort-role mapping for a
+module resolves the channel from the channel (never from anything the learner
+typed), resolves the human from the **stored** channel-role mapping for a
 fixed role (see ``choosing_the_human`` in ``reports/escalation_report.md`` for
 why this does not vary per-message), opens a private DM with that human, and
 writes an ``EscalationTicket`` carrying both conversations' identifiers. The
 learner is told, generically, that a colleague is looking into it — never
 who, never that a specific person was messaged.
 
-Every step after cohort/human resolution is best-effort in the sense that it
+Every step after channel/human resolution is best-effort in the sense that it
 never raises past this module for reasons outside the learner's control (a
 missing human, a failed DM): the ticket is still created and the learner still
 gets an honest, non-alarming acknowledgement. See ``missing_human`` in
@@ -37,18 +37,17 @@ from app.models.enums import (
 )
 from app.services.authorisation import (
     ValidationFailed,
-    require_active_cohort,
     require_requester,
 )
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.domain import escalations as escalation_repo
 from app.services.domain import identity as identity_repo
 from app.services.mattermost import mattermost_client
 
-# The role each ticket type is routed to. A cohort holds at most one active
+# The role each ticket type is routed to. A channel holds at most one active
 # membership per (user, role), but nothing stops two people from separately
-# holding the same role in one cohort; when that happens the earliest-assigned
-# holder (list_cohort_members is ordered by joined_at) is used, so routing is
+# holding the same role in one channel; when that happens the earliest-assigned
+# holder (list_channel_members is ordered by joined_at) is used, so routing is
 # still deterministic rather than picking whichever the query happens to
 # return first.
 ROLE_FOR_TICKET_TYPE: dict[EscalationType, RoleKey] = {
@@ -59,7 +58,7 @@ ROLE_FOR_TICKET_TYPE: dict[EscalationType, RoleKey] = {
 # See `choosing_the_human` in reports/escalation_report.md: this task does not
 # split tech/ops:questions are not classified by content, the refusal signal
 # carries no category, and splitting is not required by the brief. Every
-# escalation routes to the cohort's tech lead. A future caller (e.g. an
+# escalation routes to the channel's tech lead. A future caller (e.g. an
 # escalation opened from a distinctly operational flow) can still pass
 # ticket_type=EscalationType.OPS explicitly — the split is supported end to
 # end, just never inferred from a message.
@@ -83,12 +82,12 @@ class EscalationResult:
     ticket: EscalationTicket | None = None
 
 
-def _dm_prompt(ticket: EscalationTicket, cohort_name: str, learner_label: str, question: str) -> str:
+def _dm_prompt(ticket: EscalationTicket, channel_name: str, learner_label: str, question: str) -> str:
     """Compose the message posted into the human's DM thread.
 
     Args:
         ticket: The freshly created ticket (for its reference).
-        cohort_name: The cohort's display name.
+        channel_name: The channel's display name.
         learner_label: How to refer to the learner (display name or handle).
         question: The learner's question, verbatim.
 
@@ -96,7 +95,7 @@ def _dm_prompt(ticket: EscalationTicket, cohort_name: str, learner_label: str, q
         str: The DM body.
     """
     return (
-        f"**New escalation {ticket.ticket_ref}** from *{cohort_name}*.\n\n"
+        f"**New escalation {ticket.ticket_ref}** from *{channel_name}*.\n\n"
         f"{learner_label} asked:\n> {question}\n\n"
         f"Reply in this thread with your answer — it will be turned into a reply "
         f"for {learner_label} automatically. No need to mention {ticket.ticket_ref}."
@@ -104,7 +103,7 @@ def _dm_prompt(ticket: EscalationTicket, cohort_name: str, learner_label: str, q
 
 
 def _no_human_message(ticket: EscalationTicket, role_key: RoleKey) -> str:
-    """Compose the honest acknowledgement for a cohort with nobody in the required role.
+    """Compose the honest acknowledgement for a channel with nobody in the required role.
 
     Args:
         ticket: The ticket that was still created.
@@ -116,7 +115,7 @@ def _no_human_message(ticket: EscalationTicket, role_key: RoleKey) -> str:
     label = ROLE_LABELS[role_key].lower()
     return (
         f"I don't have a confident answer for that. I've logged it as {ticket.ticket_ref}, but this "
-        f"cohort doesn't have a {label} assigned yet, so I can't hand it to someone right now — it's "
+        f"channel doesn't have a {label} assigned yet, so I can't hand it to someone right now — it's "
         f"on record and will be picked up once one is."
     )
 
@@ -182,12 +181,12 @@ async def open_escalation(
     ticket_type: EscalationType = DEFAULT_TICKET_TYPE,
     requester: RequesterContext | None = None,
 ) -> EscalationResult:
-    """Route an ungrounded learner question to the cohort's designated human, privately.
+    """Route an ungrounded learner question to the channel's designated human, privately.
 
-    The human is resolved strictly from the stored cohort-role mapping
-    (``cohort_memberships`` joined to ``roles``) for the role ``ticket_type``
+    The human is resolved strictly from the stored channel-role mapping
+    (``channel_memberships`` joined to ``roles``) for the role ``ticket_type``
     maps to — never from ``question`` or any other message content. When the
-    cohort has nobody in that role, the ticket is still created (unassigned)
+    channel has nobody in that role, the ticket is still created (unassigned)
     and the learner is told honestly rather than the request failing; see
     ``missing_human`` in ``reports/escalation_report.md``.
 
@@ -201,8 +200,8 @@ async def open_escalation(
         EscalationResult: Always one of the two ``ESCALATION_*`` codes.
 
     Raises:
-        ValidationFailed: Empty question, no cohort resolves for the channel,
-            or the cohort is deactivated. A different exception from a refusal
+        ValidationFailed: Empty question, no channel resolves for the channel,
+            or the channel is deactivated. A different exception from a refusal
             deliberately, per ``app.services.authorisation``: this is not a
             permission decision, so it is never masked as one.
     """
@@ -235,23 +234,20 @@ async def open_escalation(
             existing,
         )
 
-    cohort = await cohort_repo.get_cohort_by_channel_id(context.channel_id)
-
-    if cohort is None or cohort.id is None:
-        raise ValidationFailed("I can only escalate a question asked inside a cohort's own channel.")
-    require_active_cohort(cohort)
+    channel_id = context.channel_id
+    if not channel_id:
+        raise ValidationFailed("I can only escalate a question asked inside a channel's own channel.")
 
     role_key = ROLE_FOR_TICKET_TYPE[ticket_type]
-    members = await cohort_repo.list_cohort_members(cohort.id, active_only=True)
+    members = await channel_repo.list_channel_roles(channel_id, active_only=True)
     holder = next((member for member in members if member.role.key == role_key.value), None)
 
     try:
         ticket = await escalation_repo.create_escalation_ticket(
-            cohort_id=cohort.id,
+            channel_id=channel_id,
             learner_id=learner.id,
             ticket_type=ticket_type,
             question=cleaned_question,
-            learner_channel_id=context.channel_id,
             learner_thread_id=effective_thread_id,
             assigned_human_id=holder.user.id if holder else None,
         )
@@ -259,7 +255,7 @@ async def open_escalation(
         # Lost a race with an identical, concurrent trigger for the same
         # thread: the partial unique index (0003_escalation_open_thread_unique)
         # held, so report the winner instead of opening a second ticket —
-        # the same shape as `back_office.create_cohort`'s race handling.
+        # the same shape as `back_office.create_channel`'s race handling.
         raced = await escalation_repo.get_open_escalation_ticket_for_learner_thread(effective_thread_id)
         if raced is None:
             raise
@@ -278,7 +274,7 @@ async def open_escalation(
     if holder is None:
         logger.warning(
             "escalation_no_human_available",
-            cohort_id=cohort.id,
+            channel_id=channel_id,
             role_key=role_key.value,
             ticket_ref=ticket.ticket_ref,
         )
@@ -290,7 +286,7 @@ async def open_escalation(
     if dm_channel and dm_channel.get("id"):
         dm_post = await mattermost_client.create_post(
             dm_channel["id"],
-            _dm_prompt(ticket, cohort.name, learner_label, cleaned_question),
+            _dm_prompt(ticket, channel_id, learner_label, cleaned_question),
         )
 
     if dm_channel and dm_channel.get("id") and dm_post and dm_post.get("id"):
@@ -307,12 +303,12 @@ async def open_escalation(
     # stays `open` with a human already assigned so a chaser or an operator
     # can retry the handoff without the learner's question being lost —
     # logged at `error` because, unlike `no_human`, this is a system fault
-    # worth paging on, not a cohort configuration gap. The learner is told
+    # worth paging on, not a channel configuration gap. The learner is told
     # honestly: a human is assigned but has not actually been contacted yet,
     # never that the handoff already happened.
     logger.error(
         "escalation_dm_handoff_failed",
-        cohort_id=cohort.id,
+        channel_id=channel_id,
         ticket_ref=ticket.ticket_ref,
         assigned_human_id=holder.user.id,
     )

@@ -3,7 +3,7 @@
 Every inbound event carries a Mattermost user id. This module reads the
 profile back from Mattermost (cached), upserts the ``users`` row, computes the
 superadmin flag from the ``ADMIN_EMAILS`` allowlist, and snapshots the person's
-active cohort roles for routing. The result is bound to ``current_requester``
+active channel roles for routing. The result is bound to ``current_requester``
 by the conversation layer before the graph runs.
 
 The profile read is cached per user for ``IDENTITY_PROFILE_CACHE_TTL`` seconds
@@ -26,7 +26,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.requester import RequesterContext
 from app.models import User
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.mattermost import mattermost_client
 
@@ -183,6 +183,7 @@ async def resolve_requester(
     mattermost_user_id: str,
     username: str = "",
     channel_id: str = "",
+    team_id: str = "",
     channel_type: str = "",
     thread_root_id: str = "",
 ) -> RequesterContext:
@@ -192,6 +193,7 @@ async def resolve_requester(
         mattermost_user_id: The id on the Mattermost event.
         username: The handle the transport supplied, if any.
         channel_id: Where the message arrived.
+        team_id: The team the message belongs to.
         channel_type: O, P, D or G.
         learner_thread_id: The post id a proactive reply to this turn must be
         threaded under (mirrors ``IncomingMessage`` in ``app.services.conversation``:
@@ -206,6 +208,7 @@ async def resolve_requester(
         mattermost_user_id=mattermost_user_id,
         username=username,
         channel_id=channel_id,
+        team_id=team_id,
         channel_type=channel_type,
         learner_thread_id=thread_root_id,
     )
@@ -221,24 +224,25 @@ async def resolve_requester(
         return base
 
     try:
-        memberships = await cohort_repo.list_memberships_for_user(user.id, active_only=True)
+        memberships = await channel_repo.list_memberships_for_user(user.id, active_only=True)
     except Exception as e:
         logger.exception("identity_memberships_lookup_failed", user_id=user.id, error=str(e))
         memberships = []
     roles: dict[int, str] = {}
-    for _membership, cohort, role in memberships:
-        if cohort.id is not None:
-            roles[cohort.id] = role.key
+    for _membership, channel, role in memberships:
+        if channel.id is not None:
+            roles[channel.id] = role.key
 
     return RequesterContext(
         mattermost_user_id=mattermost_user_id,
         username=user.username or username,
         email=user.email,
         channel_id=channel_id,
+        team_id=team_id,
         channel_type=channel_type,
         user_id=user.id,
         is_superadmin=user.is_superadmin,
         timezone=user.timezone,
-        cohort_roles=MappingProxyType(roles),
+        channel_roles=MappingProxyType(roles),
         learner_thread_id=thread_root_id,
     )

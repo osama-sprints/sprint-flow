@@ -1,7 +1,7 @@
 """Ceremony scheduling: authorise, interpret, check conflicts, confirm, persist.
 
 The flow is split in two on purpose. ``prepare_*`` does every read — resolve
-the cohort, authorise the requester from stored data, interpret the time,
+the channel, authorise the requester from stored data, interpret the time,
 look for clashes — and returns a proposal that carries everything needed to
 show the person exactly what will be stored. ``commit_*`` performs the single
 write, and only the tool layer decides to call it, after the person has
@@ -33,7 +33,6 @@ from app.core.requester import RequesterContext
 from app.models import (
     Ceremony,
     CeremonyAmendment,
-    Cohort,
     utcnow,
 )
 from app.models.enums import (
@@ -44,15 +43,11 @@ from app.models.enums import (
 )
 from app.services.authorisation import (
     ValidationFailed,
-    require_active_cohort,
-    require_cohort_authority,
-    require_cohort_membership,
     require_requester,
+    require_requester_user,
 )
 from app.services.domain import ceremonies as ceremony_repo
-from app.services.domain import cohorts as cohort_repo
 from app.services.domain import identity as identity_repo
-from app.services.domain import sprints as sprint_repo
 from app.services.time_interpretation import (
     TimeInterpretation,
     format_local,
@@ -91,8 +86,8 @@ class ScheduleProposal:
     """Everything needed to confirm and then persist one ceremony.
 
     Attributes:
-        cohort_id: The cohort.
-        cohort_name: Its display name.
+        team_id: The team.
+        channel_id: The channel.
         ceremony_type_id: The seeded type row.
         ceremony_type_key: Its machine key.
         ceremony_type_label: Its display label.
@@ -100,18 +95,16 @@ class ScheduleProposal:
         scheduled_at: The start instant, UTC.
         duration_minutes: Length.
         agenda: Free text, if given.
-        sprint_id: The sprint, if one was named.
-        sprint_name: Its name.
-        time_expression: What the person typed.
-        zone: The zone the expression was interpreted in.
-        local_display: The instant as the person sees it.
-        utc_display: The instant in UTC.
+        time_expression: The natural language string that was interpreted.
+        zone: The zone used to interpret it.
+        local_display: How to format the time for the organiser (e.g. "tomorrow at 2pm PST").
+        utc_display: How to format the time unambiguously in UTC.
+        with_meet: Whether to attach a Google Meet link.
         conflict_warning: Overlap description under the ``warn`` policy, else None.
-        channel_id: Channel reminders should go to, if known.
     """
 
-    cohort_id: int
-    cohort_name: str
+    team_id: str
+    channel_id: str
     ceremony_type_id: int
     ceremony_type_key: str
     ceremony_type_label: str
@@ -119,27 +112,23 @@ class ScheduleProposal:
     scheduled_at: datetime
     duration_minutes: int
     agenda: str | None
-    sprint_id: int | None
-    sprint_name: str | None
     time_expression: str
     zone: str
     local_display: str
     utc_display: str
     conflict_warning: str | None = None
-    channel_id: str | None = None
+    with_meet: bool = False
 
     def describe(self) -> str:
         """One sentence naming what will be stored.
 
         Returns:
-            str: Type, cohort, both time renderings, duration, sprint and agenda.
+            str: Type, both time renderings, duration, and agenda.
         """
         parts = [
-            f"{self.ceremony_type_label} for cohort '{self.cohort_name}' on {self.local_display}",
+            f"{self.ceremony_type_label} on {self.local_display}",
             f"— that is {self.utc_display} — lasting {self.duration_minutes} minutes",
         ]
-        if self.sprint_name:
-            parts.append(f"in sprint '{self.sprint_name}'")
         parts.append(f"with agenda: {self.agenda}" if self.agenda else "with no agenda yet")
         return " ".join(parts)
 
@@ -162,8 +151,8 @@ class AmendmentProposal:
 
     Attributes:
         ceremony_id: The ceremony.
-        cohort_id: Its cohort.
-        cohort_name: Its cohort's name.
+        team_id: Its team.
+        channel_id: Its channel.
         ceremony_type_label: Its type label.
         amended_by_id: The stored requester.
         changes: ``{column: new_value}`` for ``update_ceremony``.
@@ -178,8 +167,8 @@ class AmendmentProposal:
     """
 
     ceremony_id: int
-    cohort_id: int
-    cohort_name: str
+    team_id: str
+    channel_id: str
     ceremony_type_label: str
     amended_by_id: int
     changes: dict[str, Any]
@@ -198,7 +187,7 @@ class AmendmentProposal:
         Returns:
             str: What changes on which ceremony.
         """
-        subject = f"ceremony #{self.ceremony_id} ({self.ceremony_type_label}, cohort '{self.cohort_name}')"
+        subject = f"ceremony #{self.ceremony_id} ({self.ceremony_type_label})"
         if self.cancel:
             return f"cancel {subject} currently on {self.previous_local_display} ({self.previous_utc_display})"
         pieces: list[str] = []
@@ -238,17 +227,19 @@ class CalendarEntry:
 
 @dataclass(frozen=True)
 class CalendarView:
-    """A cohort's calendar plus how to render it.
+    """A channel's calendar plus how to render it.
 
     Attributes:
-        cohort: The cohort.
+        team_id: The team.
+        channel_id: The channel.
         entries: Soonest first.
         zone: IANA zone to render local times in, or None for UTC only.
         include_past: Whether past ceremonies were requested.
         include_cancelled: Whether cancelled ceremonies were requested.
     """
 
-    cohort: Cohort
+    team_id: str
+    channel_id: str
     entries: Sequence[CalendarEntry] = field(default_factory=tuple)
     zone: str | None = None
     include_past: bool = False
@@ -359,7 +350,7 @@ def apply_conflict_policy(
         return f"Warning: this overlaps {named}."
     return SchedulingProblem(
         "conflict",
-        f"That time clashes with {named}. The cohort cannot attend two ceremonies at once; "
+        f"That time clashes with {named}. The channel cannot attend two ceremonies at once; "
         "please choose another time or amend the existing ceremony.",
     )
 
@@ -406,9 +397,9 @@ def render_calendar(view: CalendarView) -> str:
     if view.include_cancelled:
         scope += " (including cancelled)"
     if not view.entries:
-        return f"No {scope} for cohort '{view.cohort.name}'."
+        return f"No {scope} scheduled here."
     zone_note = f"times shown in {view.zone} and UTC" if tz and view.zone else "times shown in UTC"
-    lines = [f"{scope.capitalize()} for cohort '{view.cohort.name}' ({zone_note}):"]
+    lines = [f"{scope.capitalize()} ({zone_note}):"]
     for entry in view.entries:
         ceremony = entry.ceremony
         when = (
@@ -427,24 +418,6 @@ def render_calendar(view: CalendarView) -> str:
 # ---------------------------------------------------------------------------
 # Database-backed service
 # ---------------------------------------------------------------------------
-
-
-async def _resolve_cohort(reference: str) -> Cohort:
-    """Turn what the person typed into a cohort row.
-
-    Args:
-        reference: Cohort name or numeric id.
-
-    Returns:
-        Cohort: The row.
-
-    Raises:
-        ValidationFailed: When no cohort matches.
-    """
-    cohort = await cohort_repo.resolve_cohort(reference)
-    if cohort is None or cohort.id is None:
-        raise ValidationFailed(f"I do not know a cohort called '{reference.strip()}'.")
-    return cohort
 
 
 async def _type_labels() -> dict[int, str]:
@@ -478,12 +451,11 @@ def _interpret(expression: str, requester: RequesterContext | None, now: datetim
 
 async def prepare_schedule(
     *,
-    cohort: str,
     ceremony_type: str,
     time_expression: str,
     agenda: str | None = None,
     duration_minutes: int | None = None,
-    sprint_name: str | None = None,
+    with_meet: bool = False,
     requester: RequesterContext | None = None,
     now: datetime | None = None,
     conflict_policy: str | None = None,
@@ -491,12 +463,11 @@ async def prepare_schedule(
     """Do every read needed to schedule a ceremony, without writing anything.
 
     Args:
-        cohort: Cohort name or id.
         ceremony_type: Type key, label or alias (``retro``).
         time_expression: The person's words, verbatim.
         agenda: Free text.
         duration_minutes: Length; defaults to the type's default.
-        sprint_name: Sprint to attach, by name.
+        with_meet: Whether to attach a Google Meet link.
         requester: The bound requester; defaults to ``current_requester``.
         now: The current instant; defaults to now.
         conflict_policy: Override of ``SCHEDULING_CONFLICT_POLICY`` (tests).
@@ -505,17 +476,19 @@ async def prepare_schedule(
         ScheduleProposal | SchedulingProblem: What to confirm, or why to stop.
 
     Raises:
-        AuthorisationRefused: When the requester may not administer the cohort.
-        ValidationFailed: On an unknown cohort, type or sprint, an inactive cohort, or a bad duration.
+        AuthorisationRefused: When the requester may not administer the channel.
+        ValidationFailed: On an unknown type or a bad duration.
     """
     context = requester or require_requester()
     reference = now or utcnow()
 
-    cohort_row = await _resolve_cohort(cohort)
-    assert cohort_row.id is not None
-    decision = await require_cohort_authority(context, cohort_row.id, action="schedule_ceremony")
-    require_active_cohort(cohort_row)
-    assert decision.user is not None and decision.user.id is not None
+    team_id = context.team_id
+    channel_id = context.channel_id
+    if not team_id or not channel_id:
+        raise ValidationFailed("I don't know which channel or team this is.")
+
+    user = await require_requester_user(context, action="schedule_ceremony")
+    assert user.id is not None
 
     key = normalise_ceremony_type_key(ceremony_type)
     if key is None:
@@ -530,25 +503,17 @@ async def prepare_schedule(
     if duration <= 0 or duration > 24 * 60:
         raise ValidationFailed("Duration must be between 1 and 1440 minutes.")
 
-    sprint_id: int | None = None
-    sprint_label: str | None = None
-    if sprint_name and sprint_name.strip():
-        sprint = await sprint_repo.get_sprint_by_name(cohort_row.id, sprint_name)
-        if sprint is None or sprint.id is None:
-            raise ValidationFailed(f"Cohort '{cohort_row.name}' has no sprint called '{sprint_name.strip()}'.")
-        sprint_id, sprint_label = sprint.id, sprint.name
-
     interpretation = _interpret(time_expression, context, reference)
     if interpretation.status != "ok" or interpretation.instant is None:
         logger.info(
             "scheduling_time_clarification",
-            cohort_id=cohort_row.id,
+            channel_id=channel_id,
             status=interpretation.status,
             expression=time_expression,
         )
         return SchedulingProblem("clarification", interpretation.question or "", status=interpretation.status)
 
-    clashes = await ceremony_repo.find_overlapping_ceremonies(cohort_row.id, interpretation.instant, duration)
+    clashes = await ceremony_repo.find_overlapping_ceremonies(channel_id, interpretation.instant, duration)
     verdict = apply_conflict_policy(
         clashes,
         policy=normalise_conflict_policy(conflict_policy or settings.SCHEDULING_CONFLICT_POLICY),
@@ -558,28 +523,26 @@ async def prepare_schedule(
         candidate_start=interpretation.instant,
     )
     if isinstance(verdict, SchedulingProblem):
-        logger.info("scheduling_conflict_refused", cohort_id=cohort_row.id, clashes=[c.id for c in clashes])
+        logger.info("scheduling_conflict_refused", channel_id=channel_id, clashes=[c.id for c in clashes])
         return verdict
 
     assert interpretation.zone and interpretation.local_display and interpretation.utc_display
     return ScheduleProposal(
-        cohort_id=cohort_row.id,
-        cohort_name=cohort_row.name,
+        team_id=team_id,
+        channel_id=channel_id,
         ceremony_type_id=type_row.id,
         ceremony_type_key=type_row.key,
         ceremony_type_label=type_row.label,
-        organizer_id=decision.user.id,
+        organizer_id=user.id,
         scheduled_at=interpretation.instant,
         duration_minutes=duration,
         agenda=agenda.strip() if agenda and agenda.strip() else None,
-        sprint_id=sprint_id,
-        sprint_name=sprint_label,
         time_expression=time_expression.strip(),
         zone=interpretation.zone,
         local_display=interpretation.local_display,
         utc_display=interpretation.utc_display,
         conflict_warning=verdict,
-        channel_id=cohort_row.mattermost_channel_id,
+        with_meet=with_meet,
     )
 
 
@@ -603,14 +566,14 @@ async def commit_schedule(
         Ceremony | SchedulingProblem: The stored row, or a conflict that appeared meanwhile.
 
     Raises:
-        AuthorisationRefused: When the requester may no longer administer the cohort.
+        AuthorisationRefused: When the requester may no longer administer the channel.
     """
     context = requester or require_requester()
-    decision = await require_cohort_authority(context, proposal.cohort_id, action="schedule_ceremony")
-    assert decision.user is not None and decision.user.id is not None
+    user = await require_requester_user(context, action="schedule_ceremony")
+    assert user.id is not None
 
     clashes = await ceremony_repo.find_overlapping_ceremonies(
-        proposal.cohort_id, proposal.scheduled_at, proposal.duration_minutes
+        proposal.channel_id, proposal.scheduled_at, proposal.duration_minutes
     )
     verdict = apply_conflict_policy(
         clashes,
@@ -621,29 +584,52 @@ async def commit_schedule(
         candidate_start=proposal.scheduled_at,
     )
     if isinstance(verdict, SchedulingProblem):
-        logger.info("scheduling_conflict_refused_at_commit", cohort_id=proposal.cohort_id)
+        logger.info("scheduling_conflict_refused_at_commit", channel_id=proposal.channel_id)
         return verdict
 
     ceremony = await ceremony_repo.create_ceremony(
-        cohort_id=proposal.cohort_id,
+        team_id=proposal.team_id,
+        channel_id=proposal.channel_id,
         ceremony_type_id=proposal.ceremony_type_id,
-        organizer_id=decision.user.id,
+        organizer_id=user.id,
         scheduled_at=proposal.scheduled_at,
         duration_minutes=proposal.duration_minutes,
         agenda=proposal.agenda,
-        sprint_id=proposal.sprint_id,
         time_expression=proposal.time_expression,
         time_zone=proposal.zone,
-        channel_id=proposal.channel_id,
     )
     logger.info(
         "ceremony_scheduled",
         ceremony_id=ceremony.id,
-        cohort_id=ceremony.cohort_id,
+        channel_id=ceremony.channel_id,
         ceremony_type=proposal.ceremony_type_key,
         scheduled_at=ceremony.scheduled_at.isoformat(),
         organizer_id=ceremony.organizer_id,
     )
+
+    if proposal.with_meet:
+        from app.services.meeting_link import create_meeting_link
+        from app.services.domain import identity as identity_repo
+
+        org_user = await identity_repo.get_user(user.id)
+        org_email = org_user.email if org_user else None
+
+        link = await create_meeting_link(
+            title=proposal.ceremony_type_label,
+            start=proposal.scheduled_at,
+            duration_minutes=proposal.duration_minutes,
+            description=proposal.agenda,
+            organizer_email=org_email,
+        )
+        if link:
+            await ceremony_repo.update_ceremony(
+                ceremony.id,  # type: ignore[arg-type]
+                amended_by_id=user.id,
+                changes={"meet_link": link},
+                reason="Generated meeting link",
+            )
+            ceremony.meet_link = link
+
     return ceremony
 
 
@@ -689,21 +675,20 @@ async def prepare_amendment(
         AmendmentProposal | SchedulingProblem: What to confirm/apply, or why to stop.
 
     Raises:
-        AuthorisationRefused: When the requester may not administer the ceremony's cohort.
-        ValidationFailed: Unknown ceremony, inactive cohort, nothing to change, or the past-ceremony policy.
+        AuthorisationRefused: When the requester may not administer the ceremony's channel.
+        ValidationFailed: Unknown ceremony, inactive channel, nothing to change, or the past-ceremony policy.
     """
     context = requester or require_requester()
     reference = now or utcnow()
+    user = await require_requester_user(context, action="amend_ceremony")
+    assert user.id is not None
 
     ceremony = await ceremony_repo.get_ceremony(ceremony_id)
     if ceremony is None or ceremony.id is None:
         raise ValidationFailed(f"There is no ceremony #{ceremony_id}.")
-    decision = await require_cohort_authority(context, ceremony.cohort_id, action="amend_ceremony")
-    assert decision.user is not None and decision.user.id is not None
-    cohort_row = await cohort_repo.get_cohort(ceremony.cohort_id)
-    if cohort_row is None:
-        raise ValidationFailed(f"Ceremony #{ceremony_id} belongs to a cohort that no longer exists.")
-    require_active_cohort(cohort_row)
+
+    if ceremony.channel_id != context.channel_id:
+        raise ValidationFailed(f"Ceremony #{ceremony_id} is not in this channel.")
 
     wants_time = bool(new_time_expression and new_time_expression.strip())
     wants_agenda = new_agenda is not None
@@ -740,7 +725,7 @@ async def prepare_amendment(
             )
             return SchedulingProblem("clarification", interpretation.question or "", status=interpretation.status)
         clashes = await ceremony_repo.find_overlapping_ceremonies(
-            ceremony.cohort_id, interpretation.instant, ceremony.duration_minutes, exclude_id=ceremony.id
+            ceremony.channel_id, interpretation.instant, ceremony.duration_minutes, exclude_id=ceremony.id
         )
         verdict = apply_conflict_policy(
             clashes,
@@ -759,10 +744,10 @@ async def prepare_amendment(
 
     return AmendmentProposal(
         ceremony_id=ceremony.id,
-        cohort_id=ceremony.cohort_id,
-        cohort_name=cohort_row.name,
+        team_id=ceremony.team_id,
+        channel_id=ceremony.channel_id,
         ceremony_type_label=labels.get(ceremony.ceremony_type_id, "ceremony"),
-        amended_by_id=decision.user.id,
+        amended_by_id=user.id,
         changes=changes,
         reason=reason.strip() if reason and reason.strip() else None,
         cancel=cancel,
@@ -790,16 +775,16 @@ async def commit_amendment(
         tuple[Ceremony, list[CeremonyAmendment]]: The updated row and its full amendment trail.
 
     Raises:
-        AuthorisationRefused: When the requester may no longer administer the cohort.
+        AuthorisationRefused: When the requester may no longer administer the channel.
         ValidationFailed: When the ceremony vanished meanwhile.
     """
     context = requester or require_requester()
-    decision = await require_cohort_authority(context, proposal.cohort_id, action="amend_ceremony")
-    assert decision.user is not None and decision.user.id is not None
+    user = await require_requester_user(context, action="amend_ceremony")
+    assert user.id is not None
 
     updated = await ceremony_repo.update_ceremony(
         proposal.ceremony_id,
-        amended_by_id=decision.user.id,
+        amended_by_id=user.id,
         changes=proposal.changes,
         reason=proposal.reason,
     )
@@ -811,23 +796,21 @@ async def commit_amendment(
         ceremony_id=proposal.ceremony_id,
         fields=sorted(proposal.changes),
         cancelled=proposal.cancel,
-        amended_by_id=decision.user.id,
+        amended_by_id=user.id,
     )
     return updated, trail
 
 
 async def list_calendar(
     *,
-    cohort: str,
     include_past: bool = False,
     include_cancelled: bool = False,
     requester: RequesterContext | None = None,
     now: datetime | None = None,
 ) -> CalendarView:
-    """A cohort's calendar for any of its members.
+    """A channel's calendar for any of its members.
 
     Args:
-        cohort: Cohort name or id.
         include_past: Also list ceremonies that already started.
         include_cancelled: Also list cancelled ceremonies.
         requester: The bound requester; defaults to ``current_requester``.
@@ -837,16 +820,15 @@ async def list_calendar(
         CalendarView: Rows plus the zone to render them in.
 
     Raises:
-        AuthorisationRefused: When the requester is not a member of the cohort (nor a superadmin).
-        ValidationFailed: When the cohort does not exist.
+        AuthorisationRefused: When the requester is not a member of the channel (nor a superadmin).
+        ValidationFailed: When the channel does not exist.
     """
     context = requester or require_requester()
-    cohort_row = await _resolve_cohort(cohort)
-    assert cohort_row.id is not None
-    await require_cohort_membership(context, cohort_row.id, action="list_ceremonies")
+    if not context.channel_id or not context.team_id:
+        raise ValidationFailed("I don't know which channel or team this is.")
 
     rows = await ceremony_repo.list_ceremonies(
-        cohort_row.id, include_past=include_past, include_cancelled=include_cancelled, now=now or utcnow()
+        context.channel_id, include_past=include_past, include_cancelled=include_cancelled, now=now or utcnow()
     )
     labels = await _type_labels()
     handles: dict[int, str] = {}
@@ -863,7 +845,8 @@ async def list_calendar(
             )
         )
     return CalendarView(
-        cohort=cohort_row,
+        team_id=context.team_id,
+        channel_id=context.channel_id,
         entries=tuple(entries),
         zone=effective_zone(context),
         include_past=include_past,

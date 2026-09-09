@@ -33,8 +33,8 @@ AMENDABLE_FIELDS: frozenset[str] = frozenset(
         "status",
         "time_expression",
         "time_zone",
-        "sprint_id",
         "channel_id",
+        "meet_link",
     }
 )
 
@@ -86,31 +86,31 @@ async def list_ceremony_types(session: AsyncSession | None = None) -> list[Cerem
 
 async def create_ceremony(
     *,
-    cohort_id: int,
+    team_id: str,
+    channel_id: str,
     ceremony_type_id: int,
     organizer_id: int,
     scheduled_at: datetime,
     duration_minutes: int,
     agenda: str | None = None,
-    sprint_id: int | None = None,
     time_expression: str | None = None,
     time_zone: str | None = None,
-    channel_id: str | None = None,
+    meet_link: str | None = None,
     session: AsyncSession | None = None,
 ) -> Ceremony:
     """Persist a ceremony. Conflict and authorisation checks belong to the caller.
 
     Args:
-        cohort_id: The cohort.
+        team_id: The team.
+        channel_id: The channel.
         ceremony_type_id: The kind of ceremony.
         organizer_id: The person scheduling it (from stored identity).
         scheduled_at: Timezone-aware start instant.
         duration_minutes: Length.
         agenda: Free text.
-        sprint_id: The sprint, if named.
         time_expression: What the organiser typed.
         time_zone: IANA zone used for interpretation.
-        channel_id: Channel for reminders.
+        meet_link: Google Meet join URL, if attached.
         session: Optional session to reuse.
 
     Returns:
@@ -121,16 +121,16 @@ async def create_ceremony(
     """
     require_aware(scheduled_at, "scheduled_at")
     ceremony = Ceremony(
-        cohort_id=cohort_id,
+        team_id=team_id,
+        channel_id=channel_id,
         ceremony_type_id=ceremony_type_id,
         organizer_id=organizer_id,
         scheduled_at=scheduled_at,
         duration_minutes=duration_minutes,
         agenda=agenda,
-        sprint_id=sprint_id,
         time_expression=time_expression,
         time_zone=time_zone,
-        channel_id=channel_id,
+        meet_link=meet_link,
     )
     async with session_scope(session) as s:
         s.add(ceremony)
@@ -154,17 +154,17 @@ async def get_ceremony(ceremony_id: int, session: AsyncSession | None = None) ->
 
 
 async def list_ceremonies(
-    cohort_id: int,
+    channel_id: str,
     *,
     include_past: bool = False,
     include_cancelled: bool = False,
     now: datetime | None = None,
     session: AsyncSession | None = None,
 ) -> list[Ceremony]:
-    """A cohort's calendar, soonest first.
+    """A channel's calendar, soonest first.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         include_past: Also return ceremonies that already started.
         include_cancelled: Also return cancelled ceremonies.
         now: The reference instant (defaults to now, UTC).
@@ -174,7 +174,7 @@ async def list_ceremonies(
         list[Ceremony]: Matching rows.
     """
     reference = require_aware(now, "now") if now is not None else utcnow()
-    statement = select(Ceremony).where(Ceremony.cohort_id == cohort_id).order_by(Ceremony.scheduled_at)  # type: ignore[arg-type]
+    statement = select(Ceremony).where(Ceremony.channel_id == channel_id).order_by(Ceremony.scheduled_at)  # type: ignore[arg-type]
     if not include_past:
         statement = statement.where(Ceremony.scheduled_at >= reference)
     if not include_cancelled:
@@ -190,7 +190,7 @@ async def list_upcoming_ceremonies(
     now: datetime | None = None,
     session: AsyncSession | None = None,
 ) -> list[Ceremony]:
-    """Every scheduled ceremony, across cohorts, starting within a window — the reminder task's query.
+    """Every scheduled ceremony, across channels, starting within a window — the reminder task's query.
 
     Args:
         within: Look-ahead window.
@@ -216,20 +216,20 @@ async def list_upcoming_ceremonies(
 
 
 async def find_overlapping_ceremonies(
-    cohort_id: int,
+    channel_id: str,
     scheduled_at: datetime,
     duration_minutes: int,
     *,
     exclude_id: int | None = None,
     session: AsyncSession | None = None,
 ) -> list[Ceremony]:
-    """Scheduled ceremonies of the cohort whose time range overlaps the candidate's.
+    """Scheduled ceremonies of the channel whose time range overlaps the candidate's.
 
     Two ranges overlap when each starts before the other ends. Cancelled and
     completed ceremonies never conflict.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         scheduled_at: Candidate start (timezone-aware).
         duration_minutes: Candidate length.
         exclude_id: A ceremony to ignore (the one being amended).
@@ -247,7 +247,7 @@ async def find_overlapping_ceremonies(
     statement = (
         select(Ceremony)
         .where(
-            Ceremony.cohort_id == cohort_id,
+            Ceremony.channel_id == channel_id,
             Ceremony.status == CeremonyStatus.SCHEDULED.value,
             Ceremony.scheduled_at < candidate_end,
             existing_end > scheduled_at,

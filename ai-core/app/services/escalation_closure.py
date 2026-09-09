@@ -251,7 +251,7 @@ async def _close(ticket: EscalationTicket, reviewer: User, raw_human_response: s
     answer = await _synthesize_answer(ticket.question, raw_human_response)
 
     learner_post = await mattermost_client.create_post(
-        ticket.learner_channel_id, answer, root_id=ticket.learner_thread_id
+        ticket.channel_id, answer, root_id=ticket.learner_thread_id
     )
     if not learner_post or not learner_post.get("id"):
         logger.error(

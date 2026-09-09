@@ -31,7 +31,7 @@ def _ticket(**overrides) -> SimpleNamespace:
         status="waiting_human",
         question="Can I take next Friday off?",
         learner_id=99,
-        learner_channel_id="learner-channel-1",
+        channel_id="learner-channel-1",
         learner_thread_id="learner-root-post-1",
         human_dm_channel_id="reviewer-dm-channel-1",
         human_dm_thread_id="reviewer-dm-root-1",
@@ -93,7 +93,7 @@ def test_round_trip_success_delivers_and_closes():
 
     # First post must land in the LEARNER's thread, not the reviewer's.
     first_call = mattermost_client.create_post.call_args_list[0]
-    assert first_call.args[0] == ticket.learner_channel_id
+    assert first_call.args[0] == ticket.channel_id
     assert first_call.kwargs["root_id"] == ticket.learner_thread_id
 
     # The learner-facing text must never leak the ticket ref or "reviewer".

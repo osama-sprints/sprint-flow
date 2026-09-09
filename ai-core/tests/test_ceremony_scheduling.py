@@ -13,7 +13,6 @@ from app.core.config import settings
 from app.core.requester import RequesterContext
 from app.models import (
     Ceremony,
-    Cohort,
 )
 from app.models.enums import CeremonyStatus
 from app.services.authorisation import ValidationFailed
@@ -39,7 +38,8 @@ LABELS = {1: "Daily Standup", 2: "Sprint Planning"}
 def ceremony(ceremony_id: int, type_id: int = 1, start: datetime = START, minutes: int = 15, **extra) -> Ceremony:
     return Ceremony(
         id=ceremony_id,
-        cohort_id=7,
+        team_id="team_123",
+        channel_id="chan_456",
         ceremony_type_id=type_id,
         organizer_id=3,
         scheduled_at=start,
@@ -108,7 +108,7 @@ def test_conflict_policy_setting_defaults_to_refuse(value, expected):
 
 def requester(zone: str | None) -> RequesterContext:
     return RequesterContext(
-        mattermost_user_id="mm-1", username="alice", timezone=zone, cohort_roles=MappingProxyType({})
+        mattermost_user_id="mm-1", username="alice", timezone=zone, team_id="team_123", channel_id="chan_abc", channel_roles=MappingProxyType({})
     )
 
 
@@ -173,8 +173,8 @@ def test_future_ceremony_time_change_is_allowed():
 
 def test_schedule_proposal_question_states_both_renderings_and_asks_yes_no():
     proposal = ScheduleProposal(
-        cohort_id=7,
-        cohort_name="Backend-01",
+        team_id="team_123",
+        channel_id="chan_abc",
         ceremony_type_id=2,
         ceremony_type_key="sprint_planning",
         ceremony_type_label="Sprint Planning",
@@ -182,25 +182,23 @@ def test_schedule_proposal_question_states_both_renderings_and_asks_yes_no():
         scheduled_at=START,
         duration_minutes=90,
         agenda="Plan sprint 2",
-        sprint_id=4,
-        sprint_name="Sprint 2",
         time_expression="tomorrow at 2pm",
         zone="Europe/Berlin",
         local_display="Friday 4 September 2026, 14:00 (Europe/Berlin)",
         utc_display="2026-09-04 12:00 UTC",
     )
     question = proposal.confirmation_question()
-    assert "Sprint Planning for cohort 'Backend-01'" in question
+    assert "Sprint Planning" in question
     assert "Friday 4 September 2026, 14:00 (Europe/Berlin)" in question
     assert "2026-09-04 12:00 UTC" in question
-    assert "90 minutes" in question and "Sprint 2" in question and "Plan sprint 2" in question
+    assert "90 minutes" in question and "Plan sprint 2" in question
     assert "Reply 'yes'" in question and "'no'" in question
 
 
 def test_schedule_proposal_question_carries_the_warning():
     proposal = ScheduleProposal(
-        cohort_id=7,
-        cohort_name="Backend-01",
+        team_id="team_123",
+        channel_id="chan_abc",
         ceremony_type_id=2,
         ceremony_type_key="sprint_planning",
         ceremony_type_label="Sprint Planning",
@@ -208,8 +206,6 @@ def test_schedule_proposal_question_carries_the_warning():
         scheduled_at=START,
         duration_minutes=90,
         agenda=None,
-        sprint_id=None,
-        sprint_name=None,
         time_expression="tomorrow at 2pm",
         zone="UTC",
         local_display="Friday 4 September 2026, 12:00 (UTC)",
@@ -223,8 +219,8 @@ def test_schedule_proposal_question_carries_the_warning():
 def test_amendment_proposal_describes_move_and_cancel():
     move = AmendmentProposal(
         ceremony_id=9,
-        cohort_id=7,
-        cohort_name="Backend-01",
+        team_id="team_123",
+        channel_id="chan_abc",
         ceremony_type_label="Retrospective",
         amended_by_id=3,
         changes={"scheduled_at": START, "agenda": "Lessons"},
@@ -237,13 +233,13 @@ def test_amendment_proposal_describes_move_and_cancel():
         new_utc_display="2026-09-04 12:00 UTC",
     )
     text = move.confirmation_question()
-    assert "ceremony #9 (Retrospective, cohort 'Backend-01')" in text
+    assert "ceremony #9 (Retrospective)" in text
     assert "2026-09-03 12:00 UTC" in text and "2026-09-04 12:00 UTC" in text
     assert "set the agenda to: Lessons" in text
     cancel = AmendmentProposal(
         ceremony_id=9,
-        cohort_id=7,
-        cohort_name="Backend-01",
+        team_id="team_123",
+        channel_id="chan_abc",
         ceremony_type_label="Retrospective",
         amended_by_id=3,
         changes={"status": "cancelled"},
@@ -260,9 +256,9 @@ def test_amendment_proposal_describes_move_and_cancel():
 
 
 def test_render_calendar_lists_every_field_in_both_zones():
-    cohort = Cohort(id=7, name="Backend-01")
     view = CalendarView(
-        cohort=cohort,
+        team_id="team_123",
+        channel_id="chan_abc",
         entries=(
             CalendarEntry(ceremony(1, agenda="Standup"), "Daily Standup", "@alice"),
             CalendarEntry(
@@ -277,7 +273,7 @@ def test_render_calendar_lists_every_field_in_both_zones():
     lines = text.splitlines()
     assert (
         lines[0]
-        == "All ceremonies (including cancelled) for cohort 'Backend-01' (times shown in Africa/Cairo and UTC):"
+        == "All ceremonies (including cancelled) (times shown in Africa/Cairo and UTC):"
     )
     assert lines[1] == (
         "- #1 Daily Standup — Friday 4 September 2026, 15:00 (Africa/Cairo) / 2026-09-04 12:00 UTC — 15 min — "
@@ -289,7 +285,9 @@ def test_render_calendar_lists_every_field_in_both_zones():
 
 def test_render_calendar_without_zone_shows_utc_only():
     view = CalendarView(
-        cohort=Cohort(id=7, name="Backend-01"), entries=(CalendarEntry(ceremony(1), "Daily Standup", "@a"),)
+        team_id="team_123",
+        channel_id="chan_abc",
+        entries=(CalendarEntry(ceremony(1), "Daily Standup", "@a"),)
     )
     text = render_calendar(view)
     assert "times shown in UTC" in text
@@ -297,5 +295,5 @@ def test_render_calendar_without_zone_shows_utc_only():
 
 
 def test_render_calendar_empty():
-    view = CalendarView(cohort=Cohort(id=7, name="Backend-01"))
-    assert render_calendar(view) == "No upcoming ceremonies for cohort 'Backend-01'."
+    view = CalendarView(team_id="team_123", channel_id="chan_abc")
+    assert render_calendar(view) == "No upcoming ceremonies scheduled here."

@@ -2,7 +2,7 @@
 
 Two properties are enforced here, structurally rather than by convention:
 
-- **Exactly one row per (person, cohort, step kind).** ``enqueue_step`` inserts
+- **Exactly one row per (person, channel, step kind).** ``enqueue_step`` inserts
   with ``ON CONFLICT DO NOTHING`` on that unique key, so a replayed arrival
   event, a reconnecting WebSocket, or two processes racing each other can
   never create a second welcome.
@@ -41,7 +41,8 @@ from app.services.database import session_scope
 async def enqueue_step(
     *,
     user_id: int,
-    cohort_id: int | None,
+    team_id: str | None = None,
+    channel_id: str | None = None,
     step_kind: OnboardingStepKind,
     due_at: datetime,
     session: AsyncSession | None = None,
@@ -50,7 +51,8 @@ async def enqueue_step(
 
     Args:
         user_id: The person.
-        cohort_id: The cohort the step is about, or None for workspace-level steps.
+        team_id: The team the step is about.
+        channel_id: The channel the step is about, or None for workspace-level steps.
         step_kind: Which message.
         due_at: Earliest delivery instant (timezone-aware).
         session: Optional session to reuse.
@@ -67,7 +69,8 @@ async def enqueue_step(
         pg_insert(OnboardingStep)
         .values(
             user_id=user_id,
-            cohort_id=cohort_id,
+            team_id=team_id,
+            channel_id=channel_id,
             step_kind=step_kind.value,
             status=OnboardingStepStatus.PENDING.value,
             due_at=due_at,
@@ -75,7 +78,7 @@ async def enqueue_step(
             created_at=now,
             updated_at=now,
         )
-        .on_conflict_do_nothing(constraint="uq_onboarding_steps_user_cohort_kind")
+        .on_conflict_do_nothing(constraint="uq_onboarding_steps_user_channel_kind")
         .returning(OnboardingStep)
     )
     async with session_scope(session) as s:
@@ -83,7 +86,7 @@ async def enqueue_step(
         created = result.scalar_one_or_none()
         if created is not None:
             return created, True
-        existing = await get_step_for(user_id, cohort_id, step_kind, session=s)
+        existing = await get_step_for(user_id, channel_id, step_kind, session=s)
         assert existing is not None
         return existing, False
 
@@ -104,15 +107,15 @@ async def get_step(step_id: int, session: AsyncSession | None = None) -> Onboard
 
 async def get_step_for(
     user_id: int,
-    cohort_id: int | None,
+    channel_id: str | None,
     step_kind: OnboardingStepKind,
     session: AsyncSession | None = None,
 ) -> OnboardingStep | None:
-    """Fetch the unique step for a person, cohort and kind.
+    """Fetch the unique step for a person, channel and kind.
 
     Args:
         user_id: The person.
-        cohort_id: The cohort, or None for workspace-level steps.
+        channel_id: The channel, or None for workspace-level steps.
         step_kind: Which message.
         session: Optional session to reuse.
 
@@ -123,10 +126,10 @@ async def get_step_for(
         OnboardingStep.user_id == user_id,
         OnboardingStep.step_kind == step_kind.value,
     )
-    if cohort_id is None:
-        statement = statement.where(col(OnboardingStep.cohort_id).is_(None))
+    if channel_id is None:
+        statement = statement.where(col(OnboardingStep.channel_id).is_(None))
     else:
-        statement = statement.where(OnboardingStep.cohort_id == cohort_id)
+        statement = statement.where(OnboardingStep.channel_id == channel_id)
     async with session_scope(session) as s:
         result = await s.exec(statement)
         return result.first()
@@ -230,7 +233,7 @@ async def mark_step_sent(
             must not overwrite the other worker's outcome.
         require_unclaimed: Settle only when no other worker holds a live claim.
             Used when one delivery covers another row (a welcome carrying a
-            cohort's orientation): if a worker is already delivering that row,
+            channel's orientation): if a worker is already delivering that row,
             leave it to them rather than clearing their claim.
         lease_seconds: How old a claim may be before it counts as abandoned;
             required with ``require_unclaimed``.
@@ -316,7 +319,7 @@ async def mark_step_failed(
 
 
 async def release_claim(step_id: int, session: AsyncSession | None = None) -> None:
-    """Give a claimed step back without counting an attempt (e.g. its cohort is inactive).
+    """Give a claimed step back without counting an attempt.
 
     Args:
         step_id: The step.
@@ -333,11 +336,11 @@ async def release_claim(step_id: int, session: AsyncSession | None = None) -> No
         await s.flush()
 
 
-async def halt_steps_for_cohort(cohort_id: int, session: AsyncSession | None = None) -> int:
-    """Mark every pending step of a cohort ``halted`` when the cohort is deactivated.
+async def halt_steps_for_channel(channel_id: str, session: AsyncSession | None = None) -> int:
+    """Mark every pending step of a channel ``halted`` when the channel is deactivated.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         session: Optional session to reuse.
 
     Returns:
@@ -346,7 +349,7 @@ async def halt_steps_for_cohort(cohort_id: int, session: AsyncSession | None = N
     async with session_scope(session) as s:
         result = await s.exec(
             select(OnboardingStep).where(
-                OnboardingStep.cohort_id == cohort_id,
+                OnboardingStep.channel_id == channel_id,
                 OnboardingStep.status == OnboardingStepStatus.PENDING.value,
             )
         )

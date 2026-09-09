@@ -25,7 +25,7 @@ async def escalate_to_human(question: str) -> str:
     Use this ONLY once you have genuinely found no supported answer for a
     policy or process question — never as a shortcut, and never to avoid a
     question you could otherwise ground. Do not name, guess or imply who will
-    receive it: the tool resolves the right person itself from the cohort's
+    receive it: the tool resolves the right person itself from the channel's
     stored role assignments and contacts them privately. Tell the learner only
     that you don't know and that a colleague has been looped in.
 
