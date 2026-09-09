@@ -45,7 +45,7 @@ from app.schemas.graph import CapabilityRoute
 _CEREMONY = (
     r"(?:stand-?ups?|dailys?|dailies|plannings?|sprint\s+plannings?|reviews?|sprint\s+reviews?|"
     r"retros?(?:pectives?)?|demos?|q\s*&\s*a|q\s*and\s*a|qa\s+sessions?|office\s+hours|"
-    r"ceremon(?:y|ies)|meetings?|sessions?)"
+    r"ceremon(?:y|ies)|meetings?|meets?|sessions?)"
 )
 # Words that name a channel role.
 _ROLE_WORD = r"(?:learners?|students?|tech\s*-?leads?|scrum\s*-?masters?|ops\s*-?support|ops|operations)"

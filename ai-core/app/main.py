@@ -51,7 +51,7 @@ langfuse_init()
 # The table whose absence means the domain migrations never ran. /health
 # reports 503 in that case so the container cannot look healthy while every
 # channel-aware feature is broken.
-_SCHEMA_SENTINEL_TABLE = "channels"
+_SCHEMA_SENTINEL_TABLE = "sprints"
 
 
 @asynccontextmanager

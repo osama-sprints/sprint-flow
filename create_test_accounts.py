@@ -6,7 +6,7 @@ import sys
 
 MM_API = "http://localhost:8065/api/v4"
 ADMIN_USER = "admin"
-ADMIN_PASS = "CHANGE_ME_Admin123!"
+ADMIN_PASS = "SprintAdmin2026!"
 
 def api_call(method, endpoint, data=None, token=None):
     url = f"{MM_API}{endpoint}"
