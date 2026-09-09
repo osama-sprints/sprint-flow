@@ -5,8 +5,8 @@ import urllib.error
 import sys
 
 MM_API = "http://localhost:8065/api/v4"
-ADMIN_USER = "admin"
-ADMIN_PASS = "SprintAdmin2026!"
+ADMIN_USER = "admin@sprints.ai"
+ADMIN_PASS = "Admin123!"
 
 def api_call(method, endpoint, data=None, token=None):
     url = f"{MM_API}{endpoint}"

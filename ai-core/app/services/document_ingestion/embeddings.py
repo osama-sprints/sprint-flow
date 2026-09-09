@@ -14,3 +14,8 @@ class EmbeddingService:
             dimensions=settings.POLICY_EMBEDDING_DIM,
         )
         return [item.embedding for item in response.data]
+
+
+async def generate_embeddings(query: str) -> List[float]:
+    embeddings = await EmbeddingService().get_embeddings([query])
+    return embeddings[0]

@@ -523,7 +523,10 @@ class MattermostWebSocketListener:
             "mattermost_ws_message_received",
             channel_id=channel_id,
             channel_type=channel_type,
+            team_id=team_id,
+            user_id=user_id,
             user_name=user_name,
+            role="learner_default_pending_identity_resolution",
             in_thread=bool(root_id),
             text_length=len(prompt),
         )

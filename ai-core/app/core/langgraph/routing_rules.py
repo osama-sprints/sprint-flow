@@ -234,6 +234,10 @@ ROUTING_RULES: List[Rule] = [
             r"\b(policy|policies|guideline|guidelines|rule|rules)\b",
             r"\b(leave|holiday|vacation|absence|absent|day\s+off|time\s+off|sick|late)\b",
             r"\b(allowed|permitted|playbook|refund|fee)\b",
+            r"\bamerican\s+center\s+cairo\b",
+            r"\bACC\b",
+            r"\bpartner\s+programs?\b",
+            r"\bprogram\s+graduation\s+criteria\b",
         ),
     ),
 ]

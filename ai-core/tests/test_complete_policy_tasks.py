@@ -30,7 +30,7 @@ def test_routing_rules():
     assert res.matched_rule == "policy_support"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_policy_retrieval_service():
     mock_docs = [
         {
@@ -65,7 +65,7 @@ async def test_policy_retrieval_service():
         assert status == "error" and len(docs) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_policy_retrieval_node_security_and_escalation():
     state_with_human_message = {"messages": [HumanMessage(content="What is the leave policy?")]}
 

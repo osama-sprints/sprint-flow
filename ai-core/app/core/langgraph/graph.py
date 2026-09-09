@@ -26,6 +26,7 @@ from typing import (
     Sequence,
     cast,
 )
+import json
 from urllib.parse import quote_plus
 
 import httpx
@@ -352,6 +353,7 @@ class LangGraphAgent:
                 username=username,
                 long_term_memory=state.long_term_memory,
                 routing_context=describe_route(spec.route.value, state.route_plan, continuation=bool(prior_replies)),
+                policy_context=json.dumps(state.policy_context or [], default=str, indent=2),
             )
             messages = prepare_messages(state.messages, system_prompt)
             tool_group = list(self.tool_groups.get(spec.tool_group, ()))
@@ -517,7 +519,10 @@ class LangGraphAgent:
         graph_builder.add_conditional_edges(
             "supervisor",
             route_after_supervisor,
-            {spec.node_name: spec.node_name for spec in SPECIALISTS.values()},
+            {
+                **{spec.node_name: spec.node_name for spec in SPECIALISTS.values()},
+                "policy_support": "policy_retrieval_node",
+            },
         )
         return graph_builder.compile(
             checkpointer=checkpointer, name=f"{settings.PROJECT_NAME} Agent ({settings.ENVIRONMENT.value})"

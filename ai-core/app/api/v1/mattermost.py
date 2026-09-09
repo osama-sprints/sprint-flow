@@ -182,8 +182,11 @@ async def mattermost_webhook(
 
     logger.info(
         "mattermost_webhook_received",
+        user_id=payload.user_id,
         channel_name=payload.channel_name,
+        team_id=payload.team_id,
         user_name=payload.user_name,
+        role="learner_default_pending_identity_resolution",
         text_length=len(prompt),
     )
 

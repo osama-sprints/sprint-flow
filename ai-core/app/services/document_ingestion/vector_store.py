@@ -38,10 +38,11 @@ class PolicyVectorStore:
     ) -> List[Dict[str, Any]]:
         async with session_scope() as session:
             distance_expr = PolicyDocumentChunk.embedding.l2_distance(query_embedding)
+            allowed_audiences = ("admin", "learner", "public") if audience in (None, "admin", "superadmin") else (audience,)
 
             stmt = (
                 select(PolicyDocumentChunk, distance_expr.label("distance"))
-                .where(PolicyDocumentChunk.audience == audience)  # type: ignore
+                .where(PolicyDocumentChunk.audience.in_(allowed_audiences))  # type: ignore
                 .order_by(distance_expr)
                 .limit(top_k)
             )

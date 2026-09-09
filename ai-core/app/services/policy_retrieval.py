@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Tuple
 from app.core.logging import logger
+from app.services.document_ingestion.embeddings import generate_embeddings
 
 try:
     # Import the PolicyVectorStore class from your vector_store.py
@@ -9,24 +10,18 @@ except ImportError:
 
 
 async def get_grounded_answer_or_refusal(
-    query: str, audience: str | None = None, top_k: int = 5, threshold: float = 0.75
+    query: str, audience: str | None = None, top_k: int = 5, threshold: float = 0.6
 ) -> Tuple[str, List[Dict[str, Any]]]:
     if not PolicyVectorStore:
         logger.warning("Vector store is not available. Returning empty results.")
         raw_results = []
     else:
         try:
-            # Here you would typically convert the `query` text into a `query_embedding` first
-            # e.g., query_embedding = await get_embeddings(query)
-            # For now, we pass an empty list or however you plan to pass it.
-            # You will need to implement the embedding generation here.
-
-            # Using a placeholder embedding to avoid syntax errors until you add your embedding logic
-            placeholder_embedding = [0.0] * 1536
+            query_embedding = await generate_embeddings(query)
 
             store = PolicyVectorStore()
             raw_results = await store.similarity_search(
-                query_embedding=placeholder_embedding, audience=audience, top_k=top_k
+                query_embedding=query_embedding, audience=audience, top_k=top_k
             )
         except Exception as e:
             logger.error(f"Vector store search failed: {e}")

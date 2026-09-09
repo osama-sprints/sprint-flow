@@ -9,15 +9,30 @@
 # Usage:  ./scripts/bootstrap_mattermost.sh
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
-ROOT="$PWD"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT=""
+for candidate in \
+  "$SCRIPT_DIR/.." \
+  "$SCRIPT_DIR" \
+  "${PWD}" \
+  "/app"; do
+  if [[ -f "$candidate/.env" ]]; then
+    ROOT="$(cd "$candidate" && pwd)"
+    break
+  fi
+done
 ENV_FILE="$ROOT/.env"
 
-[[ -f "$ENV_FILE" ]] || { echo "ERROR: .env not found. Copy .env.example to .env first."; exit 1; }
+[[ -n "$ROOT" ]] || { echo "ERROR: .env not found. Copy .env.example to .env first."; exit 1; }
 set -a; source "$ENV_FILE"; set +a
 
 MM_PORT="${MATTERMOST_HOST_PORT:-8065}"
-MM_API="http://localhost:${MM_PORT}/api/v4"
+if [[ -f /.dockerenv ]]; then
+  MM_HOST="${MATTERMOST_HOST:-mattermost}"
+else
+  MM_HOST="${MATTERMOST_HOST:-localhost}"
+fi
+MM_API="http://${MM_HOST}:${MM_PORT}/api/v4"
 MMCTL="/mattermost/bin/mmctl"
 BOT_USERNAME="${MATTERMOST_BOT_USERNAME:-sprintflow-assistant}"
 TEAM_NAME="${MM_TEAM_NAME:-sprints-community}"

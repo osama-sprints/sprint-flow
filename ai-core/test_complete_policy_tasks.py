@@ -12,6 +12,19 @@ import app.core.langgraph.specialists as specialists_module
 import app.core.langgraph.graph as graph_module
 
 
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def mock_policy_embeddings(monkeypatch):
+    async def generate_embeddings(query):
+        return [0.0] * 1536
+
+    monkeypatch.setattr("app.services.policy_retrieval.generate_embeddings", generate_embeddings)
+
+
 def test_extract_last_text():
     human_msg = HumanMessage(content="What is the refund policy?")
     dict_msg = {"content": "What is the refund policy?"}
@@ -30,7 +43,7 @@ def test_routing_rules():
     assert res.matched_rule == "policy_support"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_policy_retrieval_service():
     mock_docs = [
         {
@@ -65,7 +78,7 @@ async def test_policy_retrieval_service():
         assert status == "error" and len(docs) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_policy_retrieval_node_security_and_escalation():
     state_with_human_message = {"messages": [HumanMessage(content="What is the leave policy?")]}
 
@@ -93,8 +106,8 @@ async def test_policy_retrieval_node_security_and_escalation():
 
         cmd = await policy_retrieval_node(state_with_human_message)
         mock_ret.assert_called_once_with(query="What is the leave policy?", audience="learner")
-        assert cmd.goto == "policy_support_llm_node"
-        assert "21 days of paid leave" in cmd.update["policy_context"]
+        assert cmd.goto == "policy_support"
+        assert "21 days of paid leave" in cmd.update["policy_context"][0]["content"]
 
     # Case B: Admin / Operator Role (Audience = None)
     admin_requester = MagicMock(spec=RequesterContext)
