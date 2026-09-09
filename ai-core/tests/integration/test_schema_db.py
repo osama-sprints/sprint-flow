@@ -195,7 +195,8 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
             channel = await channel_repo.create_channel(f"Mem-{prefix}")
             learner = await channel_repo.get_role_by_key(RoleKey.LEARNER)
             lead = await channel_repo.get_role_by_key(RoleKey.TECH_LEAD)
-            assert user.id and channel_id and learner and learner.id and lead and lead.id
+            assert user.id and channel.id and learner and learner.id and lead and lead.id
+            channel_id = channel.id
             channel_ids.append(channel_id)
             changes = await asyncio.gather(
                 *(
@@ -232,7 +233,8 @@ def test_ceremony_overlap_boundaries_and_amendment_trail():
             user = await make_user(prefix)
             channel = await channel_repo.create_channel(f"Cer-{prefix}")
             ctype = await ceremony_repo.get_ceremony_type_by_key(CeremonyTypeKey.DAILY_STANDUP)
-            assert user.id and channel_id and ctype and ctype.id
+            assert user.id and channel.id and ctype and ctype.id
+            channel_id = channel.id
             channel_ids.append(channel_id)
             start = datetime(2030, 6, 1, 10, 0, tzinfo=UTC)
             ceremony = await ceremony_repo.create_ceremony(
@@ -276,7 +278,8 @@ def test_concurrent_escalation_tickets_get_unique_references():
         try:
             user = await make_user(prefix)
             channel = await channel_repo.create_channel(f"Esc-{prefix}")
-            assert user.id and channel_id
+            assert user.id and channel.id
+            channel_id = channel.id
             channel_ids.append(channel_id)
             tickets = await asyncio.gather(
                 *(

@@ -16,7 +16,7 @@ from app.services.database import session_scope
 
 async def create_sprint(
     *,
-    channel_id: int,
+    channel_id: str,
     name: str,
     start_date: date,
     end_date: date,
@@ -67,7 +67,7 @@ async def get_sprint(sprint_id: int, session: AsyncSession | None = None) -> Spr
         return await s.get(Sprint, sprint_id)
 
 
-async def get_sprint_by_name(channel_id: int, name: str, session: AsyncSession | None = None) -> Sprint | None:
+async def get_sprint_by_name(channel_id: str, name: str, session: AsyncSession | None = None) -> Sprint | None:
     """Fetch a sprint by channel and name, case-insensitively.
 
     Args:
@@ -86,7 +86,7 @@ async def get_sprint_by_name(channel_id: int, name: str, session: AsyncSession |
         return result.first()
 
 
-async def list_sprints(channel_id: int, session: AsyncSession | None = None) -> list[Sprint]:
+async def list_sprints(channel_id: str, session: AsyncSession | None = None) -> list[Sprint]:
     """List a channel's sprints by start date.
 
     Args:
@@ -103,7 +103,7 @@ async def list_sprints(channel_id: int, session: AsyncSession | None = None) -> 
         return list(result.all())
 
 
-async def get_active_sprint(channel_id: int, session: AsyncSession | None = None) -> Sprint | None:
+async def get_active_sprint(channel_id: str, session: AsyncSession | None = None) -> Sprint | None:
     """The channel's currently active sprint, if exactly one is open.
 
     Args:
@@ -123,7 +123,7 @@ async def get_active_sprint(channel_id: int, session: AsyncSession | None = None
 
 
 async def find_overlapping_sprints(
-    channel_id: int,
+    channel_id: str,
     start_date: date,
     end_date: date,
     *,

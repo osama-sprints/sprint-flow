@@ -1,30 +1,16 @@
 """Pure-logic tests for the back-office service and tool wrappers (no database, no network)."""
 
-import asyncio
 from datetime import date
 
 import pytest
 
-from app.core.langgraph.tools import back_office as back_office_tools
-from app.core.langgraph.tools.results import (
-    ResultCode,
-    result_code_of,
-)
 from app.core.requester import (
-    RequesterContext,
     current_requester,
-)
-from app.models import (
-    Role,
-    User,
 )
 from app.models.enums import RoleKey
 from app.services import back_office
-from app.services import authorisation
 from app.services.authorisation import (
     REFUSAL_MESSAGE,
-    AuthorisationDecision,
-    AuthorisationRefused,
     ValidationFailed,
 )
 
@@ -108,4 +94,3 @@ def test_resolve_sprint_dates_uses_the_setting_by_default(monkeypatch):
     monkeypatch.setattr(back_office.settings, "SPRINT_DEFAULT_LENGTH_DAYS", 7)
     start, end = back_office.resolve_sprint_dates(None, None, today=date(2030, 1, 1))
     assert (start, end) == (date(2030, 1, 1), date(2030, 1, 8))
-

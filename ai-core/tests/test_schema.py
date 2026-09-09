@@ -26,7 +26,6 @@ from sqlmodel import SQLModel
 import app.models  # noqa: F401  (populates the metadata)
 from app.models import (
     DOMAIN_TABLES,
-    Ceremony,
     require_aware,
 )
 from app.models.enums import (
@@ -43,7 +42,6 @@ from app.services.database import (
     EXTERNALLY_OWNED_TABLES,
     is_externally_owned,
 )
-from app.services.domain.ceremonies import AMENDABLE_FIELDS
 from app.services.domain.escalations import format_ticket_ref
 
 MIGRATION_FILE = Path(__file__).resolve().parents[1] / "alembic" / "versions" / "0001_sprintflow_domain_schema.py"
@@ -263,7 +261,6 @@ def test_ticket_ref_format():
     assert format_ticket_ref(1) == "ESC-000001"
     assert format_ticket_ref(42) == "ESC-000042"
     assert format_ticket_ref(1234567) == "ESC-1234567"
-
 
 
 def test_externally_owned_tables_cover_the_checkpointer_and_nothing_of_ours():

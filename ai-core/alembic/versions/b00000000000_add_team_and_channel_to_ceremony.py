@@ -39,7 +39,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE cohort_id IS NULL)")
+    op.execute(
+        "DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE cohort_id IS NULL)"
+    )
     op.execute("DELETE FROM ceremonies WHERE cohort_id IS NULL")
     op.alter_column("ceremonies", "cohort_id", existing_type=sa.Integer(), nullable=False)
     op.drop_index(op.f("ix_ceremonies_channel_id"), table_name="ceremonies")

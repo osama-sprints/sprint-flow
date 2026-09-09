@@ -250,9 +250,7 @@ async def _close(ticket: EscalationTicket, reviewer: User, raw_human_response: s
     """
     answer = await _synthesize_answer(ticket.question, raw_human_response)
 
-    learner_post = await mattermost_client.create_post(
-        ticket.channel_id, answer, root_id=ticket.learner_thread_id
-    )
+    learner_post = await mattermost_client.create_post(ticket.channel_id, answer, root_id=ticket.learner_thread_id)
     if not learner_post or not learner_post.get("id"):
         logger.error(
             "escalation_closure_learner_delivery_failed",
@@ -268,7 +266,12 @@ async def _close(ticket: EscalationTicket, reviewer: User, raw_human_response: s
             )
         return ClosureResult(ClosureOutcome.DELIVERY_FAILED, ticket=ticket)
 
-    await escalation_repo.set_escalation_status(ticket.ticket_ref, EscalationStatus.RESOLVED, answer=answer , raw_human_response=raw_human_response,)
+    await escalation_repo.set_escalation_status(
+        ticket.ticket_ref,
+        EscalationStatus.RESOLVED,
+        answer=answer,
+        raw_human_response=raw_human_response,
+    )
 
     confirmation = _reviewer_confirmation(ticket)
     if ticket.human_dm_channel_id:

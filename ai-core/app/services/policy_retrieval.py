@@ -9,12 +9,8 @@ except ImportError:
 
 
 async def get_grounded_answer_or_refusal(
-    query: str, 
-    audience: str,
-    top_k: int = 5,
-    threshold: float = 0.75
+    query: str, audience: str | None = None, top_k: int = 5, threshold: float = 0.75
 ) -> Tuple[str, List[Dict[str, Any]]]:
-    
     if not PolicyVectorStore:
         logger.warning("Vector store is not available. Returning empty results.")
         raw_results = []
@@ -24,15 +20,13 @@ async def get_grounded_answer_or_refusal(
             # e.g., query_embedding = await get_embeddings(query)
             # For now, we pass an empty list or however you plan to pass it.
             # You will need to implement the embedding generation here.
-            
+
             # Using a placeholder embedding to avoid syntax errors until you add your embedding logic
-            placeholder_embedding = [0.0] * 1536 
-            
+            placeholder_embedding = [0.0] * 1536
+
             store = PolicyVectorStore()
             raw_results = await store.similarity_search(
-                query_embedding=placeholder_embedding, 
-                audience=audience, 
-                top_k=top_k
+                query_embedding=placeholder_embedding, audience=audience, top_k=top_k
             )
         except Exception as e:
             logger.error(f"Vector store search failed: {e}")
@@ -50,11 +44,8 @@ async def get_grounded_answer_or_refusal(
             normalized_docs.append(doc_dict)
         elif isinstance(item, dict):
             normalized_docs.append(item)
-            
-    grounded_docs = [
-        doc for doc in normalized_docs 
-        if doc.get("similarity_score", 0.0) >= threshold
-    ]
+
+    grounded_docs = [doc for doc in normalized_docs if doc.get("similarity_score", 0.0) >= threshold]
 
     if not grounded_docs:
         return "no_match", []

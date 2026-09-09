@@ -175,6 +175,7 @@ def _message_for_existing_ticket(ticket: EscalationTicket, ticket_type: Escalati
         return _assigned_but_unreachable_message(ticket)
     return _no_human_message(ticket, ROLE_FOR_TICKET_TYPE[ticket_type])
 
+
 async def open_escalation(
     question: str,
     *,

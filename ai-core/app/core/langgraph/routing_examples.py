@@ -60,14 +60,14 @@ REQUESTERS: Dict[str, Optional[RequesterContext]] = {
         username="lena",
         channel_type="D",
         user_id=11,
-        channel_roles=MappingProxyType({1: "learner"}),
+        channel_roles=MappingProxyType({"1": "learner"}),
     ),
     "authority": RequesterContext(
         mattermost_user_id="mm-sm",
         username="sam",
         channel_type="D",
         user_id=12,
-        channel_roles=MappingProxyType({1: "scrum_master"}),
+        channel_roles=MappingProxyType({"1": "scrum_master"}),
     ),
     "admin": RequesterContext(
         mattermost_user_id="mm-admin",

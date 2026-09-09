@@ -64,9 +64,6 @@ _TIME_LABELS: dict[str, str] = {"24h": "24 hours", "1h": "1 hour"}
 # ---------------------------------------------------------------------------
 
 
-
-
-
 async def _already_sent(
     ceremony_id: int,
     recipient_mm_id: str,

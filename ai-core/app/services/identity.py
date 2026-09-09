@@ -224,14 +224,14 @@ async def resolve_requester(
         return base
 
     try:
-        memberships = await channel_repo.list_memberships_for_user(user.id, active_only=True)
+        memberships = await channel_repo.list_roles_for_user(user.id, active_only=True)
     except Exception as e:
         logger.exception("identity_memberships_lookup_failed", user_id=user.id, error=str(e))
         memberships = []
-    roles: dict[int, str] = {}
-    for _membership, channel, role in memberships:
-        if channel.id is not None:
-            roles[channel.id] = role.key
+    roles: dict[str, str] = {}
+    for membership, role in memberships:
+        if membership.channel_id is not None:
+            roles[membership.channel_id] = role.key
 
     return RequesterContext(
         mattermost_user_id=mattermost_user_id,

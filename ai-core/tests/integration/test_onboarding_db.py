@@ -29,7 +29,6 @@ from app.models import (
     utcnow,
 )
 from app.models.enums import (
-    OnboardingStepKind,
     OnboardingStepStatus,
     RoleKey,
 )
@@ -248,7 +247,6 @@ def test_gives_up_after_max_attempts(fake: FakeMattermost, monkeypatch: pytest.M
         assert fake.posts == []
 
     run(scenario())
-
 
 
 def test_two_dispatchers_deliver_twenty_steps_exactly_once(fake: FakeMattermost):

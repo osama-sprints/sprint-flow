@@ -19,6 +19,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 TZ = sa.DateTime(timezone=True)
 
+
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS vector;")
     op.create_table(
@@ -37,6 +38,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_policy_chunks_doc_id", "policy_document_chunks", ["document_id"], unique=False)
     op.create_index("ix_policy_chunks_audience", "policy_document_chunks", ["audience"], unique=False)
+
 
 def downgrade() -> None:
     op.drop_index("ix_policy_chunks_audience", table_name="policy_document_chunks")

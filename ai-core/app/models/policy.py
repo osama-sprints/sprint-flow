@@ -4,8 +4,9 @@ from sqlmodel import SQLModel, Field, Column, JSON, DateTime
 from pgvector.sqlalchemy import Vector
 from app.models.domain_base import utcnow
 
+
 class PolicyDocumentChunk(SQLModel, table=True):
-    __tablename__ = "policy_document_chunks"
+    __tablename__ = "policy_document_chunks"  # pyright: ignore[reportAssignmentType]
 
     id: str = Field(primary_key=True, description="SHA256 hash of doc_id, index, and content")
     document_id: str = Field(index=True, nullable=False)

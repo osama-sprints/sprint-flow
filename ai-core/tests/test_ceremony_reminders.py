@@ -24,18 +24,15 @@ from datetime import (
 )
 from unittest.mock import (
     AsyncMock,
-    MagicMock,
     patch,
 )
 
-import pytest
 
 from app.models import Ceremony
 from app.models.enums import CeremonyStatus
 from app.services.ceremony_reminders import (
     _format_local,
     due_ceremonies,
-    get_channel_members,
     send_reminder,
 )
 
@@ -135,11 +132,14 @@ def test_already_sent_skipped():
     """If a CeremonyReminder row exists, no DM is posted."""
     ceremony = make_ceremony()
 
-    with patch(
-        "app.services.ceremony_reminders._already_sent",
-        new_callable=AsyncMock,
-        return_value=True,
-    ), patch("app.services.ceremony_reminders.mattermost_client") as mock_mm:
+    with (
+        patch(
+            "app.services.ceremony_reminders._already_sent",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch("app.services.ceremony_reminders.mattermost_client") as mock_mm,
+    ):
         result = asyncio.run(send_reminder(ceremony, "user_mm_001", "24h", "Sprint Planning"))
 
     assert result is False
@@ -169,10 +169,12 @@ def test_idempotent_on_restart():
     fake_post = {"id": "post_001"}
 
     async def _run():
-        with patch("app.services.ceremony_reminders._already_sent", side_effect=fake_already_sent), \
-             patch("app.services.ceremony_reminders._record_sent", side_effect=fake_record_sent), \
-             patch("app.services.ceremony_reminders._organizer_display", new_callable=AsyncMock, return_value="Alice"), \
-             patch("app.services.ceremony_reminders.mattermost_client") as mock_mm:
+        with (
+            patch("app.services.ceremony_reminders._already_sent", side_effect=fake_already_sent),
+            patch("app.services.ceremony_reminders._record_sent", side_effect=fake_record_sent),
+            patch("app.services.ceremony_reminders._organizer_display", new_callable=AsyncMock, return_value="Alice"),
+            patch("app.services.ceremony_reminders.mattermost_client") as mock_mm,
+        ):
             mock_mm.get_user_timezone = AsyncMock(return_value="UTC")
             mock_mm.create_direct_channel = AsyncMock(return_value=fake_channel)
             mock_mm.create_post = AsyncMock(return_value=fake_post)
@@ -237,10 +239,12 @@ def test_fallback_to_utc_when_mattermost_tz_fails():
     fake_post = {"id": "post_002"}
 
     async def _run():
-        with patch("app.services.ceremony_reminders._already_sent", new_callable=AsyncMock, return_value=False), \
-             patch("app.services.ceremony_reminders._record_sent", new_callable=AsyncMock, return_value=True), \
-             patch("app.services.ceremony_reminders._organizer_display", new_callable=AsyncMock, return_value="Bob"), \
-             patch("app.services.ceremony_reminders.mattermost_client") as mock_mm:
+        with (
+            patch("app.services.ceremony_reminders._already_sent", new_callable=AsyncMock, return_value=False),
+            patch("app.services.ceremony_reminders._record_sent", new_callable=AsyncMock, return_value=True),
+            patch("app.services.ceremony_reminders._organizer_display", new_callable=AsyncMock, return_value="Bob"),
+            patch("app.services.ceremony_reminders.mattermost_client") as mock_mm,
+        ):
             # Simulate Mattermost TZ endpoint failure: client returns "UTC" (its own fallback).
             mock_mm.get_user_timezone = AsyncMock(return_value="UTC")
             mock_mm.create_direct_channel = AsyncMock(return_value=fake_channel)

@@ -5,6 +5,7 @@ from langgraph.types import Command
 from app.core.requester import current_requester
 from app.services.escalation import EscalationType, open_escalation
 from app.services.policy_retrieval import get_grounded_answer_or_refusal
+from app.schemas import GraphState
 
 
 def _extract_last_text(messages: list) -> str:
@@ -21,28 +22,29 @@ def _extract_last_text(messages: list) -> str:
     return str(last_msg)
 
 
-async def policy_retrieval_node(state: dict) -> Command:
-    messages = state.get("messages", [])
+async def policy_retrieval_node(state: GraphState) -> Command:
+    if isinstance(state, dict):
+        messages = state.get("messages", [])
+    else:
+        messages = getattr(state, "messages", [])
     last_message_text = _extract_last_text(messages)
 
     requester = current_requester.get()
 
-    if requester and (
-        requester.is_superadmin or requester.has_any_channel_authority()
-    ):
-        audience = None 
+    if requester and (requester.is_superadmin or requester.has_any_channel_authority()):
+        audience = None
     else:
         audience = "learner"
 
-    status, docs = await get_grounded_answer_or_refusal(
-        query=last_message_text, audience=audience
-    )
+    status, docs = await get_grounded_answer_or_refusal(query=last_message_text, audience=audience)
 
     if status == "grounded":
-        context_str = "\n".join([
-            f"[Source: {d.get('document_id')}, §{d.get('section_title')}, p.{d.get('page_number')}] {d.get('content')}"
-            for d in docs
-        ])
+        context_str = "\n".join(
+            [
+                f"[Source: {d.get('document_id')}, §{d.get('section_title')}, p.{d.get('page_number')}] {d.get('content')}"
+                for d in docs
+            ]
+        )
         return Command(
             update={"policy_context": context_str},
             goto="policy_support_llm_node",
