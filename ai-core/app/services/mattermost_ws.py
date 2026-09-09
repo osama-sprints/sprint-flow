@@ -39,6 +39,7 @@ from app.core.cache import (
 from app.core.config import settings
 from app.core.logging import logger
 from app.services import onboarding
+from app.services import escalation_closure
 from app.services.conversation import (
     IncomingMessage,
     answer_and_reply,
@@ -475,7 +476,27 @@ class MattermostWebSocketListener:
 
         raw_message = str(post.get("message") or "")
         root_id = str(post.get("root_id") or "")
-
+ 
+        # Sprint 2 / escalation closure: a reviewer's reply must never reach
+        # the normal chat pipeline -- it would be answered by the general
+        # agent instead of being attributed to the ticket it resolves. This
+        # has to run before _should_handle, since that gate always accepts
+        # DMs (rule 1) and would otherwise let the reply through untouched.
+        # Never raised past here: a bug in closure must not take the
+        # listener down, same principle as onboarding's arrival handling.
+        try:
+            closure_result = await escalation_closure.handle_reviewer_reply(
+                mattermost_user_id=user_id,
+                channel_id=str(post.get("channel_id") or ""),
+                channel_type=channel_type,
+                root_id=root_id,
+                text=raw_message,
+            )
+            if closure_result.outcome != escalation_closure.ClosureOutcome.NOT_ESCALATION:
+                return
+        except Exception as e:
+            logger.exception("escalation_closure_check_failed", error=str(e))
+ 
         # Routing decision comes before any expensive work. Most public-channel
         # chatter is discarded here without an API call, let alone a model call.
         if not await self._should_handle(channel_type, raw_message, root_id):
