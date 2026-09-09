@@ -40,16 +40,19 @@ async def test_policy_retrieval_service():
         "similarity_score": 0.89
     }]
 
-    with patch("app.services.policy_retrieval.similarity_search", return_value=mock_docs):
+    with patch("app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock) as mock_sim:
+        mock_sim.return_value = mock_docs
         status, docs = await get_grounded_answer_or_refusal("what is the leave policy?", audience="learner")
         assert status == "grounded" and len(docs) == 1
         assert docs[0]["content"] == "Regular employees receive 21 days of paid leave per year."
 
-    with patch("app.services.policy_retrieval.similarity_search", return_value=[]):
+    with patch("app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock) as mock_sim:
+        mock_sim.return_value = []
         status, docs = await get_grounded_answer_or_refusal("how to cook pizza?", audience="learner")
         assert status == "no_match" and len(docs) == 0
 
-    with patch("app.services.policy_retrieval.similarity_search", side_effect=Exception("DB Error")):
+    with patch("app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock) as mock_sim:
+        mock_sim.side_effect = Exception("DB Error")
         status, docs = await get_grounded_answer_or_refusal("what is the leave policy?", audience="learner")
         assert status == "error" and len(docs) == 0
 
@@ -71,7 +74,7 @@ async def test_policy_retrieval_node_security_and_escalation():
     # Case A: Learner Role (Audience = 'learner')
     learner_requester = MagicMock(spec=RequesterContext)
     learner_requester.is_superadmin = False
-    learner_requester.has_any_cohort_authority.return_value = False
+    learner_requester.has_any_channel_authority.return_value = False
 
     with patch("app.core.langgraph.nodes.current_requester") as mock_ctx, \
          patch("app.core.langgraph.nodes.get_grounded_answer_or_refusal", new_callable=AsyncMock) as mock_ret:
