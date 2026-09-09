@@ -9,8 +9,7 @@ from app.models.ceremony import Ceremony
 from app.models.ceremony_reminder import CeremonyReminder
 from app.models.ceremony_amendment import CeremonyAmendment
 from app.models.ceremony_type import CeremonyType
-from app.models.cohort import Cohort
-from app.models.cohort_membership import CohortMembership
+from app.models.channel_role import ChannelRole
 from app.models.daily_standup import DailyStandup
 from app.models.domain_base import (
     DomainBase,
@@ -29,8 +28,7 @@ DOMAIN_TABLES: tuple[str, ...] = (
     "users",
     "roles",
     "ceremony_types",
-    "cohorts",
-    "cohort_memberships",
+    "channel_roles",
     "sprints",
     "ceremonies",
     "ceremony_amendments",
@@ -46,8 +44,7 @@ __all__ = [
     "CeremonyAmendment",
     "CeremonyReminder",
     "CeremonyType",
-    "Cohort",
-    "CohortMembership",
+    "ChannelRole",
     "DailyStandup",
     "DomainBase",
     "EscalationTicket",

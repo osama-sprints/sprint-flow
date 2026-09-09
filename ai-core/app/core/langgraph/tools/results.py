@@ -35,8 +35,8 @@ class ResultCode(StrEnum):
     """Stable prefixes for tool results."""
 
     OK = "OK"
-    COHORT_CREATED = "COHORT_CREATED"
-    COHORT_ALREADY_EXISTS = "COHORT_ALREADY_EXISTS"
+    CHANNEL_CREATED = "CHANNEL_CREATED"
+    CHANNEL_ALREADY_EXISTS = "CHANNEL_ALREADY_EXISTS"
     ROLE_ASSIGNED = "ROLE_ASSIGNED"
     ROLE_ALREADY_ASSIGNED = "ROLE_ALREADY_ASSIGNED"
     ROLE_CHANGED = "ROLE_CHANGED"
@@ -103,7 +103,7 @@ def _handle(exc: BaseException, tool_name: str) -> str:
     if isinstance(exc, GraphBubbleUp):
         raise exc
     if isinstance(exc, AuthorisationRefused):
-        logger.warning("tool_refused", tool=tool_name, reason=exc.reason, action=exc.action, cohort_id=exc.cohort_id)
+        logger.warning("tool_refused", tool=tool_name, reason=exc.reason, action=exc.action, channel_id=exc.channel_id)
         return tool_result(ResultCode.AUTHORISATION_REFUSED, REFUSAL_MESSAGE)
     if isinstance(exc, ValidationFailed):
         logger.info("tool_validation_failed", tool=tool_name, detail=str(exc))

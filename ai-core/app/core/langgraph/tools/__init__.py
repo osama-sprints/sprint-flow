@@ -18,8 +18,8 @@ from langchain_core.tools.base import BaseTool
 from .ask_human import ask_human
 from .back_office import TOOLS as BACK_OFFICE_ADMIN_TOOLS
 from .back_office import (
-    list_cohort_members,
-    list_cohorts,
+    list_channel_members,
+    list_channel_roles_for_requester,
 )
 from .ceremonies import TOOLS as CEREMONY_TOOLS
 from .ceremonies import list_ceremonies
@@ -40,18 +40,18 @@ GENERAL_TOOLS: list[BaseTool] = [
     mattermost_send_welcome_dm,
 ]
 
-# Learner-facing support: clarification, web search and READ-ONLY cohort
-# tools (the calendar, the person's own cohorts, their cohort's roster). No
+# Learner-facing support: clarification, web search and READ-ONLY channel
+# tools (the calendar, the person's own channels, their channel's roster). No
 # mutations; each read tool refuses non-members in code.
 LEARNER_SUPPORT_TOOLS: list[BaseTool] = [
     ask_human,
     duckduckgo_search_tool,
     list_ceremonies,
-    list_cohorts,
-    list_cohort_members,
+    list_channel_roles_for_requester,
+    list_channel_members,
 ]
 
-# Back office: cohort, role, sprint administration (s1e2) and ceremony
+# Back office: channel, role, sprint administration (s1e2) and ceremony
 # scheduling (s1e4). Every tool here checks stored authority in code.
 BACK_OFFICE_TOOLS: list[BaseTool] = [
     ask_human,

@@ -355,7 +355,7 @@ class Settings:
         # Nor further ahead than this.
         self.SCHEDULING_MAX_HORIZON_DAYS = int(os.getenv("SCHEDULING_MAX_HORIZON_DAYS", "365"))
         # What happens when a new ceremony overlaps an existing one for the same
-        # cohort: "refuse" (default, the scheduling report justifies it) or "warn".
+        # channel: "refuse" (default, the scheduling report justifies it) or "warn".
         self.SCHEDULING_CONFLICT_POLICY = os.getenv("SCHEDULING_CONFLICT_POLICY", "refuse").strip().lower()
 
         # --- Google Meet integration (ceremony scheduling) -----------------------
@@ -371,6 +371,13 @@ class Settings:
         # account's own calendar, or a shared calendar's id (found in Calendar
         # settings → "Calendar ID").
         self.GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+        # A real Google/Workspace account email for the service account to impersonate
+        # via domain-wide delegation. Required to create Meet links — service accounts
+        # cannot generate Meet conferencing without acting as a real user.
+        self.GOOGLE_IMPERSONATE_EMAIL = os.getenv("GOOGLE_IMPERSONATE_EMAIL", "").strip()
+        # Which video-meeting backend to use: "jitsi" (default, no credentials
+        # needed) or "google_meet" (requires Workspace + domain-wide delegation).
+        self.MEETING_LINK_PROVIDER = os.getenv("MEETING_LINK_PROVIDER", "jitsi").strip()
 
         # --- Sprint 1 / proactive onboarding (s1e5) ------------------------------
         self.ONBOARDING_ENABLED = os.getenv("ONBOARDING_ENABLED", "true").lower() in ("true", "1", "t", "yes")

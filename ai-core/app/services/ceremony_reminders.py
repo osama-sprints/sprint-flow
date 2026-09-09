@@ -1,6 +1,6 @@
 """Proactive ceremony reminder poller.
 
-Sends DMs to every cohort member ahead of each scheduled ceremony:
+Sends DMs to every channel member ahead of each scheduled ceremony:
 - 24 hours before (``"24h"`` window)
 -  1 hour before  (``"1h"`` window)
 
@@ -13,12 +13,12 @@ No cron library, no Celery. A plain ``async def reminder_poller()`` loop is
 started as an ``asyncio.create_task`` in ``app.main``'s lifespan, exactly
 like the ``onboarding_dispatcher``.
 
-Architectural note — cohort_id is gone from Ceremony:
-    The distributed branch removed ``cohort_id`` from the ``Ceremony`` model.
+Architectural note — channel_id is gone from Ceremony:
+    The distributed branch removed ``channel_id`` from the ``Ceremony`` model.
     Ceremonies are now scoped by ``channel_id`` + ``team_id``. The link back
-    to a cohort (and therefore to its members) is:
-        ``ceremony.channel_id == cohort.mattermost_channel_id``
-    A ceremony whose channel maps to no active cohort is skipped — there are
+    to a channel (and therefore to its members) is:
+        ``ceremony.channel_id == channel.mattermost_channel_id``
+    A ceremony whose channel maps to no active channel is skipped — there are
     no members to remind.
 """
 
@@ -37,13 +37,12 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.logging import logger
 from app.models import (
     Ceremony,
-    Cohort,
     utcnow,
 )
 from app.models.ceremony_reminder import CeremonyReminder
 from app.services.database import session_scope
 from app.services.domain import ceremonies as ceremony_repo
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.mattermost import mattermost_client
 
 # Poll every 5 minutes.
@@ -65,22 +64,7 @@ _TIME_LABELS: dict[str, str] = {"24h": "24 hours", "1h": "1 hour"}
 # ---------------------------------------------------------------------------
 
 
-async def _get_cohort_by_channel_id(channel_id: str, session: AsyncSession | None = None) -> Cohort | None:
-    """Fetch the cohort that owns this Mattermost channel, if any.
 
-    The link between a distributed ceremony and a cohort is
-    ``ceremony.channel_id == cohort.mattermost_channel_id``.
-
-    Args:
-        channel_id: The Mattermost channel id from the ceremony row.
-        session: Optional session to reuse.
-
-    Returns:
-        Cohort | None: The cohort, or None when no cohort is linked to the channel.
-    """
-    async with session_scope(session) as s:
-        result = await s.exec(select(Cohort).where(Cohort.mattermost_channel_id == channel_id))
-        return result.first()
 
 
 async def _already_sent(
@@ -198,34 +182,8 @@ async def due_ceremonies(
 
 
 async def get_channel_members(channel_id: str) -> list[str]:
-    """Return Mattermost user ids for every active member of the cohort linked to this channel.
-
-    The distributed branch scopes ceremonies by ``channel_id``, not by
-    ``cohort_id``. We resolve the channel to a cohort through
-    ``Cohort.mattermost_channel_id``, then list the cohort's active members.
-    A ceremony with no matching active cohort produces an empty list (no DMs).
-
-    Args:
-        channel_id: The Mattermost channel id from the ceremony row.
-
-    Returns:
-        list[str]: Mattermost user ids, skipping members without one.
-    """
-    cohort = await _get_cohort_by_channel_id(channel_id)
-    if cohort is None:
-        logger.debug("ceremony_reminder_no_cohort_for_channel", channel_id=channel_id)
-        return []
-    if not cohort.is_active:
-        logger.debug(
-            "ceremony_reminder_cohort_inactive",
-            channel_id=channel_id,
-            cohort_id=cohort.id,
-            cohort_name=cohort.name,
-        )
-        return []
-
-    assert cohort.id is not None
-    members = await cohort_repo.list_cohort_members(cohort.id, active_only=True)
+    """Return Mattermost user ids for every active member of the channel."""
+    members = await channel_repo.list_channel_roles(channel_id, active_only=True)
     return [m.user.mattermost_user_id for m in members if m.user.mattermost_user_id]
 
 

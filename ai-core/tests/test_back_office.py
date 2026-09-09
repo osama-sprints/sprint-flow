@@ -15,7 +15,6 @@ from app.core.requester import (
     current_requester,
 )
 from app.models import (
-    Cohort,
     Role,
     User,
 )
@@ -31,11 +30,11 @@ from app.services.authorisation import (
 
 REFUSED = f"[AUTHORISATION_REFUSED] {REFUSAL_MESSAGE}"
 CONTRACT_SIGNATURES = {
-    "create_cohort": ["name", "mattermost_team"],
-    "assign_role": ["person", "role", "cohort"],
-    "open_sprint": ["cohort", "sprint_name", "start_date", "end_date"],
-    "list_cohorts": [],
-    "list_cohort_members": ["cohort"],
+    "create_channel": ["name", "mattermost_team"],
+    "assign_role": ["person", "role", "channel"],
+    "open_sprint": ["channel", "sprint_name", "start_date", "end_date"],
+    "list_channel_roles_for_requester": [],
+    "list_channel_members": ["channel"],
 }
 IDENTITY_FRAGMENTS = ("requester", "user_id", "mattermost_user", "superadmin", "identity", "channel", "is_admin")
 
@@ -124,13 +123,13 @@ def test_looks_like_mattermost_id(value, expected):
     assert back_office.looks_like_mattermost_id(value) is expected
 
 
-def test_describe_cohorts_reads_well_when_empty_and_when_populated():
-    assert back_office._describe_cohorts([], is_superadmin=False) == "You are not a member of any cohort yet."
-    assert back_office._describe_cohorts([], is_superadmin=True) == "There are no cohorts yet."
-    cohort = Cohort(id=7, name="Backend-01", is_active=False)
+def test_describe_channels_reads_well_when_empty_and_when_populated():
+    assert back_office._describe_channels([], is_superadmin=False) == "You are not a member of any channel yet."
+    assert back_office._describe_channels([], is_superadmin=True) == "There are no channels yet."
+    channel = Channel(id=7, name="Backend-01", is_active=False)
     role = Role(id=1, key="learner", label="Learner")
-    text = back_office._describe_cohorts([(cohort, role)], is_superadmin=False)
-    assert text.startswith("Your cohorts:") and "Backend-01 (id 7) (inactive) — your role: Learner" in text
+    text = back_office._describe_channels([(channel, role)], is_superadmin=False)
+    assert text.startswith("Your channels:") and "Backend-01 (id 7) (inactive) — your role: Learner" in text
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +151,7 @@ def test_no_tool_argument_can_carry_the_requesters_identity():
 
 def test_tool_docstrings_tell_the_model_to_relay_refusals():
     for tool in back_office_tools.TOOLS:
-        if tool.name == "list_cohorts":
+        if tool.name == "list_channel_roles_for_requester":
             continue
         assert "AUTHORISATION_REFUSED" in tool.description, tool.name
         assert "verbatim" in tool.description, tool.name
@@ -160,10 +159,10 @@ def test_tool_docstrings_tell_the_model_to_relay_refusals():
 
 def test_refusal_becomes_the_fixed_result_string(monkeypatch):
     async def refuse(*_args, **_kwargs):
-        raise AuthorisationRefused("not_superadmin", action="create_cohort")
+        raise AuthorisationRefused("not_superadmin", action="create_channel")
 
-    monkeypatch.setattr(back_office, "create_cohort", refuse)
-    assert asyncio.run(back_office_tools.create_cohort.ainvoke({"name": "X"})) == REFUSED
+    monkeypatch.setattr(back_office, "create_channel", refuse)
+    assert asyncio.run(back_office_tools.create_channel.ainvoke({"name": "X"})) == REFUSED
 
 
 def test_validation_failure_becomes_a_validation_error_with_its_sentence(monkeypatch):
@@ -171,7 +170,7 @@ def test_validation_failure_becomes_a_validation_error_with_its_sentence(monkeyp
         raise ValidationFailed("Unknown role 'emperor'. Known roles: learner, tech lead, ops support, scrum master.")
 
     monkeypatch.setattr(back_office, "assign_role", invalid)
-    result = asyncio.run(back_office_tools.assign_role.ainvoke({"person": "@a", "role": "emperor", "cohort": "A"}))
+    result = asyncio.run(back_office_tools.assign_role.ainvoke({"person": "@a", "role": "emperor", "channel": "A"}))
     assert (
         result
         == "[VALIDATION_ERROR] Unknown role 'emperor'. Known roles: learner, tech lead, ops support, scrum master."
@@ -184,7 +183,7 @@ def test_unexpected_failure_becomes_a_readable_system_error_without_database_det
         raise RuntimeError('psycopg.OperationalError: connection to server at "10.0.0.7" failed')
 
     monkeypatch.setattr(back_office, "open_sprint", explode)
-    result = asyncio.run(back_office_tools.open_sprint.ainvoke({"cohort": "A", "sprint_name": "S1"}))
+    result = asyncio.run(back_office_tools.open_sprint.ainvoke({"channel": "A", "sprint_name": "S1"}))
     assert result_code_of(result) == ResultCode.SYSTEM_ERROR
     assert "psycopg" not in result and "10.0.0.7" not in result
     assert "try again" in result
@@ -194,37 +193,37 @@ def test_tools_refuse_when_no_requester_is_bound_before_touching_data(monkeypatc
     async def must_not_run(*_args, **_kwargs):
         raise AssertionError("data access happened before authorisation")
 
-    monkeypatch.setattr(back_office.cohort_repo, "get_cohort_by_name", must_not_run)
-    monkeypatch.setattr(back_office.cohort_repo, "resolve_cohort", must_not_run)
+    monkeypatch.setattr(back_office.channel_repo, "get_channel_by_name", must_not_run)
+    monkeypatch.setattr(back_office.channel_repo, "resolve_channel", must_not_run)
     monkeypatch.setattr(authorisation.identity_repo, "get_user_by_mattermost_id", must_not_run)
-    assert asyncio.run(back_office_tools.create_cohort.ainvoke({"name": "X"})) == REFUSED
-    assert asyncio.run(back_office_tools.list_cohorts.ainvoke({})) == REFUSED
+    assert asyncio.run(back_office_tools.create_channel.ainvoke({"name": "X"})) == REFUSED
+    assert asyncio.run(back_office_tools.list_channel_roles_for_requester.ainvoke({})) == REFUSED
     assert (
-        asyncio.run(back_office_tools.assign_role.ainvoke({"person": "@a", "role": "learner", "cohort": "A"}))
+        asyncio.run(back_office_tools.assign_role.ainvoke({"person": "@a", "role": "learner", "channel": "A"}))
         == REFUSED
     )
-    assert asyncio.run(back_office_tools.open_sprint.ainvoke({"cohort": "A", "sprint_name": "S1"})) == REFUSED
-    assert asyncio.run(back_office_tools.list_cohort_members.ainvoke({"cohort": "A"})) == REFUSED
+    assert asyncio.run(back_office_tools.open_sprint.ainvoke({"channel": "A", "sprint_name": "S1"})) == REFUSED
+    assert asyncio.run(back_office_tools.list_channel_members.ainvoke({"channel": "A"})) == REFUSED
 
 
 def test_refusal_precedes_validation_so_an_outsider_learns_nothing(monkeypatch):
     """A requester without authority gets the refusal even when the role is nonsense."""
-    cohort = Cohort(id=3, name="Backend-01")
+    channel = Channel(id=3, name="Backend-01")
 
     async def resolve(_reference, session=None):
-        return cohort
+        return channel
 
-    async def refuse(_requester, _cohort_id, **_kwargs):
-        raise AuthorisationRefused("not_a_member", action="assign_role", cohort_id=3)
+    async def refuse(_requester, _channel_id, **_kwargs):
+        raise AuthorisationRefused("not_a_member", action="assign_role", channel_id=3)
 
     def role_must_not_be_parsed(_value):
         raise AssertionError("role parsed before authorisation")
 
-    monkeypatch.setattr(back_office.cohort_repo, "resolve_cohort", resolve)
-    monkeypatch.setattr(back_office, "require_cohort_authority", refuse)
+    monkeypatch.setattr(back_office.channel_repo, "resolve_channel", resolve)
+    monkeypatch.setattr(back_office, "require_channel_authority", refuse)
     monkeypatch.setattr(back_office, "role_from_text", role_must_not_be_parsed)
     current_requester.set(RequesterContext(mattermost_user_id="mm-learner", username="learner"))
-    result = asyncio.run(back_office_tools.assign_role.ainvoke({"person": "@x", "role": "emperor", "cohort": "3"}))
+    result = asyncio.run(back_office_tools.assign_role.ainvoke({"person": "@x", "role": "emperor", "channel": "3"}))
     assert result == REFUSED
 
 
@@ -235,16 +234,16 @@ def test_context_hints_do_not_decide_authority(monkeypatch):
         return User(id=9, mattermost_user_id="mm-learner", username="learner", is_superadmin=False)
 
     async def must_not_run(*_args, **_kwargs):
-        raise AssertionError("cohort lookup happened despite the refusal")
+        raise AssertionError("channel lookup happened despite the refusal")
 
     monkeypatch.setattr(authorisation.identity_repo, "get_user_by_mattermost_id", stored_row_is_not_superadmin)
-    monkeypatch.setattr(back_office.cohort_repo, "get_cohort_by_name", must_not_run)
+    monkeypatch.setattr(back_office.channel_repo, "get_channel_by_name", must_not_run)
     current_requester.set(RequesterContext(mattermost_user_id="mm-learner", username="learner", is_superadmin=True))
-    assert asyncio.run(back_office_tools.create_cohort.ainvoke({"name": "Forged"})) == REFUSED
+    assert asyncio.run(back_office_tools.create_channel.ainvoke({"name": "Forged"})) == REFUSED
 
 
-def test_authorised_create_cohort_reports_existing_cohort_without_writing(monkeypatch):
-    existing = Cohort(id=11, name="Backend-01")
+def test_authorised_create_channel_reports_existing_channel_without_writing(monkeypatch):
+    existing = Channel(id=11, name="Backend-01")
     writes: list[str] = []
 
     async def superadmin(_requester, *, action=""):
@@ -254,29 +253,29 @@ def test_authorised_create_cohort_reports_existing_cohort_without_writing(monkey
         return existing
 
     async def create(*_args, **_kwargs):
-        writes.append("create_cohort")
+        writes.append("create_channel")
         return existing
 
     monkeypatch.setattr(back_office, "require_superadmin", superadmin)
-    monkeypatch.setattr(back_office.cohort_repo, "get_cohort_by_name", by_name)
-    monkeypatch.setattr(back_office.cohort_repo, "create_cohort", create)
-    result = asyncio.run(back_office_tools.create_cohort.ainvoke({"name": "  backend-01 "}))
-    assert result == "[COHORT_ALREADY_EXISTS] Cohort 'Backend-01' already exists (id 11); nothing was changed."
+    monkeypatch.setattr(back_office.channel_repo, "get_channel_by_name", by_name)
+    monkeypatch.setattr(back_office.channel_repo, "create_channel", create)
+    result = asyncio.run(back_office_tools.create_channel.ainvoke({"name": "  backend-01 "}))
+    assert result == "[COHORT_ALREADY_EXISTS] Channel 'Backend-01' already exists (id 11); nothing was changed."
     assert writes == []
 
 
 def test_open_sprint_rejects_an_empty_name_after_authorisation(monkeypatch):
-    cohort = Cohort(id=3, name="Backend-01", is_active=True)
+    channel = Channel(id=3, name="Backend-01", is_active=True)
     actor = User(id=1, mattermost_user_id="mm-sm", username="sm")
 
     async def resolve(_reference, session=None):
-        return cohort
+        return channel
 
-    async def allow(_requester, _cohort_id, **_kwargs):
-        return AuthorisationDecision(True, "cohort_role:scrum_master", "scrum_master", actor)
+    async def allow(_requester, _channel_id, **_kwargs):
+        return AuthorisationDecision(True, "channel_role:scrum_master", "scrum_master", actor)
 
-    monkeypatch.setattr(back_office.cohort_repo, "resolve_cohort", resolve)
-    monkeypatch.setattr(back_office, "require_cohort_authority", allow)
+    monkeypatch.setattr(back_office.channel_repo, "resolve_channel", resolve)
+    monkeypatch.setattr(back_office, "require_channel_authority", allow)
     current_requester.set(RequesterContext(mattermost_user_id="mm-sm", username="sm"))
-    result = asyncio.run(back_office_tools.open_sprint.ainvoke({"cohort": "3", "sprint_name": "   "}))
+    result = asyncio.run(back_office_tools.open_sprint.ainvoke({"channel": "3", "sprint_name": "   "}))
     assert result == "[VALIDATION_ERROR] A sprint needs a name."

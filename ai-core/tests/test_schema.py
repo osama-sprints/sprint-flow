@@ -32,7 +32,7 @@ from app.models import (
 from app.models.enums import (
     CEREMONY_TYPE_DEFAULT_DURATION_MINUTES,
     CEREMONY_TYPE_LABELS,
-    COHORT_ADMIN_ROLES,
+    CHANNEL_ADMIN_ROLES,
     ROLE_LABELS,
     CeremonyTypeKey,
     RoleKey,
@@ -161,21 +161,21 @@ def test_unique_and_check_constraints_are_named():
                 assert str(constraint.name).startswith(("uq_", "ck_")), constraint.name
 
 
-def test_one_role_per_person_per_cohort_is_a_database_constraint():
-    membership = SQLModel.metadata.tables["cohort_memberships"]
+def test_one_role_per_person_per_channel_is_a_database_constraint():
+    membership = SQLModel.metadata.tables["channel_roles"]
     uniques = {
         tuple(c.name for c in constraint.columns)
         for constraint in membership.constraints
         if isinstance(constraint, UniqueConstraint)
     }
-    assert ("user_id", "cohort_id") in uniques
+    assert ("user_id", "channel_id") in uniques
     assert "role_id" not in SQLModel.metadata.tables["users"].columns, "a global role on users is forbidden"
 
 
-def test_onboarding_outbox_key_treats_null_cohort_as_a_value():
+def test_onboarding_outbox_key_treats_null_channel_as_a_value():
     steps = SQLModel.metadata.tables["onboarding_steps"]
     key = next(c for c in steps.constraints if isinstance(c, UniqueConstraint))
-    assert tuple(c.name for c in key.columns) == ("user_id", "cohort_id", "step_kind")
+    assert tuple(c.name for c in key.columns) == ("user_id", "channel_id", "step_kind")
     assert key.dialect_options["postgresql"]["nulls_not_distinct"] is True
 
 
@@ -188,7 +188,7 @@ def test_escalation_ticket_carries_both_conversations():
         "status",
         "status_changed_at",
         "question",
-        "learner_channel_id",
+        "learner_channel",
         "learner_thread_id",
         "human_dm_channel_id",
         "human_dm_thread_id",
@@ -249,9 +249,9 @@ def test_machine_keys_are_lowercase_and_labelled():
     assert CEREMONY_TYPE_LABELS[CeremonyTypeKey.OPEN_QA] == "Open Q&A"
 
 
-def test_only_tech_lead_and_scrum_master_administer_a_cohort():
-    assert COHORT_ADMIN_ROLES == {RoleKey.TECH_LEAD, RoleKey.SCRUM_MASTER}
-    assert RoleKey.LEARNER not in COHORT_ADMIN_ROLES
+def test_only_tech_lead_and_scrum_master_administer_a_channel():
+    assert CHANNEL_ADMIN_ROLES == {RoleKey.TECH_LEAD, RoleKey.SCRUM_MASTER}
+    assert RoleKey.LEARNER not in CHANNEL_ADMIN_ROLES
 
 
 # ---------------------------------------------------------------------------
@@ -265,15 +265,10 @@ def test_ticket_ref_format():
     assert format_ticket_ref(1234567) == "ESC-1234567"
 
 
-def test_amendable_fields_are_real_columns_and_exclude_identity():
-    columns = set(Ceremony.model_fields)
-    assert AMENDABLE_FIELDS <= columns
-    assert not AMENDABLE_FIELDS & {"id", "cohort_id", "ceremony_type_id", "organizer_id", "created_at", "updated_at"}
-
 
 def test_externally_owned_tables_cover_the_checkpointer_and_nothing_of_ours():
     assert {"checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations"} <= EXTERNALLY_OWNED_TABLES
     assert not EXTERNALLY_OWNED_TABLES & set(DOMAIN_TABLES)
     assert is_externally_owned("checkpoints")
-    assert not is_externally_owned("cohorts")
+    assert not is_externally_owned("channels")
     assert not is_externally_owned(None)

@@ -108,7 +108,7 @@ def test_conflict_policy_setting_defaults_to_refuse(value, expected):
 
 def requester(zone: str | None) -> RequesterContext:
     return RequesterContext(
-        mattermost_user_id="mm-1", username="alice", timezone=zone, team_id="team_123", channel_id="chan_abc", cohort_roles=MappingProxyType({})
+        mattermost_user_id="mm-1", username="alice", timezone=zone, team_id="team_123", channel_id="chan_abc", channel_roles=MappingProxyType({})
     )
 
 

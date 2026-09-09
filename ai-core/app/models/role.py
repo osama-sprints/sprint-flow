@@ -7,10 +7,10 @@ from app.models.domain_base import DomainBase
 
 
 class Role(DomainBase, table=True):
-    """A cohort-scoped role definition.
+    """A channel-scoped role definition.
 
     Attributes:
-        id: Primary key referenced by ``cohort_memberships.role_id``.
+        id: Primary key referenced by ``channel_memberships.role_id``.
         key: Stable machine key (``learner``, ``tech_lead``, ...), see ``RoleKey``.
         label: Display label shown to people.
         description: What the role does, for onboarding and prompts.

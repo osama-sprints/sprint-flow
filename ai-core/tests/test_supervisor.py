@@ -133,9 +133,9 @@ def test_plan_length_is_capped_by_setting(monkeypatch):
 
 def test_unbound_requester_routes_admin_phrase_to_learner_support():
     assert current_requester.get() is None
-    update = supervisor_node(GraphState(messages=[HumanMessage(content="create cohort X")]), CONFIG)
+    update = supervisor_node(GraphState(messages=[HumanMessage(content="create channel X")]), CONFIG)
     assert update["route"] == CapabilityRoute.LEARNER_SUPPORT.value
-    assert update["matched_rule"] == "back_office_cohort_denied_role"
+    assert update["matched_rule"] == "back_office_channel_denied_role"
 
 
 # --- Prompt context -------------------------------------------------------------------

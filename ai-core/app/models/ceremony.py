@@ -25,8 +25,7 @@ class Ceremony(DomainBase, table=True):
 
     Attributes:
         id: Primary key.
-        cohort_id: The cohort the ceremony belongs to.
-        sprint_id: The sprint it belongs to, when one was named.
+        channel_id: The channel the ceremony belongs to.
         ceremony_type_id: The kind of ceremony.
         organizer_id: The person who scheduled it (resolved from stored identity).
         scheduled_at: The start instant.

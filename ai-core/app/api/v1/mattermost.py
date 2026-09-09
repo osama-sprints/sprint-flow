@@ -187,6 +187,14 @@ async def mattermost_webhook(
         text_length=len(prompt),
     )
 
+    # Mattermost outgoing webhooks do not include root_id, so every message looks
+    # like a new thread root. Fetch the post to restore thread continuity.
+    root_id = ""
+    if payload.post_id:
+        post = await mattermost_client.get_post(payload.post_id)
+        if post and "root_id" in post:
+            root_id = post["root_id"]
+
     background_tasks.add_task(
         answer_and_reply,
         IncomingMessage(
@@ -196,6 +204,7 @@ async def mattermost_webhook(
             text=prompt,
             user_id=payload.user_id,
             user_name=payload.user_name,
+            root_id=root_id,
             # Outgoing webhooks only ever fire in public channels, so this is a
             # fact about the transport, not a guess. Replies stay threaded here.
             channel_type="O",

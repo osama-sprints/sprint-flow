@@ -31,7 +31,7 @@ from app.services.authorisation import (
     ValidationFailed,
 )
 from app.services.database import database_service
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.mattermost import mattermost_client
 
@@ -80,47 +80,47 @@ async def purge() -> None:
             like,
         )
         await conn.execute(
-            text("DELETE FROM sprints WHERE cohort_id IN (SELECT id FROM cohorts WHERE lower(name) LIKE :p)"), like
+            text("DELETE FROM sprints WHERE channel_id IN (SELECT id FROM channels WHERE lower(name) LIKE :p)"), like
         )
         await conn.execute(
             text(
-                "DELETE FROM cohort_memberships WHERE cohort_id IN (SELECT id FROM cohorts WHERE lower(name) LIKE :p) "
+                "DELETE FROM channel_memberships WHERE channel_id IN (SELECT id FROM channels WHERE lower(name) LIKE :p) "
                 "OR user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
             ),
             like,
         )
         await conn.execute(
             text(
-                "UPDATE cohorts SET created_by_id = NULL WHERE created_by_id IN "
+                "UPDATE channels SET created_by_id = NULL WHERE created_by_id IN "
                 "(SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
             ),
             like,
         )
-        await conn.execute(text("DELETE FROM cohorts WHERE lower(name) LIKE :p"), like)
+        await conn.execute(text("DELETE FROM channels WHERE lower(name) LIKE :p"), like)
         await conn.execute(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), like)
 
 
 async def counts() -> tuple[int, int, tuple[Any, ...]]:
     async with database_service.engine.connect() as conn:
-        cohorts = (await conn.execute(text("SELECT count(*) FROM cohorts"))).scalar_one()
+        channels = (await conn.execute(text("SELECT count(*) FROM channels"))).scalar_one()
         sprints = (await conn.execute(text("SELECT count(*) FROM sprints"))).scalar_one()
         rows = (
             await conn.execute(
-                text("SELECT user_id, cohort_id, role_id, status FROM cohort_memberships ORDER BY user_id, cohort_id")
+                text("SELECT user_id, channel_id, role_id, status FROM channel_memberships ORDER BY user_id, channel_id")
             )
         ).all()
-    return cohorts, sprints, tuple(tuple(r) for r in rows)
+    return channels, sprints, tuple(tuple(r) for r in rows)
 
 
 class World:
-    """Seeded identities and cohorts shared by the tests in this module."""
+    """Seeded identities and channels shared by the tests in this module."""
 
     superadmin: Any
     learner: Any
     scrum_master: Any
     target: Any
-    cohort_a: Any
-    cohort_b: Any
+    channel_a: Any
+    channel_b: Any
 
 
 @pytest.fixture(scope="module")
@@ -145,10 +145,10 @@ def world(loop):
         w.scrum_master = await seed_user("sm")
         w.target = await seed_user("target")
         bind(w.superadmin)
-        w.cohort_a = (await back_office.create_cohort(f"{PREFIX}A-{STAMP}")).cohort
-        w.cohort_b = (await back_office.create_cohort(f"{PREFIX}B-{STAMP}")).cohort
-        await back_office.assign_role(f"@{w.scrum_master.username}", "scrum master", w.cohort_a.name)
-        await back_office.assign_role(w.learner.email, "learner", str(w.cohort_a.id))
+        w.channel_a = (await back_office.create_channel(f"{PREFIX}A-{STAMP}")).channel
+        w.channel_b = (await back_office.create_channel(f"{PREFIX}B-{STAMP}")).channel
+        await back_office.assign_role(f"@{w.scrum_master.username}", "scrum master", w.channel_a.name)
+        await back_office.assign_role(w.learner.email, "learner", str(w.channel_a.id))
         unbind()
         return w
 
@@ -167,7 +167,7 @@ def bind(user: Any, **overrides: Any) -> None:
         "channel_type": "D",
         "user_id": user.id,
         "is_superadmin": user.is_superadmin,
-        "cohort_roles": MappingProxyType({}),
+        "channel_roles": MappingProxyType({}),
     }
     fields.update(overrides)
     current_requester.set(RequesterContext(**fields))
@@ -189,50 +189,50 @@ def refused(loop, coro) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_superadmin_creates_a_cohort_and_a_second_create_is_a_no_op(loop, world):
+def test_superadmin_creates_a_channel_and_a_second_create_is_a_no_op(loop, world):
     bind(world.superadmin)
     before = loop.run_until_complete(counts())
-    again = loop.run_until_complete(back_office.create_cohort(world.cohort_a.name.upper()))
-    assert again.code == ResultCode.COHORT_ALREADY_EXISTS and again.cohort.id == world.cohort_a.id
+    again = loop.run_until_complete(back_office.create_channel(world.channel_a.name.upper()))
+    assert again.code == ResultCode.COHORT_ALREADY_EXISTS and again.channel.id == world.channel_a.id
     assert loop.run_until_complete(counts()) == before
-    assert isinstance(world.cohort_a.id, int) and world.cohort_a.created_by_id == world.superadmin.id
+    assert isinstance(world.channel_a.id, int) and world.channel_a.created_by_id == world.superadmin.id
 
 
 def test_learner_is_refused_on_all_three_mutations_and_tables_are_unchanged(loop, world):
     bind(world.learner)
-    refused(loop, back_office.create_cohort(f"{PREFIX}rogue-{STAMP}"))
-    refused(loop, back_office.assign_role(f"@{world.learner.username}", "scrum master", world.cohort_a.name))
-    refused(loop, back_office.open_sprint(world.cohort_a.name, "Sprint 1"))
-    role = loop.run_until_complete(cohort_repo.get_role_for_user_in_cohort(world.learner.id, world.cohort_a.id))
+    refused(loop, back_office.create_channel(f"{PREFIX}rogue-{STAMP}"))
+    refused(loop, back_office.assign_role(f"@{world.learner.username}", "scrum master", world.channel_a.name))
+    refused(loop, back_office.open_sprint(world.channel_a.name, "Sprint 1"))
+    role = loop.run_until_complete(channel_repo.get_role_for_user_in_channel(world.learner.id, world.channel_a.id))
     assert role is not None and role.key == RoleKey.LEARNER
 
 
 def test_forged_context_hints_do_not_grant_authority(loop, world):
-    bind(world.learner, is_superadmin=True, cohort_roles=MappingProxyType({world.cohort_a.id: "scrum_master"}))
-    refused(loop, back_office.create_cohort(f"{PREFIX}forged-{STAMP}"))
-    refused(loop, back_office.assign_role(f"@{world.target.username}", "learner", world.cohort_a.name))
+    bind(world.learner, is_superadmin=True, channel_roles=MappingProxyType({world.channel_a.id: "scrum_master"}))
+    refused(loop, back_office.create_channel(f"{PREFIX}forged-{STAMP}"))
+    refused(loop, back_office.assign_role(f"@{world.target.username}", "learner", world.channel_a.name))
 
 
 def test_scrum_master_of_a_can_assign_in_a_but_is_refused_in_b(loop, world):
     bind(world.scrum_master)
     assigned = loop.run_until_complete(
-        back_office.assign_role(f"@{world.target.username}", "learner", world.cohort_a.name)
+        back_office.assign_role(f"@{world.target.username}", "learner", world.channel_a.name)
     )
     assert assigned.code == ResultCode.ROLE_ASSIGNED and assigned.membership.assigned_by_id == world.scrum_master.id
-    refused(loop, back_office.assign_role(f"@{world.target.username}", "learner", world.cohort_b.name))
-    refused(loop, back_office.open_sprint(world.cohort_b.name, "Sprint 1"))
-    refused(loop, back_office.create_cohort(f"{PREFIX}sm-{STAMP}"))
+    refused(loop, back_office.assign_role(f"@{world.target.username}", "learner", world.channel_b.name))
+    refused(loop, back_office.open_sprint(world.channel_b.name, "Sprint 1"))
+    refused(loop, back_office.create_channel(f"{PREFIX}sm-{STAMP}"))
 
 
 def test_assigning_the_same_role_twice_is_a_no_op_and_a_new_role_replaces_it(loop, world):
     bind(world.scrum_master)
     before = loop.run_until_complete(counts())
     same = loop.run_until_complete(
-        back_office.assign_role(f"@{world.target.username}", "Learner", world.cohort_a.name)
+        back_office.assign_role(f"@{world.target.username}", "Learner", world.channel_a.name)
     )
     assert same.code == ResultCode.ROLE_ALREADY_ASSIGNED
     assert loop.run_until_complete(counts()) == before
-    changed = loop.run_until_complete(back_office.assign_role(world.target.email, "tech lead", world.cohort_a.name))
+    changed = loop.run_until_complete(back_office.assign_role(world.target.email, "tech lead", world.channel_a.name))
     assert changed.code == ResultCode.ROLE_CHANGED
     assert changed.previous_role is not None and changed.previous_role.key == RoleKey.LEARNER
     assert "Learner" in changed.message and "Tech Lead" in changed.message
@@ -243,11 +243,11 @@ def test_opening_the_same_sprint_twice_is_a_no_op(loop, world):
     bind(world.scrum_master)
     before = loop.run_until_complete(counts())
     opened = loop.run_until_complete(
-        back_office.open_sprint(world.cohort_a.name, "Sprint 1", "2031-01-06", "2031-01-17")
+        back_office.open_sprint(world.channel_a.name, "Sprint 1", "2031-01-06", "2031-01-17")
     )
     assert opened.code == ResultCode.SPRINT_OPENED and opened.sprint.status == "active"
     assert opened.sprint.opened_by_id == world.scrum_master.id
-    again = loop.run_until_complete(back_office.open_sprint(str(world.cohort_a.id), "sprint 1"))
+    again = loop.run_until_complete(back_office.open_sprint(str(world.channel_a.id), "sprint 1"))
     assert again.code == ResultCode.SPRINT_ALREADY_OPEN and again.sprint.id == opened.sprint.id
     assert loop.run_until_complete(counts())[1] == before[1] + 1
 
@@ -256,37 +256,37 @@ def test_validation_failures_are_distinct_from_refusals(loop, world):
     bind(world.scrum_master)
     before = loop.run_until_complete(counts())
     with pytest.raises(ValidationFailed, match="Unknown role 'emperor'"):
-        loop.run_until_complete(back_office.assign_role(f"@{world.target.username}", "emperor", world.cohort_a.name))
+        loop.run_until_complete(back_office.assign_role(f"@{world.target.username}", "emperor", world.channel_a.name))
     with pytest.raises(ValidationFailed, match="does not exist"):
         loop.run_until_complete(back_office.open_sprint(f"{PREFIX}nope-{STAMP}", "Sprint 9"))
     with pytest.raises(ValidationFailed, match="is before the start date"):
-        loop.run_until_complete(back_office.open_sprint(world.cohort_a.name, "Sprint 2", "2031-03-10", "2031-03-01"))
+        loop.run_until_complete(back_office.open_sprint(world.channel_a.name, "Sprint 2", "2031-03-10", "2031-03-01"))
     with pytest.raises(ValidationFailed, match="overlaps sprint 'Sprint 1'"):
-        loop.run_until_complete(back_office.open_sprint(world.cohort_a.name, "Sprint 2", "2031-01-10", "2031-01-20"))
+        loop.run_until_complete(back_office.open_sprint(world.channel_a.name, "Sprint 2", "2031-01-10", "2031-01-20"))
     with pytest.raises(ValidationFailed, match="could not find anyone"):
-        loop.run_until_complete(back_office.assign_role("@nobody-at-all", "learner", world.cohort_a.name))
+        loop.run_until_complete(back_office.assign_role("@nobody-at-all", "learner", world.channel_a.name))
     assert loop.run_until_complete(counts()) == before
 
 
 def test_scoped_reads(loop, world):
     bind(world.learner)
-    mine = loop.run_until_complete(back_office.list_cohorts())
-    assert [c.id for c, _ in mine.entries] == [world.cohort_a.id]
+    mine = loop.run_until_complete(back_office.list_channel_roles_for_requester())
+    assert [c.id for c, _ in mine.entries] == [world.channel_a.id]
     assert mine.entries[0][1] is not None and mine.entries[0][1].key == RoleKey.LEARNER
-    members = loop.run_until_complete(back_office.list_cohort_members(world.cohort_a.name))
+    members = loop.run_until_complete(back_office.list_channel_members(world.channel_a.name))
     assert {m.user.id for m in members.members} >= {world.learner.id, world.scrum_master.id, world.target.id}
-    refused(loop, back_office.list_cohort_members(world.cohort_b.name))
+    refused(loop, back_office.list_channel_members(world.channel_b.name))
     bind(world.superadmin)
-    everything = loop.run_until_complete(back_office.list_cohorts())
-    assert everything.is_superadmin and {world.cohort_a.id, world.cohort_b.id} <= {c.id for c, _ in everything.entries}
+    everything = loop.run_until_complete(back_office.list_channel_roles_for_requester())
+    assert everything.is_superadmin and {world.channel_a.id, world.channel_b.id} <= {c.id for c, _ in everything.entries}
 
 
-def test_inactive_cohort_is_a_validation_failure_for_an_authorised_requester(loop, world):
+def test_inactive_channel_is_a_validation_failure_for_an_authorised_requester(loop, world):
     bind(world.superadmin)
-    loop.run_until_complete(cohort_repo.set_cohort_active(world.cohort_b.id, False))
+    loop.run_until_complete(channel_repo.set_channel_active(world.channel_b.id, False))
     with pytest.raises(ValidationFailed, match="inactive"):
-        loop.run_until_complete(back_office.open_sprint(world.cohort_b.name, "Sprint 1"))
-    loop.run_until_complete(cohort_repo.set_cohort_active(world.cohort_b.id, True))
+        loop.run_until_complete(back_office.open_sprint(world.channel_b.name, "Sprint 1"))
+    loop.run_until_complete(channel_repo.set_channel_active(world.channel_b.id, True))
 
 
 # --- Review fix (2026-09-03): re-activating an inactive membership is a change, not a no-op -------
@@ -294,18 +294,18 @@ def test_inactive_cohort_is_a_validation_failure_for_an_authorised_requester(loo
 
 def test_reassigning_an_inactive_membership_reactivates_and_says_so(loop, world):
     from app.models.enums import MembershipStatus
-    from app.services.domain import cohorts as cohort_repo
+    from app.services.domain import channels as channel_repo
 
     bind(world.superadmin)
-    assert world.learner.id is not None and world.cohort_a.id is not None
+    assert world.learner.id is not None and world.channel_a.id is not None
     loop.run_until_complete(
-        cohort_repo.set_membership_status(world.learner.id, world.cohort_a.id, MembershipStatus.INACTIVE)
+        channel_repo.set_membership_status(world.learner.id, world.channel_a.id, MembershipStatus.INACTIVE)
     )
-    result = loop.run_until_complete(back_office.assign_role(world.learner.email, "learner", world.cohort_a.name))
+    result = loop.run_until_complete(back_office.assign_role(world.learner.email, "learner", world.channel_a.name))
     assert result.code == ResultCode.ROLE_ASSIGNED
     assert "Re-added" in result.message
-    membership = loop.run_until_complete(cohort_repo.get_membership(world.learner.id, world.cohort_a.id))
+    membership = loop.run_until_complete(channel_repo.get_membership(world.learner.id, world.channel_a.id))
     assert membership is not None and membership.status == MembershipStatus.ACTIVE.value
-    again = loop.run_until_complete(back_office.assign_role(world.learner.email, "learner", world.cohort_a.name))
+    again = loop.run_until_complete(back_office.assign_role(world.learner.email, "learner", world.channel_a.name))
     assert again.code == ResultCode.ROLE_ALREADY_ASSIGNED
     unbind()

@@ -608,13 +608,13 @@ async def commit_schedule(
     )
 
     if proposal.with_meet:
-        from app.services.google_meet import create_meet_event
+        from app.services.meeting_link import create_meeting_link
         from app.services.domain import identity as identity_repo
 
         org_user = await identity_repo.get_user(user.id)
         org_email = org_user.email if org_user else None
 
-        link = await create_meet_event(
+        link = await create_meeting_link(
             title=proposal.ceremony_type_label,
             start=proposal.scheduled_at,
             duration_minutes=proposal.duration_minutes,
@@ -626,7 +626,7 @@ async def commit_schedule(
                 ceremony.id,  # type: ignore[arg-type]
                 amended_by_id=user.id,
                 changes={"meet_link": link},
-                reason="Generated Google Meet link",
+                reason="Generated meeting link",
             )
             ceremony.meet_link = link
 

@@ -30,7 +30,7 @@ def format_ticket_ref(ticket_id: int) -> str:
 
 async def create_escalation_ticket(
     *,
-    cohort_id: int,
+    channel_id: int,
     learner_id: int,
     ticket_type: EscalationType,
     question: str,
@@ -43,7 +43,7 @@ async def create_escalation_ticket(
     """Open a ticket and allocate its reference.
 
     Args:
-        cohort_id: The cohort the learner asked in.
+        channel_id: The channel the learner asked in.
         learner_id: Who asked.
         ticket_type: ``tech`` or ``ops``.
         question: The question, verbatim.
@@ -58,7 +58,7 @@ async def create_escalation_ticket(
     """
     ticket = EscalationTicket(
         ticket_ref=f"PENDING-{uuid4().hex[:12]}",
-        cohort_id=cohort_id,
+        channel_id=channel_id,
         learner_id=learner_id,
         assigned_human_id=assigned_human_id,
         ticket_type=ticket_type.value,
@@ -115,15 +115,15 @@ async def get_escalation_ticket_by_human_thread(
 
 
 async def list_escalation_tickets(
-    cohort_id: int | None = None,
+    channel_id: int | None = None,
     *,
     status: EscalationStatus | None = None,
     session: AsyncSession | None = None,
 ) -> list[EscalationTicket]:
-    """Tickets, optionally narrowed by cohort and status, oldest first.
+    """Tickets, optionally narrowed by channel and status, oldest first.
 
     Args:
-        cohort_id: Only this cohort, or all cohorts when None.
+        channel_id: Only this channel, or all channels when None.
         status: Only this status.
         session: Optional session to reuse.
 
@@ -131,8 +131,8 @@ async def list_escalation_tickets(
         list[EscalationTicket]: Matching rows.
     """
     statement = select(EscalationTicket).order_by(EscalationTicket.created_at, EscalationTicket.id)  # type: ignore[arg-type]
-    if cohort_id is not None:
-        statement = statement.where(EscalationTicket.cohort_id == cohort_id)
+    if channel_id is not None:
+        statement = statement.where(EscalationTicket.channel_id == channel_id)
     if status is not None:
         statement = statement.where(EscalationTicket.status == status.value)
     async with session_scope(session) as s:

@@ -190,7 +190,7 @@ async def list_upcoming_ceremonies(
     now: datetime | None = None,
     session: AsyncSession | None = None,
 ) -> list[Ceremony]:
-    """Every scheduled ceremony, across cohorts, starting within a window — the reminder task's query.
+    """Every scheduled ceremony, across channels, starting within a window — the reminder task's query.
 
     Args:
         within: Look-ahead window.

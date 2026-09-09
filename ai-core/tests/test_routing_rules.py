@@ -69,8 +69,8 @@ def test_corpus_is_large_enough_and_covers_every_rule_and_route():
 def test_corpus_covers_the_sprint_one_vocabulary():
     texts = " || ".join(ex.text.lower() for ex in ROUTING_EXAMPLES)
     for word in (
-        "create cohort",
-        "archive cohort",
+        "create channel",
+        "archive channel",
         "scrum master",
         "tech lead",
         "open sprint",
@@ -114,30 +114,30 @@ def test_routing_latency_p95_under_budget():
 # --- Authority gating -----------------------------------------------------------
 
 
-def test_learner_saying_create_cohort_is_learner_support_with_denied_rule():
-    result = classify_text("create a cohort", REQUESTERS["learner"])
+def test_learner_saying_create_channel_is_learner_support_with_denied_rule():
+    result = classify_text("create a channel", REQUESTERS["learner"])
     assert result.route is CapabilityRoute.LEARNER_SUPPORT
-    assert result.matched_rule == "back_office_cohort_denied_role"
+    assert result.matched_rule == "back_office_channel_denied_role"
     assert result.confidence < 0.5
 
 
 def test_superadmin_without_memberships_has_authority():
     admin = REQUESTERS["admin"]
-    assert admin is not None and admin.cohort_roles == {}
-    assert classify_text("create cohort Growth-01", admin).route is CapabilityRoute.BACK_OFFICE
+    assert admin is not None and admin.channel_roles == {}
+    assert classify_text("create channel Growth-01", admin).route is CapabilityRoute.BACK_OFFICE
 
 
 def test_inactive_or_learner_only_roles_do_not_grant_authority():
     learner_twice = RequesterContext(
-        mattermost_user_id="x", cohort_roles=MappingProxyType({1: "learner", 2: "ops_support"})
+        mattermost_user_id="x", channel_roles=MappingProxyType({1: "learner", 2: "ops_support"})
     )
     assert classify_text("open sprint 2", learner_twice).route is CapabilityRoute.LEARNER_SUPPORT
-    tech_lead = RequesterContext(mattermost_user_id="y", cohort_roles=MappingProxyType({3: "tech_lead"}))
+    tech_lead = RequesterContext(mattermost_user_id="y", channel_roles=MappingProxyType({3: "tech_lead"}))
     assert classify_text("open sprint 2", tech_lead).route is CapabilityRoute.BACK_OFFICE
 
 
 def test_anonymous_requester_never_reaches_back_office():
-    for text in ("create cohort X", "open sprint 2", "schedule a retro tomorrow", "make @bob tech lead"):
+    for text in ("create channel X", "open sprint 2", "schedule a retro tomorrow", "make @bob tech lead"):
         assert classify_text(text, None).route is CapabilityRoute.LEARNER_SUPPORT
 
 
@@ -145,9 +145,9 @@ def test_public_channel_learner_admin_phrase_routes_to_learner_support():
     # The old test of this name asserted the opposite of its title; the contract is:
     # a learner saying an admin phrase goes to learner support, whatever the channel.
     public_learner = RequesterContext(
-        mattermost_user_id="pl", channel_type="O", cohort_roles=MappingProxyType({1: "learner"})
+        mattermost_user_id="pl", channel_type="O", channel_roles=MappingProxyType({1: "learner"})
     )
-    result = classify_text("create a cohort", public_learner)
+    result = classify_text("create a channel", public_learner)
     assert result.route is CapabilityRoute.LEARNER_SUPPORT
     assert result.matched_rule.endswith(DENIED_SUFFIX)
 
@@ -156,7 +156,7 @@ def test_routing_is_not_the_authorisation_boundary():
     # A superadmin in a public channel still ROUTES to the back office: routing
     # is capability selection. The tools refuse in code (DM-only, stored flags).
     public_admin = RequesterContext(mattermost_user_id="pa", channel_type="O", is_superadmin=True)
-    assert classify_text("create cohort Growth-01", public_admin).route is CapabilityRoute.BACK_OFFICE
+    assert classify_text("create channel Growth-01", public_admin).route is CapabilityRoute.BACK_OFFICE
     # And the workspace-admin route is reachable by anyone by text alone; the
     # Mattermost tools themselves refuse non-superadmins.
     assert classify_text("add alice@x.com to team Growth", REQUESTERS["learner"]).route is CapabilityRoute.GENERAL
@@ -168,7 +168,7 @@ def test_routing_is_not_the_authorisation_boundary():
 def test_multi_intent_orders_mutation_before_read_and_dedupes():
     results = detect_intents("open sprint 2 for Backend-01 and tell me when the retro is", REQUESTERS["authority"])
     assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE, CapabilityRoute.LEARNER_SUPPORT]
-    results = detect_intents("create cohort A and open sprint 1 and schedule the retro", REQUESTERS["admin"])
+    results = detect_intents("create channel A and open sprint 1 and schedule the retro", REQUESTERS["admin"])
     assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE]
 
 

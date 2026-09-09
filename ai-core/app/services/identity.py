@@ -3,7 +3,7 @@
 Every inbound event carries a Mattermost user id. This module reads the
 profile back from Mattermost (cached), upserts the ``users`` row, computes the
 superadmin flag from the ``ADMIN_EMAILS`` allowlist, and snapshots the person's
-active cohort roles for routing. The result is bound to ``current_requester``
+active channel roles for routing. The result is bound to ``current_requester``
 by the conversation layer before the graph runs.
 
 The profile read is cached per user for ``IDENTITY_PROFILE_CACHE_TTL`` seconds
@@ -26,7 +26,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.requester import RequesterContext
 from app.models import User
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.mattermost import mattermost_client
 
@@ -217,14 +217,14 @@ async def resolve_requester(
         return base
 
     try:
-        memberships = await cohort_repo.list_memberships_for_user(user.id, active_only=True)
+        memberships = await channel_repo.list_memberships_for_user(user.id, active_only=True)
     except Exception as e:
         logger.exception("identity_memberships_lookup_failed", user_id=user.id, error=str(e))
         memberships = []
     roles: dict[int, str] = {}
-    for _membership, cohort, role in memberships:
-        if cohort.id is not None:
-            roles[cohort.id] = role.key
+    for _membership, channel, role in memberships:
+        if channel.id is not None:
+            roles[channel.id] = role.key
 
     return RequesterContext(
         mattermost_user_id=mattermost_user_id,
@@ -236,5 +236,5 @@ async def resolve_requester(
         user_id=user.id,
         is_superadmin=user.is_superadmin,
         timezone=user.timezone,
-        cohort_roles=MappingProxyType(roles),
+        channel_roles=MappingProxyType(roles),
     )

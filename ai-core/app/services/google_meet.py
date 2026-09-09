@@ -1,10 +1,9 @@
 """Google Meet event creation via the Google Calendar API.
 
 This module creates Google Calendar events with Google Meet conferencing
-attached and returns the Meet join URL. Everything is done through a
-**service account** with the Calendar API scope. No per-user OAuth flow is
-needed; the service account creates the event on the shared team calendar
-configured in ``settings.GOOGLE_CALENDAR_ID``.
+attached and returns the Meet join URL. It uses a **service account** with
+domain-wide delegation to act on behalf of a real Google user, because
+service accounts cannot create Meet links on their own.
 
 The public function ``create_meet_event`` is intentionally defensive:
 
@@ -12,33 +11,32 @@ The public function ``create_meet_event`` is intentionally defensive:
 - A Meet failure **never blocks ceremony scheduling**: the ceremony is created
   with ``meet_link=None`` and the user is told the link could not be generated.
 
-Setup instructions (when you don't have credentials yet):
+Setup instructions:
 --------------------------------------------------------------------------
 1. Go to https://console.cloud.google.com/ and create or select a project.
 2. Enable the **Google Calendar API**:
    APIs & Services → Library → "Google Calendar API" → Enable.
 3. Create a Service Account:
    IAM & Admin → Service Accounts → Create.
-   No roles needed at project level.
-4. Create a JSON key for the service account:
+4. Enable **domain-wide delegation** on the service account:
+   Service Accounts → your account → Edit → Enable G Suite Domain-wide Delegation.
+   Note the numeric Client ID shown.
+5. Grant the delegation in Google Workspace Admin Console
+   (https://admin.google.com):
+   Security → API Controls → Domain-wide Delegation → Add new → paste the
+   Client ID, scope: https://www.googleapis.com/auth/calendar
+   NOTE: If you do not have Google Workspace, use a shared Google Calendar
+   instead — share it with the service account email and set
+   GOOGLE_CALENDAR_ID to that calendar's ID (skip steps 4-5).
+6. Create a JSON key for the service account:
    Service Accounts → your account → Keys → Add Key → JSON.
-   Download the file.
-5. Share your Google Calendar with the service account:
-   Open Google Calendar → Settings → your calendar → Share with specific
-   people → add the service account's email (ends in
-   ``@<project>.iam.gserviceaccount.com``) with "Make changes to events".
-6. Find the Calendar ID:
-   Settings → your calendar → "Calendar ID" (looks like
-   ``abc123@group.calendar.google.com``).
 7. In your ``.env`` set:
    ```
    GOOGLE_MEET_ENABLED=true
-   GOOGLE_CALENDAR_ID=abc123@group.calendar.google.com
+   GOOGLE_IMPERSONATE_EMAIL=you@yourdomain.com   # a real Google user to impersonate
+   GOOGLE_CALENDAR_ID=primary                    # or a shared calendar ID
    GOOGLE_SERVICE_ACCOUNT_CREDENTIALS=<paste the entire JSON key file here>
    ```
-   Tip: on Linux you can run:
-   ``python -c "import json, sys; print(json.dumps(json.load(open('key.json'))))"``
-   to collapse the JSON to one line for the env var.
 --------------------------------------------------------------------------
 """
 
@@ -71,6 +69,10 @@ _SCOPES = ["https://www.googleapis.com/auth/calendar"]
 def _build_service() -> Any | None:
     """Build an authenticated Google Calendar API service client.
 
+    When ``settings.GOOGLE_IMPERSONATE_EMAIL`` is set the service account uses
+    domain-wide delegation to act as that user. This is **required** to create
+    Google Meet links — service accounts do not hold Meet licences on their own.
+
     Returns:
         googleapiclient Resource | None: The service, or None on any error.
     """
@@ -89,6 +91,21 @@ def _build_service() -> Any | None:
     try:
         info = json.loads(raw)
         creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)  # type: ignore[union-attr]
+
+        # Impersonate a real user so the service account can create Meet links.
+        # Without this, the API returns "Invalid conference type value" because
+        # service accounts do not have Google Meet licences.
+        impersonate = settings.GOOGLE_IMPERSONATE_EMAIL
+        if impersonate:
+            creds = creds.with_subject(impersonate)
+            logger.debug("google_meet_impersonating", subject=impersonate)
+        else:
+            logger.warning(
+                "google_meet_no_impersonate_email",
+                hint="Set GOOGLE_IMPERSONATE_EMAIL in .env to a real Google account email. "
+                     "Meet link creation will fail without domain-wide delegation.",
+            )
+
         return build("calendar", "v3", credentials=creds, cache_discovery=False)  # type: ignore[misc]
     except Exception as e:
         logger.exception("google_meet_build_service_failed", error=str(e))
