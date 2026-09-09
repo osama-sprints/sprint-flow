@@ -200,11 +200,11 @@ def test_halted_channel_step_when_channel_missing():
 
 
 def test_halted_channel_step_when_membership_missing():
-    assert is_halted(step("c7", "orientation"), OnboardingContext(role=None, memberships=())) == "membership_missing"
+    assert is_halted(step("Backend-01", "orientation"), OnboardingContext(role=None, memberships=())) == "membership_missing"
     other = make_role("learner")
     wrong = RoleContext(role_key="learner", role_label="Learner", team_id="t1", channel_id="Other")
-    assert is_halted(step("c7", "orientation"), OnboardingContext(role=wrong, memberships=())) == "membership_missing"
-    assert is_halted(step("c7", "orientation"), OnboardingContext(role=other, memberships=())) is None
+    assert is_halted(step("Backend-01", "orientation"), OnboardingContext(role=wrong, memberships=())) == "membership_missing"
+    assert is_halted(step("Backend-01", "orientation"), OnboardingContext(role=other, memberships=())) is None
 
 
 # ---------------------------------------------------------------------------

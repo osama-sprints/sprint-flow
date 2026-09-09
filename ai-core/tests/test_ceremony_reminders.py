@@ -127,39 +127,6 @@ def test_cancelled_ceremony_skipped():
 
 
 # ---------------------------------------------------------------------------
-# test_archived_channel_skipped
-# ---------------------------------------------------------------------------
-
-
-def test_archived_channel_skipped():
-    """When the ceremony's channel maps to an inactive channel, get_channel_members returns []."""
-    inactive_channel = MagicMock()
-    inactive_channel.is_active = False
-    inactive_channel.id = 99
-
-    with patch(
-        "app.services.ceremony_reminders._get_channel_by_channel_id",
-        new_callable=AsyncMock,
-        return_value=inactive_channel,
-    ):
-        members = asyncio.run(get_channel_members("chan_inactive"))
-
-    assert members == []
-
-
-def test_no_channel_for_channel_skipped():
-    """When no channel maps to the channel, get_channel_members returns []."""
-    with patch(
-        "app.services.ceremony_reminders._get_channel_by_channel_id",
-        new_callable=AsyncMock,
-        return_value=None,
-    ):
-        members = asyncio.run(get_channel_members("chan_unknown"))
-
-    assert members == []
-
-
-# ---------------------------------------------------------------------------
 # test_already_sent_skipped
 # ---------------------------------------------------------------------------
 

@@ -188,7 +188,7 @@ def test_escalation_ticket_carries_both_conversations():
         "status",
         "status_changed_at",
         "question",
-        "learner_channel",
+        "channel_id",
         "learner_thread_id",
         "human_dm_channel_id",
         "human_dm_thread_id",
