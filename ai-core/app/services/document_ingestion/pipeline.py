@@ -27,11 +27,11 @@ class IngestionPipeline:
 
 
 async def ingest_all(data_dir: str = "/app/data/sample_policies") -> None:
-    """Ingest the bundled learner and operator policy documents."""
+    """Ingest the bundled learner policy documents."""
     pipeline = IngestionPipeline()
     documents = (
         ("_ACC FAQs Presentation (editable).pdf", "acc_faqs", "learner"),
-        ("Ops Circle Chatbot Scripts.docx", "ops_circle_chatbot_scripts", "internal_operator"),
+        ("Ops Circle Chatbot Scripts.docx", "ops_circle_chatbot_scripts", "learner"),
     )
 
     for filename, document_id, audience in documents:

@@ -23,9 +23,9 @@ from langgraph.errors import GraphBubbleUp
 
 from app.core.logging import logger
 from app.services.authorisation import (
-    REFUSAL_MESSAGE,
     AuthorisationRefused,
     ValidationFailed,
+    refusal_message,
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -35,8 +35,8 @@ class ResultCode(StrEnum):
     """Stable prefixes for tool results."""
 
     OK = "OK"
-    COHORT_CREATED = "COHORT_CREATED"
-    COHORT_ALREADY_EXISTS = "COHORT_ALREADY_EXISTS"
+    CHANNEL_CREATED = "CHANNEL_CREATED"
+    CHANNEL_ALREADY_EXISTS = "CHANNEL_ALREADY_EXISTS"
     ROLE_ASSIGNED = "ROLE_ASSIGNED"
     ROLE_ALREADY_ASSIGNED = "ROLE_ALREADY_ASSIGNED"
     ROLE_CHANGED = "ROLE_CHANGED"
@@ -51,6 +51,9 @@ class ResultCode(StrEnum):
     AUTHORISATION_REFUSED = "AUTHORISATION_REFUSED"
     VALIDATION_ERROR = "VALIDATION_ERROR"
     SYSTEM_ERROR = "SYSTEM_ERROR"
+    ESCALATION_OPENED = "ESCALATION_OPENED"
+    ESCALATION_OPENED_NO_HUMAN = "ESCALATION_OPENED_NO_HUMAN"
+    ESCALATION_ALREADY_OPEN = "ESCALATION_ALREADY_OPEN"
 
 
 SYSTEM_ERROR_MESSAGE = (
@@ -103,8 +106,8 @@ def _handle(exc: BaseException, tool_name: str) -> str:
     if isinstance(exc, GraphBubbleUp):
         raise exc
     if isinstance(exc, AuthorisationRefused):
-        logger.warning("tool_refused", tool=tool_name, reason=exc.reason, action=exc.action, cohort_id=exc.cohort_id)
-        return tool_result(ResultCode.AUTHORISATION_REFUSED, REFUSAL_MESSAGE)
+        logger.warning("tool_refused", tool=tool_name, reason=exc.reason, action=exc.action, channel_id=exc.channel_id)
+        return tool_result(ResultCode.AUTHORISATION_REFUSED, refusal_message(exc.action))
     if isinstance(exc, ValidationFailed):
         logger.info("tool_validation_failed", tool=tool_name, detail=str(exc))
         return tool_result(ResultCode.VALIDATION_ERROR, str(exc))

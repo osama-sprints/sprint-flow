@@ -345,5 +345,31 @@ class MattermostClient:
             logger.exception("mattermost_create_direct_channel_failed", user_id=user_id, error=str(e))
             return None
 
+    async def get_user_timezone(self, user_id: str) -> str:
+        """Return the user's IANA timezone string, falling back to ``"UTC"`` on any failure.
+
+        Mattermost stores two timezone fields: ``automaticTimezone`` (the browser's
+        detected zone, used when ``useAutomaticTimezone`` is true) and
+        ``manualTimezone`` (what the user typed). We prefer automatic when enabled,
+        manual otherwise. Either may be an empty string, in which case we fall back
+        to ``"UTC"`` so that formatting never crashes.
+
+        Args:
+            user_id: The Mattermost user id.
+
+        Returns:
+            str: An IANA timezone string (e.g. ``"Asia/Cairo"``), or ``"UTC"``.
+        """
+        try:
+            data = await self._request("GET", f"/users/{user_id}/timezone")
+            if data.get("useAutomaticTimezone"):
+                tz = data.get("automaticTimezone") or ""
+            else:
+                tz = data.get("manualTimezone") or ""
+            return tz if tz else "UTC"
+        except Exception as e:
+            logger.warning("mattermost_get_user_timezone_failed", user_id=user_id, error=str(e))
+            return "UTC"
+
 
 mattermost_client = MattermostClient()

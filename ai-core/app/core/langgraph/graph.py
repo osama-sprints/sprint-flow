@@ -26,6 +26,7 @@ from typing import (
     Sequence,
     cast,
 )
+import json
 from urllib.parse import quote_plus
 
 import httpx
@@ -97,6 +98,7 @@ from app.utils import (
     prepare_messages,
     process_llm_response,
 )
+from app.core.langgraph.nodes import bind_meeting_tools, policy_retrieval_node
 
 PostgresConnPool = AsyncConnectionPool[AsyncConnection[DictRow]]
 
@@ -351,9 +353,12 @@ class LangGraphAgent:
                 username=username,
                 long_term_memory=state.long_term_memory,
                 routing_context=describe_route(spec.route.value, state.route_plan, continuation=bool(prior_replies)),
+                policy_context=json.dumps(state.policy_context or [], default=str, indent=2),
             )
             messages = prepare_messages(state.messages, system_prompt)
             tool_group = list(self.tool_groups.get(spec.tool_group, ()))
+            if spec.tool_group == "back_office" and self.tool_groups is TOOL_GROUPS:
+                tool_group = bind_meeting_tools(tool_group)
 
             try:
                 with llm_inference_duration_seconds.labels(model=model_name).time():
@@ -436,7 +441,10 @@ class LangGraphAgent:
 
         async def tools_node(state: GraphState) -> Command:
             tool_calls = state.messages[-1].tool_calls
-            available = {tool.name: tool for tool in self.tool_groups.get(spec.tool_group, ())}
+            tool_group = list(self.tool_groups.get(spec.tool_group, ()))
+            if spec.tool_group == "back_office" and self.tool_groups is TOOL_GROUPS:
+                tool_group = bind_meeting_tools(tool_group)
+            available = {tool.name: tool for tool in tool_group}
 
             async def _execute_tool(tool_call: dict) -> ToolMessage:
                 tool = available.get(tool_call["name"])
@@ -510,12 +518,16 @@ class LangGraphAgent:
                 destinations=(spec.node_name,),
                 retry_policy=RetryPolicy(max_attempts=3, retry_on=_TRANSIENT_ERRORS),
             )
+        graph_builder.add_node("policy_retrieval_node", policy_retrieval_node)
 
         graph_builder.set_entry_point("supervisor")
         graph_builder.add_conditional_edges(
             "supervisor",
             route_after_supervisor,
-            {spec.node_name: spec.node_name for spec in SPECIALISTS.values()},
+            {
+                **{spec.node_name: spec.node_name for spec in SPECIALISTS.values()},
+                "policy_support": "policy_retrieval_node",
+            },
         )
         return graph_builder.compile(
             checkpointer=checkpointer, name=f"{settings.PROJECT_NAME} Agent ({settings.ENVIRONMENT.value})"
@@ -570,6 +582,14 @@ class LangGraphAgent:
             "configurable": {"thread_id": session_id},
             "callbacks": callbacks,
             "metadata": {
+                # Langfuse trace attributes (use langfuse_ prefix for automatic attribution)
+                "langfuse_user_id": user_id,
+                "langfuse_session_id": session_id,
+                "langfuse_tags": [
+                    "chat",
+                    "production" if settings.ENVIRONMENT.value == "production" else "development",
+                ],
+                # Application metadata for debugging and monitoring
                 "user_id": user_id,
                 "username": username,
                 "session_id": session_id,

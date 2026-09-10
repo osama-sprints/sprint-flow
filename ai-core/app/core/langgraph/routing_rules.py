@@ -9,13 +9,13 @@ How a decision is made:
 
 1. The text is normalised (whitespace, curly apostrophes) and tested against
    every rule in ``ROUTING_RULES``, in order of consequence: mutations first
-   (cohort, role, sprint, ceremony scheduling), then directory and calendar
+   (channel, role, sprint, ceremony scheduling), then directory and calendar
    reads, then learner support, then workspace administration.
 2. A *mutation* rule matches only imperative phrasing. A message that is
    question-shaped ("when should we schedule the retro?") and carries no second
    clause never routes to a mutation — it is a read, however many admin verbs
    it contains. Polite orders ("can you open sprint 2?") are not questions.
-3. Mutation rules are gated on stored authority. For a requester with no cohort
+3. Mutation rules are gated on stored authority. For a requester with no channel
    authority the match is kept but redirected to ``learner_support`` with the
    rule name suffixed ``_denied_role``, so the denial is observable and the
    learner-support specialist — which has no mutating tools at all — can say so.
@@ -45,9 +45,9 @@ from app.schemas.graph import CapabilityRoute
 _CEREMONY = (
     r"(?:stand-?ups?|dailys?|dailies|plannings?|sprint\s+plannings?|reviews?|sprint\s+reviews?|"
     r"retros?(?:pectives?)?|demos?|q\s*&\s*a|q\s*and\s*a|qa\s+sessions?|office\s+hours|"
-    r"ceremon(?:y|ies)|meetings?|sessions?)"
+    r"ceremon(?:y|ies)|meetings?|meets?|sessions?)"
 )
-# Words that name a cohort role.
+# Words that name a channel role.
 _ROLE_WORD = r"(?:learners?|students?|tech\s*-?leads?|scrum\s*-?masters?|ops\s*-?support|ops|operations)"
 # Up to three words between a verb and its object noun ("open a new sprint", "start Backend-01's next sprint").
 _GAP3 = r"(?:\s+[\w'@&./-]+){0,3}?\s+"
@@ -81,7 +81,7 @@ class Rule(NamedTuple):
         name: Stable identifier, exported as the ``matched_rule`` label.
         route: Where a match sends the turn.
         patterns: Any pattern matching means the rule matches.
-        requires_cohort_authority: Gate on stored authority (superadmin or an admin role somewhere).
+        requires_channel_authority: Gate on stored authority (superadmin or an admin role somewhere).
         denied_route: Where the turn goes when the gate fails.
         mutation: Whether the rule describes an order to change something. Mutations never
             match question-shaped single-clause messages.
@@ -91,7 +91,7 @@ class Rule(NamedTuple):
     name: str
     route: CapabilityRoute
     patterns: Sequence[re.Pattern[str]]
-    requires_cohort_authority: bool = False
+    requires_channel_authority: bool = False
     denied_route: Optional[CapabilityRoute] = None
     mutation: bool = False
     confidence: float = 0.9
@@ -104,15 +104,14 @@ def _compile(*patterns: str) -> List[re.Pattern[str]]:
 ROUTING_RULES: List[Rule] = [
     # ---- Back office: mutations, authority-gated ---------------------------------
     Rule(
-        name="back_office_cohort",
+        name="back_office_channel",
         route=CapabilityRoute.BACK_OFFICE,
         patterns=_compile(
-            rf"\b(?:create|open|start|set\s*up|make|add|new|register|launch|spin\s+up|deactivate|"
-            rf"archive|close|reactivate|activate|rename|delete|remove|retire){_GAP3}cohorts?\b",
-            r"\bcohorts?\b.{0,30}\b(?:create|created|set\s*up|deactivate|deactivated|archive|archived|"
-            r"close|closed|retire|retired)\b",
+            rf"\b(?:create|make|set\s*up|open|start|new|deactivate|archive|close|reactivate|activate|rename|delete|remove|retire|add|invite|join){_GAP3}channels?\b",
+            r"\bchannels?\b.{0,30}\b(?:create|created|set\s*up|deactivate|deactivated|archive|archived|rename|renamed|delete|deleted)\b",
+            r"\b(?:add|invite|join|put)\b.{0,80}\b(?:to|into|onto)\s+(?:the\s+|a\s+)?(?:\S+\s+)?channels?\b",
         ),
-        requires_cohort_authority=True,
+        requires_channel_authority=True,
         denied_route=CapabilityRoute.LEARNER_SUPPORT,
         mutation=True,
         confidence=0.95,
@@ -129,7 +128,7 @@ ROUTING_RULES: List[Rule] = [
             rf"|roles?\b)",
             rf"\broles?\b.{{0,30}}\b(?:should\s+be|is\s+now|becomes?|to|->|:)\s*(?:a\s+|an\s+|the\s+)?{_ROLE_WORD}\b",
         ),
-        requires_cohort_authority=True,
+        requires_channel_authority=True,
         denied_route=CapabilityRoute.LEARNER_SUPPORT,
         mutation=True,
         confidence=0.95,
@@ -141,7 +140,7 @@ ROUTING_RULES: List[Rule] = [
             rf"\b(?:open|start|create|begin|kick\s*off|launch|close|end|complete|finish|wrap\s+up|"
             rf"extend|mark|reopen){_GAP3}sprints?\b",
         ),
-        requires_cohort_authority=True,
+        requires_channel_authority=True,
         denied_route=CapabilityRoute.LEARNER_SUPPORT,
         mutation=True,
         confidence=0.95,
@@ -159,7 +158,7 @@ ROUTING_RULES: List[Rule] = [
             r"\b(?:update|change|set|add|amend|edit|put|attach|replace|revise)\b.{0,40}\bagenda\b",
             r"\bagenda\b.{0,40}(?:\bshould\s+be\b|\bis\s+now\b|\bto\s+be\b|:|=|->)",
         ),
-        requires_cohort_authority=True,
+        requires_channel_authority=True,
         denied_route=CapabilityRoute.LEARNER_SUPPORT,
         mutation=True,
         confidence=0.95,
@@ -167,16 +166,33 @@ ROUTING_RULES: List[Rule] = [
     # ---- Directory reads: who is in what. Open to any member (the read tools
     # refuse non-members in code), so they route to learner support ---------------
     Rule(
-        name="cohort_directory",
+        name="channel_directory",
         route=CapabilityRoute.LEARNER_SUPPORT,
         patterns=_compile(
             r"\b(?:list|show|see|view|display)\b(?:\s+(?:me|us|all|the|every|active|our|current))*"
-            r"\s+(?:cohorts?|members?|people|learners|roster)\b",
-            rf"\bwho(?:'s|\s+is|\s+are|\s+belongs)\b(?!\s+my\b)(?!\s+our\b).{{0,30}}\b(?:cohort|{_ROLE_WORD}|members?)\b",
-            r"\b(?:members?|people|learners|roster)\s+(?:of|in)\s+(?:the\s+)?cohort\b",
-            r"\b(?:which|what|how\s+many)\s+cohorts\b",
+            r"\s+(?:channels?|members?|people|learners|roster)\b",
+            rf"\bwho(?:'s|\s+is|\s+are|\s+belongs)\b(?!\s+my\b)(?!\s+our\b).{{0,30}}\b(?:channel|{_ROLE_WORD}|members?)\b",
+            r"\b(?:members?|people|learners|roster)\s+(?:of|in)\s+(?:the\s+)?channel\b",
+            r"\b(?:which|what|how\s+many)\s+channels\b",
         ),
         confidence=0.85,
+    ),
+    # ---- Policy support: general program and policy questions --------------------
+    Rule(
+        name="policy_support",
+        route=CapabilityRoute.POLICY_SUPPORT,
+        mutation=False,
+        requires_channel_authority=False,
+        patterns=_compile(
+            r"\b(sprint|program|module|tasks?|live\s+sessions?|self-paced|project|deadline|online|offline|fees?|cost|graduation)\b",
+            r"\b(policy|policies|guideline|guidelines|rule|rules)\b",
+            r"\b(leave|holiday|vacation|absence|absent|day\s+off|time\s+off|sick|late)\b",
+            r"\b(allowed|permitted|playbook|refund)\b",
+            r"\bamerican\s+center\s+cairo\b",
+            r"\bACC\b",
+            r"\bpartner\s+programs?\b",
+            r"\bprogram\s+graduation\s+criteria\b",
+        ),
     ),
     # ---- Learner support: calendar reads, open to any member --------------------
     Rule(
@@ -202,17 +218,15 @@ ROUTING_RULES: List[Rule] = [
         name="learner_support",
         route=CapabilityRoute.LEARNER_SUPPORT,
         patterns=_compile(
-            rf"\b(?:my|our)\b.{{0,20}}\b(?:role|cohort|sprint|standups?|schedule|calendar|team|{_ROLE_WORD})\b",
-            r"\b(?:which|what)\b.{0,20}\b(?:cohort|sprint|role|team)\b.{0,20}\b(?:am\s+i|i'?m|are\s+we|do\s+i|is\s+mine)\b",
+            rf"\b(?:my|our)\b.{{0,20}}\b(?:role|channel|sprint|standups?|schedule|calendar|team|{_ROLE_WORD})\b",
+            r"\b(?:which|what)\b.{0,20}\b(?:channel|sprint|role|team)\b.{0,20}\b(?:am\s+i|i'?m|are\s+we|do\s+i|is\s+mine)\b",
             r"\b(?:assignment|deadline|due\s+date|submission|submit|grade|grading|quiz|lecture|course|"
             r"curriculum|syllabus|module|exam|project|homework|feedback)\b",
-            r"\b(?:policy|policies|allowed|permitted|rule|rules|guideline|guidelines|leave|holiday|vacation|"
-            r"absence|absent|day\s+off|time\s+off|sick|late)\b",
             r"\b(?:blocked|blocker|stuck|struggling|confused|help\s+me|how\s+do\s+i|how\s+can\s+i|how\s+should\s+i|"
             r"where\s+do\s+i|where\s+can\s+i|who\s+do\s+i\s+ask|who\s+should\s+i\s+ask|who\s+can\s+i\s+ask|"
             r"can\s+i\s+get\s+help)\b",
             r"\b(?:what\s+is|what\s+are|what'?s|explain|meaning\s+of)\b.{0,30}\b(?:a\s+|an\s+|the\s+)?"
-            r"(?:sprints?|stand-?ups?|retros?|retrospectives?|ceremon(?:y|ies)|cohorts?|scrum|plannings?|reviews?)\b",
+            r"\b(?:sprints?|stand-?ups?|retros?|retrospectives?|ceremon(?:y|ies)|channels?|scrum|plannings?|reviews?)\b",
         ),
         confidence=0.85,
     ),
@@ -277,6 +291,19 @@ def _matches(rule: Rule, text: str) -> bool:
     return any(pattern.search(text) for pattern in rule.patterns)
 
 
+def _is_generic_live_session_question(text: str) -> bool:
+    """Identify program live-session timing questions, not channel ceremonies."""
+    return bool(
+        re.search(r"\blive\s+sessions?\b", text, re.IGNORECASE)
+        and not re.search(
+            r"\b(?:stand-?ups?|dail(?:y|ies)|planning|review|retro(?:spective)?|demo|q\s*&?\s*a|"
+            r"office\s+hours|ceremon(?:y|ies)|meeting)s?\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
 def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> List[RoutingResult]:
     """Return every distinct route a message calls for, in rule order.
 
@@ -285,7 +312,7 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     de-duplicated by route, so the supervisor can plan a multi-step turn.
     Always returns at least one result (``general`` when nothing matched).
 
-    A mutation rule that matches for a requester without stored cohort
+    A mutation rule that matches for a requester without stored channel
     authority is not silently routed to the back office: it becomes a
     learner-support result with ``matched_rule`` suffixed ``_denied_role`` so
     the denial is observable and the reply can say so plainly. The tools
@@ -301,15 +328,28 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     normalised = normalise_text(text or "")
     results: List[RoutingResult] = []
     seen: set[CapabilityRoute] = set()
-    has_authority = bool(requester and requester.has_any_cohort_authority())
+    has_authority = bool(requester and requester.has_any_channel_authority())
     question = is_question_shaped(normalised)
+    mutation_matched = any(rule.mutation and _matches(rule, normalised) for rule in ROUTING_RULES)
+    calendar_rule = next(rule for rule in ROUTING_RULES if rule.name == "learner_calendar")
+    calendar_matched = _matches(calendar_rule, normalised)
+    policy_rule = next(rule for rule in ROUTING_RULES if rule.name == "policy_support")
+    policy_matched = _matches(policy_rule, normalised)
+    generic_live_session_question = question and _is_generic_live_session_question(normalised)
 
     for rule in ROUTING_RULES:
         if rule.mutation and question:
             continue
+        if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
+            if not generic_live_session_question:
+                continue
+        if rule.name == "learner_calendar" and generic_live_session_question:
+            continue
+        if rule.name == "learner_support" and question and policy_matched:
+            continue
         if not _matches(rule, normalised):
             continue
-        if rule.requires_cohort_authority and not has_authority:
+        if rule.requires_channel_authority and not has_authority:
             result = RoutingResult(
                 route=rule.denied_route or CapabilityRoute.GENERAL,
                 matched_rule=f"{rule.name}{DENIED_SUFFIX}",

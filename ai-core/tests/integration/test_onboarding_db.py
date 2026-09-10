@@ -24,19 +24,17 @@ from sqlalchemy import text
 
 from app.core.config import settings
 from app.models import (
-    Cohort,
     OnboardingStep,
     User,
     utcnow,
 )
 from app.models.enums import (
-    OnboardingStepKind,
     OnboardingStepStatus,
     RoleKey,
 )
 from app.services import onboarding
 from app.services.database import database_service
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.domain import onboarding as outbox
 from app.workers.onboarding_dispatcher import OnboardingDispatcher
@@ -88,18 +86,18 @@ async def cleanup() -> None:
         await s.execute(
             text(
                 "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-                " OR cohort_id IN (SELECT id FROM cohorts WHERE name LIKE :p)"
+                " OR channel_id IN (SELECT id FROM channels WHERE name LIKE :p)"
             ),
             {"p": f"{PREFIX}%"},
         )
         await s.execute(
             text(
-                "DELETE FROM cohort_memberships WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-                " OR cohort_id IN (SELECT id FROM cohorts WHERE name LIKE :p)"
+                "DELETE FROM channel_memberships WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
+                " OR channel_id IN (SELECT id FROM channels WHERE name LIKE :p)"
             ),
             {"p": f"{PREFIX}%"},
         )
-        await s.execute(text("DELETE FROM cohorts WHERE name LIKE :p"), {"p": f"{PREFIX}%"})
+        await s.execute(text("DELETE FROM channels WHERE name LIKE :p"), {"p": f"{PREFIX}%"})
         await s.execute(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), {"p": f"{PREFIX}%"})
         await s.commit()
 
@@ -129,20 +127,20 @@ async def make_user(tag: str, display_name: str = "Test Person") -> User:
     )
 
 
-async def make_cohort(tag: str) -> Cohort:
-    return await cohort_repo.create_cohort(f"{PREFIX}{tag}-{uuid.uuid4().hex[:6]}")
+async def make_channel(tag: str) -> str:
+    return f"{PREFIX}{tag}-{uuid.uuid4().hex[:6]}"
 
 
-async def assign(user: User, cohort: Cohort, role_key: RoleKey) -> None:
-    role = await cohort_repo.get_role_by_key(role_key)
-    assert role is not None and role.id is not None and user.id is not None and cohort.id is not None
-    await cohort_repo.upsert_membership(user_id=user.id, cohort_id=cohort.id, role_id=role.id, assigned_by_id=None)
+async def assign(user: User, channel: str, role_key: RoleKey) -> None:
+    role = await channel_repo.get_role_by_key(role_key)
+    assert role is not None and role.id is not None and user.id is not None and channel.id is not None
+    await channel_repo.upsert_membership(user_id=user.id, channel_id=channel, role_id=role.id, assigned_by_id=None)
 
 
 async def steps_of(user: User) -> dict[str, OnboardingStep]:
     assert user.id is not None
     rows = await outbox.list_steps_for_user(user.id)
-    return {f"{row.step_kind}:{row.cohort_id}": row for row in rows}
+    return {f"{row.step_kind}:{row.channel_id}": row for row in rows}
 
 
 def dispatcher(name: str = "w1", batch: int = 50) -> OnboardingDispatcher:
@@ -251,42 +249,6 @@ def test_gives_up_after_max_attempts(fake: FakeMattermost, monkeypatch: pytest.M
     run(scenario())
 
 
-def test_inactive_cohort_halts_steps_and_reactivation_resumes(fake: FakeMattermost):
-    async def scenario() -> None:
-        user = await make_user("inactive")
-        cohort = await make_cohort("inactive")
-        assert cohort.id is not None and user.id is not None
-        await assign(user, cohort, RoleKey.LEARNER)
-        await cohort_repo.set_cohort_active(cohort.id, False)
-        await onboarding.start_journey(user)
-        await outbox.enqueue_step(
-            user_id=user.id, cohort_id=cohort.id, step_kind=OnboardingStepKind.ORIENTATION, due_at=utcnow()
-        )
-
-        summary = await dispatcher().run_once()
-        assert (summary.claimed, summary.halted, summary.sent) == (2, 2, 0)
-        assert fake.posts == []
-        steps = await steps_of(user)
-        for key in ("welcome:None", f"orientation:{cohort.id}"):
-            assert steps[key].status == OnboardingStepStatus.PENDING.value
-            assert steps[key].attempt_count == 0
-            assert steps[key].claimed_at is None and steps[key].claimed_by is None
-
-        # A second pass is still silent.
-        assert (await dispatcher().run_once()).sent == 0
-        assert fake.posts == []
-
-        # Resetting the kill switch lets the journey continue.
-        await cohort_repo.set_cohort_active(cohort.id, True)
-        resumed = await dispatcher().run_once()
-        assert resumed.sent == 2
-        assert len(fake.posts) == 2
-        welcome = (await steps_of(user))["welcome:None"]
-        assert welcome.role_key_at_delivery == RoleKey.LEARNER.value
-
-    run(scenario())
-
-
 def test_two_dispatchers_deliver_twenty_steps_exactly_once(fake: FakeMattermost):
     async def scenario() -> None:
         users = [await make_user(f"conc{i}") for i in range(20)]
@@ -317,31 +279,31 @@ def test_two_dispatchers_deliver_twenty_steps_exactly_once(fake: FakeMattermost)
 def test_role_assigned_after_roleless_welcome_sends_one_orientation(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("late-role", display_name="Omar Said")
-        cohort = await make_cohort("late-role")
+        channel = await make_channel("late-role")
         lead = await make_user("late-lead")
-        assert cohort.id is not None and user.id is not None
-        await assign(lead, cohort, RoleKey.SCRUM_MASTER)
+        assert channel.id is not None and user.id is not None
+        await assign(lead, channel, RoleKey.SCRUM_MASTER)
 
         await onboarding.start_journey(user)
         assert (await dispatcher().run_once()).sent == 1
         assert (await steps_of(user))["welcome:None"].role_key_at_delivery is None
 
-        await assign(user, cohort, RoleKey.LEARNER)
-        await onboarding.on_role_assigned(user.id, cohort.id)
-        orientation = (await steps_of(user))[f"orientation:{cohort.id}"]
+        await assign(user, channel, RoleKey.LEARNER)
+        await onboarding.on_role_assigned(user.id, channel.id)
+        orientation = (await steps_of(user))[f"orientation:{channel.id}"]
         assert orientation.status == OnboardingStepStatus.PENDING.value
 
         assert (await dispatcher().run_once()).sent == 1
         assert len(fake.posts) == 2
         message = fake.posts[1]["message"]
-        assert "Omar, your role in" in message and cohort.name in message
+        assert "Omar, your role in" in message and channel.name in message
         assert f"@{lead.username}" in message
-        orientation = (await steps_of(user))[f"orientation:{cohort.id}"]
+        orientation = (await steps_of(user))[f"orientation:{channel.id}"]
         assert orientation.status == OnboardingStepStatus.SENT.value
         assert orientation.role_key_at_delivery == RoleKey.LEARNER.value
 
         # Repeating the assignment hook creates nothing and sends nothing.
-        await onboarding.on_role_assigned(user.id, cohort.id)
+        await onboarding.on_role_assigned(user.id, channel.id)
         assert (await dispatcher().run_once()).claimed == 0
         assert len(fake.posts) == 2
 
@@ -351,23 +313,23 @@ def test_role_assigned_after_roleless_welcome_sends_one_orientation(fake: FakeMa
 def test_role_before_welcome_makes_welcome_carry_orientation(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("early-role", display_name="Nour")
-        cohort = await make_cohort("early-role")
-        assert cohort.id is not None and user.id is not None
-        await assign(user, cohort, RoleKey.TECH_LEAD)
+        channel = await make_channel("early-role")
+        assert channel.id is not None and user.id is not None
+        await assign(user, channel, RoleKey.TECH_LEAD)
         await onboarding.start_journey(user)
-        await onboarding.on_role_assigned(user.id, cohort.id)
-        assert f"orientation:{cohort.id}" not in await steps_of(user), "welcome pending: no separate orientation"
+        await onboarding.on_role_assigned(user.id, channel.id)
+        assert f"orientation:{channel.id}" not in await steps_of(user), "welcome pending: no separate orientation"
 
         assert (await dispatcher().run_once()).sent == 1
         assert len(fake.posts) == 1
         assert "Escalations arrive as DMs" in fake.posts[0]["message"]
         steps = await steps_of(user)
         assert steps["welcome:None"].role_key_at_delivery == RoleKey.TECH_LEAD.value
-        carried = steps[f"orientation:{cohort.id}"]
+        carried = steps[f"orientation:{channel.id}"]
         assert carried.status == OnboardingStepStatus.SENT.value
         assert carried.mattermost_post_id == fake.posts[0]["id"]
 
-        await onboarding.on_role_assigned(user.id, cohort.id)
+        await onboarding.on_role_assigned(user.id, channel.id)
         assert (await dispatcher().run_once()).claimed == 0
         assert len(fake.posts) == 1
 
@@ -393,14 +355,14 @@ def test_follow_up_due_in_the_past_is_sent(fake: FakeMattermost):
 def test_only_inactive_memberships_halt_workspace_steps(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("halt-all")
-        inactive = await make_cohort("halt-inactive")
+        inactive = await make_channel("halt-inactive")
         assert inactive.id is not None
         await assign(user, inactive, RoleKey.LEARNER)
-        await cohort_repo.set_cohort_active(inactive.id, False)
+        await channel_repo.set_channel_active(inactive.id, False)
         await onboarding.start_journey(user)
         assert (await dispatcher().run_once()).halted == 1
 
-        active = await make_cohort("halt-active")
+        active = await make_channel("halt-active")
         await assign(user, active, RoleKey.OPS_SUPPORT)
         summary = await dispatcher().run_once()
         assert summary.sent == 1
@@ -457,16 +419,16 @@ def test_settlement_requires_the_claim_holder(fake: FakeMattermost):
 def test_role_assigned_while_welcome_is_claimed_still_gets_an_orientation(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("inflight")
-        cohort = await make_cohort("inflight")
-        assert user.id is not None and cohort.id is not None
+        channel = await make_channel("inflight")
+        assert user.id is not None and channel.id is not None
         await onboarding.start_journey(user)
         # A worker claims the welcome (delivery in progress, role resolved as "none yet").
         await outbox.claim_due_steps(worker_id=f"{PREFIX}slow", lease_seconds=600, limit=5)
         # The role lands while the welcome is in flight: the orientation must be queued on its own.
-        await assign(user, cohort, RoleKey.LEARNER)
-        await onboarding.on_role_assigned(user.id, cohort.id)
+        await assign(user, channel, RoleKey.LEARNER)
+        await onboarding.on_role_assigned(user.id, channel.id)
         steps = await steps_of(user)
-        assert f"orientation:{cohort.id}" in steps
-        assert steps[f"orientation:{cohort.id}"].status == "pending"
+        assert f"orientation:{channel.id}" in steps
+        assert steps[f"orientation:{channel.id}"].status == "pending"
 
     run(scenario())

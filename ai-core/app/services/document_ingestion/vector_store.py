@@ -4,10 +4,11 @@ from sqlalchemy import delete
 from app.services.database import session_scope
 from app.models.policy import PolicyDocumentChunk
 
+
 class PolicyVectorStore:
     async def upsert_chunks(self, chunks: List[Dict[str, Any]], embeddings: List[List[float]]):
         async with session_scope() as session:
-            for chunk_data, emb in zip(chunks, embeddings):
+            for chunk_data, emb in zip(chunks, embeddings, strict=False):
                 existing = await session.get(PolicyDocumentChunk, chunk_data["id"])
                 if existing:
                     existing.doc_metadata = chunk_data["metadata"]
@@ -28,18 +29,31 @@ class PolicyVectorStore:
 
     async def delete_document(self, document_id: str):
         async with session_scope() as session:
-            stmt = delete(PolicyDocumentChunk).where(PolicyDocumentChunk.document_id == document_id)
+            stmt = delete(PolicyDocumentChunk).where(PolicyDocumentChunk.document_id == document_id)  # type: ignore
             await session.execute(stmt)
             await session.commit()
 
-    async def similarity_search(self, query_embedding: List[float], audience: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    async def similarity_search(
+        self, query_embedding: List[float], audience: str | None = None, top_k: int = 5
+    ) -> List[Dict[str, Any]]:
         async with session_scope() as session:
+            distance_expr = PolicyDocumentChunk.embedding.l2_distance(query_embedding)
+            allowed_audiences = ("admin", "learner", "public") if audience in (None, "admin", "superadmin") else (audience,)
+
             stmt = (
-                select(PolicyDocumentChunk)
-                .where(PolicyDocumentChunk.audience == audience)
-                .order_by(PolicyDocumentChunk.embedding.l2_distance(query_embedding))
+                select(PolicyDocumentChunk, distance_expr.label("distance"))
+                .where(PolicyDocumentChunk.audience.in_(allowed_audiences))  # type: ignore
+                .order_by(distance_expr)
                 .limit(top_k)
             )
             result = await session.execute(stmt)
-            records = result.scalars().all()
-            return [{"content": r.content, "metadata": r.doc_metadata} for r in records]
+            records = result.all()
+
+            return [
+                {
+                    "content": row[0].content,
+                    "metadata": row[0].doc_metadata,
+                    "similarity_score": 1.0 / (1.0 + float(row[1])),
+                }
+                for row in records
+            ]

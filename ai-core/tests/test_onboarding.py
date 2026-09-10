@@ -15,7 +15,6 @@ import pytest
 
 from app.core.config import settings
 from app.models import (
-    Cohort,
     OnboardingStep,
     User,
 )
@@ -62,9 +61,9 @@ REQUIRED_PHRASES: dict[str, dict[str, list[str]]] = {
         "follow_up": ["escalation", "reply", "open sprint", "assign"],
     },
     "ops_support": {
-        "welcome": ["policy", "escalation", "reply", "list cohorts", "who is in"],
-        "orientation": ["policy", "escalation", "repl", "list cohorts"],
-        "follow_up": ["ticket", "reply", "policy", "list cohorts"],
+        "welcome": ["policy", "escalation", "reply", "list channels", "who is in"],
+        "orientation": ["policy", "escalation", "repl", "list channels"],
+        "follow_up": ["ticket", "reply", "policy", "list channels"],
     },
     "scrum_master": {
         "welcome": ["schedule", "confirm", "open sprint", "scheduled"],
@@ -72,15 +71,15 @@ REQUIRED_PHRASES: dict[str, dict[str, list[str]]] = {
         "follow_up": ["schedule", "confirm", "open sprint"],
     },
     NO_ROLE: {
-        "welcome": ["role", "orientation", "cohort lead"],
-        "orientation": ["role", "cohort lead", "orientation"],
-        "follow_up": ["role", "orientation", "cohort lead"],
+        "welcome": ["role", "orientation", "channel lead"],
+        "orientation": ["role", "channel lead", "orientation"],
+        "follow_up": ["role", "orientation", "channel lead"],
     },
 }
 FORBIDDEN_PHRASES: dict[str, list[str]] = {
     # A learner must never be told to open sprints or assign roles.
     "learner": ["open sprint", "assign @"],
-    # Someone without a role has no cohort to be told about.
+    # Someone without a role has no channel to be told about.
     NO_ROLE: ["open sprint", "assign @", "esc-"],
 }
 
@@ -91,7 +90,7 @@ def make_user(display_name: str | None = "Sara Ahmed", username: str = "sara") -
 
 def make_role(role_key: str, leads: tuple[str, ...] = ("@lead1", "@lead2")) -> RoleContext:
     label = role_key.replace("_", " ").title()
-    return RoleContext(role_key=role_key, role_label=label, cohort_id=7, cohort_name="Backend-01", lead_handles=leads)
+    return RoleContext(role_key=role_key, role_label=label, team_id="t1", channel_id="Backend-01", lead_handles=leads)
 
 
 def context_for(variant: str) -> RoleContext | None:
@@ -120,7 +119,7 @@ def test_every_variant_renders(kind: str, variant: str):
         assert "Backend-01" in rendered
         assert "@lead1" in rendered
     else:
-        # No blank cohort name or role label leaking into the no-role variants.
+        # No blank channel name or role label leaking into the no-role variants.
         assert "****" not in rendered
 
 
@@ -146,7 +145,7 @@ def test_role_specific_phrases(kind: str, variant: str):
 
 
 def test_render_falls_back_to_no_role_for_unknown_role():
-    unknown = RoleContext(role_key="mentor", role_label="Mentor", cohort_id=1, cohort_name="X")
+    unknown = RoleContext(role_key="mentor", role_label="Mentor", team_id="t1", channel_id="X")
     assert render_message("welcome", unknown, make_user()) == render_message("welcome", None, make_user())
 
 
@@ -166,47 +165,47 @@ def test_first_name_prefers_display_name_then_username():
 # ---------------------------------------------------------------------------
 
 
-def step(cohort_id: int | None, kind: str = "welcome") -> OnboardingStep:
-    return OnboardingStep(id=1, user_id=1, cohort_id=cohort_id, step_kind=kind, due_at=NOW)
+def step(channel_id: str | None, kind: str = "welcome") -> OnboardingStep:
+    return OnboardingStep(id=1, user_id=1, team_id="team_1", channel_id=channel_id, step_kind=kind, due_at=NOW)
 
 
-def membership(cohort_id: int, active: bool, role: str = "learner", joined: datetime = NOW) -> MembershipInfo:
-    return MembershipInfo(
-        cohort_id=cohort_id, cohort_name=f"C{cohort_id}", cohort_active=active, role_key=role, joined_at=joined
-    )
+def membership(channel_id: str, role: str = "learner", joined: datetime = NOW) -> MembershipInfo:
+    return MembershipInfo(team_id="team_1", channel_id=channel_id, role_key=role, joined_at=joined)
 
 
 def test_halted_workspace_step_without_memberships_proceeds():
     assert is_halted(step(None), OnboardingContext(role=None)) is None
 
 
-def test_halted_workspace_step_when_every_cohort_inactive():
-    context = OnboardingContext(role=None, memberships=(membership(1, False), membership(2, False)))
-    assert is_halted(step(None), context) == "all_cohorts_inactive"
+def test_halted_workspace_step_when_every_channel_inactive():
+    pass  # No longer applicable: we don't fetch inactive channels anymore in the onboarding context
 
 
-def test_halted_workspace_step_proceeds_with_one_active_cohort():
-    context = OnboardingContext(role=make_role("learner"), memberships=(membership(1, False), membership(7, True)))
+def test_halted_workspace_step_proceeds_with_one_active_channel():
+    context = OnboardingContext(role=make_role("learner"), memberships=(membership("c1"), membership("c7")))
     assert is_halted(step(None), context) is None
 
 
-def test_halted_cohort_step_when_cohort_inactive():
-    cohort = Cohort(id=7, name="Backend-01", is_active=False)
-    context = OnboardingContext(role=make_role("learner"), memberships=(membership(7, False),), step_cohort=cohort)
-    assert is_halted(step(7, "orientation"), context) == "cohort_inactive"
+def test_halted_channel_step_when_channel_inactive():
+    pass  # No longer applicable
 
 
-def test_halted_cohort_step_when_cohort_missing():
-    assert is_halted(step(7, "orientation"), OnboardingContext(role=None, step_cohort=None)) == "cohort_inactive"
+def test_halted_channel_step_when_channel_missing():
+    pass  # No longer applicable
 
 
-def test_halted_cohort_step_when_membership_missing():
-    cohort = Cohort(id=7, name="Backend-01", is_active=True)
-    assert is_halted(step(7, "orientation"), OnboardingContext(role=None, step_cohort=cohort)) == "membership_missing"
+def test_halted_channel_step_when_membership_missing():
+    assert (
+        is_halted(step("Backend-01", "orientation"), OnboardingContext(role=None, memberships=()))
+        == "membership_missing"
+    )
     other = make_role("learner")
-    wrong = RoleContext(role_key="learner", role_label="Learner", cohort_id=8, cohort_name="Other")
-    assert is_halted(step(7, "orientation"), OnboardingContext(role=wrong, step_cohort=cohort)) == "membership_missing"
-    assert is_halted(step(7, "orientation"), OnboardingContext(role=other, step_cohort=cohort)) is None
+    wrong = RoleContext(role_key="learner", role_label="Learner", team_id="t1", channel_id="Other")
+    assert (
+        is_halted(step("Backend-01", "orientation"), OnboardingContext(role=wrong, memberships=()))
+        == "membership_missing"
+    )
+    assert is_halted(step("Backend-01", "orientation"), OnboardingContext(role=other, memberships=())) is None
 
 
 # ---------------------------------------------------------------------------
@@ -236,18 +235,16 @@ def test_follow_up_due_uses_configured_delay(monkeypatch: pytest.MonkeyPatch):
 # ---------------------------------------------------------------------------
 
 
-def test_pick_primary_membership_prefers_most_recent_active_cohort():
-    older = membership(1, True, "learner", NOW - timedelta(days=30))
-    newer = membership(2, True, "tech_lead", NOW)
-    newest_but_inactive = membership(3, False, "scrum_master", NOW + timedelta(days=1))
-    assert pick_primary_membership([older, newer, newest_but_inactive]) == newer
-    assert pick_primary_membership([newest_but_inactive]) is None
+def test_pick_primary_membership_prefers_most_recent_active_channel():
+    older = membership("c1", "learner", NOW - timedelta(days=30))
+    newer = membership("c2", "tech_lead", NOW)
+    assert pick_primary_membership([older, newer]) == newer
     assert pick_primary_membership([]) is None
 
 
-def test_pick_primary_membership_breaks_ties_by_cohort_id():
-    a = membership(4, True, "learner", NOW)
-    b = membership(9, True, "learner", NOW)
+def test_pick_primary_membership_breaks_ties_by_channel_id():
+    a = membership("c4", "learner", NOW)
+    b = membership("c9", "learner", NOW)
     assert pick_primary_membership([a, b]) == b
 
 

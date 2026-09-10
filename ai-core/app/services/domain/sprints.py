@@ -1,4 +1,4 @@
-"""Time-boxed sprints per cohort."""
+"""Time-boxed sprints per channel."""
 
 from datetime import date
 
@@ -16,7 +16,7 @@ from app.services.database import session_scope
 
 async def create_sprint(
     *,
-    cohort_id: int,
+    channel_id: str,
     name: str,
     start_date: date,
     end_date: date,
@@ -27,8 +27,8 @@ async def create_sprint(
     """Insert a sprint. Callers check ``get_sprint_by_name`` first for idempotency.
 
     Args:
-        cohort_id: The cohort.
-        name: Unique within the cohort.
+        channel_id: The channel.
+        name: Unique within the channel.
         start_date: First day.
         end_date: Last day (not before ``start_date``).
         status: Initial status.
@@ -39,7 +39,7 @@ async def create_sprint(
         Sprint: The stored row.
     """
     sprint = Sprint(
-        cohort_id=cohort_id,
+        channel_id=channel_id,
         name=name.strip(),
         start_date=start_date,
         end_date=end_date,
@@ -67,11 +67,11 @@ async def get_sprint(sprint_id: int, session: AsyncSession | None = None) -> Spr
         return await s.get(Sprint, sprint_id)
 
 
-async def get_sprint_by_name(cohort_id: int, name: str, session: AsyncSession | None = None) -> Sprint | None:
-    """Fetch a sprint by cohort and name, case-insensitively.
+async def get_sprint_by_name(channel_id: str, name: str, session: AsyncSession | None = None) -> Sprint | None:
+    """Fetch a sprint by channel and name, case-insensitively.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         name: The name as typed.
         session: Optional session to reuse.
 
@@ -82,15 +82,15 @@ async def get_sprint_by_name(cohort_id: int, name: str, session: AsyncSession | 
     if not wanted:
         return None
     async with session_scope(session) as s:
-        result = await s.exec(select(Sprint).where(Sprint.cohort_id == cohort_id, func.lower(Sprint.name) == wanted))
+        result = await s.exec(select(Sprint).where(Sprint.channel_id == channel_id, func.lower(Sprint.name) == wanted))
         return result.first()
 
 
-async def list_sprints(cohort_id: int, session: AsyncSession | None = None) -> list[Sprint]:
-    """List a cohort's sprints by start date.
+async def list_sprints(channel_id: str, session: AsyncSession | None = None) -> list[Sprint]:
+    """List a channel's sprints by start date.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         session: Optional session to reuse.
 
     Returns:
@@ -98,16 +98,16 @@ async def list_sprints(cohort_id: int, session: AsyncSession | None = None) -> l
     """
     async with session_scope(session) as s:
         result = await s.exec(
-            select(Sprint).where(Sprint.cohort_id == cohort_id).order_by(Sprint.start_date, Sprint.id)  # type: ignore[arg-type]
+            select(Sprint).where(Sprint.channel_id == channel_id).order_by(Sprint.start_date, Sprint.id)  # type: ignore[arg-type]
         )
         return list(result.all())
 
 
-async def get_active_sprint(cohort_id: int, session: AsyncSession | None = None) -> Sprint | None:
-    """The cohort's currently active sprint, if exactly one is open.
+async def get_active_sprint(channel_id: str, session: AsyncSession | None = None) -> Sprint | None:
+    """The channel's currently active sprint, if exactly one is open.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         session: Optional session to reuse.
 
     Returns:
@@ -116,24 +116,24 @@ async def get_active_sprint(cohort_id: int, session: AsyncSession | None = None)
     async with session_scope(session) as s:
         result = await s.exec(
             select(Sprint)
-            .where(Sprint.cohort_id == cohort_id, Sprint.status == SprintStatus.ACTIVE.value)
+            .where(Sprint.channel_id == channel_id, Sprint.status == SprintStatus.ACTIVE.value)
             .order_by(Sprint.start_date.desc())  # type: ignore[union-attr]
         )
         return result.first()
 
 
 async def find_overlapping_sprints(
-    cohort_id: int,
+    channel_id: str,
     start_date: date,
     end_date: date,
     *,
     exclude_id: int | None = None,
     session: AsyncSession | None = None,
 ) -> list[Sprint]:
-    """Sprints of the cohort that are not completed and share at least one day with the range.
+    """Sprints of the channel that are not completed and share at least one day with the range.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         start_date: Candidate first day.
         end_date: Candidate last day.
         exclude_id: A sprint to ignore (the one being amended).
@@ -145,7 +145,7 @@ async def find_overlapping_sprints(
     statement = (
         select(Sprint)
         .where(
-            Sprint.cohort_id == cohort_id,
+            Sprint.channel_id == channel_id,
             Sprint.status != SprintStatus.COMPLETED.value,
             Sprint.start_date <= end_date,
             Sprint.end_date >= start_date,

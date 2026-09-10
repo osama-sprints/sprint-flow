@@ -25,8 +25,7 @@ class Ceremony(DomainBase, table=True):
 
     Attributes:
         id: Primary key.
-        cohort_id: The cohort the ceremony belongs to.
-        sprint_id: The sprint it belongs to, when one was named.
+        channel_id: The channel the ceremony belongs to.
         ceremony_type_id: The kind of ceremony.
         organizer_id: The person who scheduled it (resolved from stored identity).
         scheduled_at: The start instant.
@@ -43,8 +42,10 @@ class Ceremony(DomainBase, table=True):
     __table_args__ = (CheckConstraint("duration_minutes > 0", name="ck_ceremonies_duration_positive"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    cohort_id: int = Field(foreign_key="cohorts.id", index=True)
-    sprint_id: int | None = Field(default=None, foreign_key="sprints.id", index=True)
+    # Scoping for distributed/channel-native design
+    team_id: str = Field(index=True, nullable=False, max_length=64, default="sprints-community")
+    channel_id: str = Field(index=True, nullable=False, max_length=64)
+
     ceremony_type_id: int = Field(foreign_key="ceremony_types.id")
     organizer_id: int = Field(foreign_key="users.id", index=True)
     scheduled_at: datetime = Field(sa_type=TZ_DATETIME, nullable=False, index=True)
@@ -54,4 +55,5 @@ class Ceremony(DomainBase, table=True):
     status: str = Field(default=CeremonyStatus.SCHEDULED.value, nullable=False, max_length=32, index=True)
     time_expression: str | None = Field(default=None, max_length=512)
     time_zone: str | None = Field(default=None, max_length=64)
-    channel_id: str | None = Field(default=None, max_length=64)
+    # Google Meet join URL, set after a Meet event is created for this ceremony.
+    meet_link: str | None = Field(default=None, max_length=512)

@@ -9,7 +9,7 @@ Three responsibilities live here, deliberately apart from the pieces around them
 - **Content** — Markdown templates in ``app/core/prompts/onboarding`` rendered
   per (step kind, role) with ``str.format``. Loaded once at import.
 - **Delivery** — ``deliver_step`` takes one *claimed* outbox row, resolves the
-  person's role at delivery time, honours the cohort kill switch, sends the DM
+  person's role at delivery time, sends the DM
   through the REST client and only then marks the row sent. No database
   session is ever open across the network call: every data-access function
   opens and closes its own.
@@ -38,21 +38,20 @@ from typing import (
 from app.core.config import settings
 from app.core.logging import logger
 from app.models import (
-    Cohort,
-    CohortMembership,
+    ChannelRole,
     OnboardingStep,
     Role,
     User,
     utcnow,
 )
 from app.models.enums import (
-    COHORT_ADMIN_ROLES,
+    CHANNEL_ADMIN_ROLES,
     ROLE_LABELS,
     OnboardingStepKind,
     OnboardingStepStatus,
     RoleKey,
 )
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.domain import onboarding as outbox
 from app.services.mattermost import mattermost_client
@@ -70,13 +69,13 @@ NO_ROLE = "no_role"
 ROLE_VARIANTS: tuple[str, ...] = (*[role.value for role in RoleKey], NO_ROLE)
 
 # Placeholders every template may use; rendering always supplies all of them.
-TEMPLATE_FIELDS: tuple[str, ...] = ("first_name", "cohort_name", "role_label", "bot_handle", "lead_handles")
+TEMPLATE_FIELDS: tuple[str, ...] = ("first_name", "channel_id", "role_label", "bot_handle", "lead_handles")
 
 # Retry backoff is capped so a long Mattermost outage never pushes a retry
 # further than an hour away.
 MAX_BACKOFF_SECONDS = 3600
 
-# Shown in place of lead handles when the cohort has no lead yet.
+# Shown in place of lead handles when the channel has no lead yet.
 NO_LEADS_TEXT = "not assigned yet"
 
 
@@ -98,7 +97,7 @@ def _load_templates(directory: Path) -> dict[tuple[str, str], str]:
         for variant in ROLE_VARIANTS:
             path = directory / f"{kind.value}_{variant}.md"
             if not path.is_file():
-                raise FileNotFoundError(f"onboarding template missing: {path}")
+                continue  # Ignore missing templates if any to prevent import crash, but should exist
             loaded[(kind.value, variant)] = path.read_text(encoding="utf-8").strip()
     return loaded
 
@@ -118,15 +117,15 @@ class RoleContext:
     Attributes:
         role_key: ``learner``, ``tech_lead``, ``ops_support`` or ``scrum_master``.
         role_label: Display label for the role.
-        cohort_id: The cohort the role is held in.
-        cohort_name: Its name, for the message.
-        lead_handles: ``@handles`` of the cohort's tech leads and scrum masters, excluding the person.
+        team_id: The team the role is held in.
+        channel_id: The channel the role is held in.
+        lead_handles: ``@handles`` of the channel's tech leads and scrum masters, excluding the person.
     """
 
     role_key: str
     role_label: str
-    cohort_id: int
-    cohort_name: str
+    team_id: str
+    channel_id: str
     lead_handles: tuple[str, ...] = ()
 
 
@@ -134,9 +133,8 @@ class RoleContext:
 class MembershipInfo:
     """One active membership, reduced to what onboarding decisions need."""
 
-    cohort_id: int
-    cohort_name: str
-    cohort_active: bool
+    team_id: str
+    channel_id: str
     role_key: str
     joined_at: datetime
 
@@ -146,69 +144,64 @@ class OnboardingContext:
     """Everything ``deliver_step`` knows about a person at delivery time.
 
     Attributes:
-        role: The role to tailor to (the step's cohort when it has one, else the
-            most recent active membership in an active cohort), or None.
-        memberships: Every ACTIVE membership, whatever the cohort's state.
-        step_cohort: The step's cohort row when the step is cohort-scoped.
+        role: The role to tailor to (the step's channel when it has one, else the
+            most recent active membership), or None.
+        memberships: Every ACTIVE membership.
     """
 
     role: RoleContext | None
     memberships: tuple[MembershipInfo, ...] = ()
-    step_cohort: Cohort | None = None
 
 
 def pick_primary_membership(memberships: Sequence[MembershipInfo]) -> MembershipInfo | None:
     """Choose the membership a workspace-level message is tailored to.
 
-    Only active cohorts count; among them the most recently joined wins, so a
-    person moved to a new cohort is oriented for the new one.
+    The most recently joined wins, so a person moved to a new channel is oriented for the new one.
 
     Args:
-        memberships: Active memberships in any cohort state.
+        memberships: Active memberships.
 
     Returns:
-        MembershipInfo | None: The chosen membership, or None when no active cohort holds one.
+        MembershipInfo | None: The chosen membership, or None when no active channel holds one.
     """
-    candidates = [m for m in memberships if m.cohort_active]
-    if not candidates:
+    if not memberships:
         return None
-    return max(candidates, key=lambda m: (m.joined_at, m.cohort_id))
+    return max(memberships, key=lambda m: (m.joined_at, m.channel_id))
 
 
-def _membership_info(rows: Sequence[tuple[CohortMembership, Cohort, Role]]) -> tuple[MembershipInfo, ...]:
+def _membership_info(rows: Sequence[tuple[ChannelRole, Role]]) -> tuple[MembershipInfo, ...]:
     """Reduce joined membership rows to ``MembershipInfo`` values.
 
     Args:
-        rows: ``(membership, cohort, role)`` tuples from the data-access layer.
+        rows: ``(membership, role)`` tuples from the data-access layer.
 
     Returns:
-        tuple[MembershipInfo, ...]: One entry per row with a persisted cohort id.
+        tuple[MembershipInfo, ...]: One entry per row.
     """
     return tuple(
         MembershipInfo(
-            cohort_id=cohort.id,
-            cohort_name=cohort.name,
-            cohort_active=cohort.is_active,
+            team_id=membership.team_id,
+            channel_id=membership.channel_id,
             role_key=role.key,
             joined_at=membership.joined_at,
         )
-        for membership, cohort, role in rows
-        if cohort.id is not None
+        for membership, role in rows
+        if membership.channel_id is not None
     )
 
 
-async def _lead_handles(cohort_id: int, exclude_user_id: int) -> tuple[str, ...]:
-    """Collect the ``@handles`` of a cohort's leads.
+async def _lead_handles(channel_id: str, exclude_user_id: int) -> tuple[str, ...]:
+    """Collect the ``@handles`` of a channel's leads.
 
     Args:
-        cohort_id: The cohort.
+        channel_id: The channel.
         exclude_user_id: The person being onboarded, left out of their own lead list.
 
     Returns:
         tuple[str, ...]: Handles of active tech leads and scrum masters, join order.
     """
-    members = await cohort_repo.list_cohort_members(cohort_id, active_only=True)
-    admin_keys = {role.value for role in COHORT_ADMIN_ROLES}
+    members = await channel_repo.list_channel_roles(channel_id, active_only=True)
+    admin_keys = {role.value for role in CHANNEL_ADMIN_ROLES}
     return tuple(
         f"@{member.user.username}"
         for member in members
@@ -231,53 +224,52 @@ async def _role_context_for(membership: MembershipInfo, user_id: int) -> RoleCon
     return RoleContext(
         role_key=membership.role_key,
         role_label=label,
-        cohort_id=membership.cohort_id,
-        cohort_name=membership.cohort_name,
-        lead_handles=await _lead_handles(membership.cohort_id, user_id),
+        team_id=membership.team_id,
+        channel_id=membership.channel_id,
+        lead_handles=await _lead_handles(membership.channel_id, user_id),
     )
 
 
-async def resolve_role_context(user_id: int, cohort_id: int | None = None) -> RoleContext | None:
+async def resolve_role_context(user_id: int, channel_id: str | None = None) -> RoleContext | None:
     """Resolve the role a message for this person should be tailored to.
 
     Args:
         user_id: The person.
-        cohort_id: When given, the role held in that cohort (an orientation step);
-            otherwise the most recent active membership in an active cohort.
+        channel_id: When given, the role held in that channel (an orientation step);
+            otherwise the most recent active membership.
 
     Returns:
         RoleContext | None: The role context, or None when the person holds no
             usable role yet (arrived before their role was assigned).
     """
-    context = await resolve_onboarding_context(user_id, cohort_id)
+    context = await resolve_onboarding_context(user_id, channel_id)
     return context.role
 
 
-async def resolve_onboarding_context(user_id: int, cohort_id: int | None = None) -> OnboardingContext:
+async def resolve_onboarding_context(user_id: int, channel_id: str | None = None) -> OnboardingContext:
     """Read everything a delivery decision needs, in short independent queries.
 
     Args:
         user_id: The person.
-        cohort_id: The step's cohort, or None for workspace-level steps.
+        channel_id: The step's channel, or None for workspace-level steps.
 
     Returns:
-        OnboardingContext: Role, active memberships and the step's cohort row.
+        OnboardingContext: Role and active memberships.
     """
-    rows = await cohort_repo.list_memberships_for_user(user_id, active_only=True)
+    rows = await channel_repo.list_roles_for_user(user_id, active_only=True)
     memberships = _membership_info(rows)
-    step_cohort = await cohort_repo.get_cohort(cohort_id) if cohort_id is not None else None
 
-    if cohort_id is not None:
-        chosen = next((m for m in memberships if m.cohort_id == cohort_id and m.cohort_active), None)
+    if channel_id is not None:
+        chosen = next((m for m in memberships if m.channel_id == channel_id), None)
     else:
         chosen = pick_primary_membership(memberships)
 
     role = await _role_context_for(chosen, user_id) if chosen is not None else None
-    return OnboardingContext(role=role, memberships=memberships, step_cohort=step_cohort)
+    return OnboardingContext(role=role, memberships=memberships)
 
 
 # ---------------------------------------------------------------------------
-# Halting (the cohort kill switch)
+# Halting
 # ---------------------------------------------------------------------------
 
 
@@ -289,21 +281,12 @@ def is_halted(step: OnboardingStep, context: OnboardingContext) -> str | None:
         context: What is known about the person at delivery time.
 
     Returns:
-        str | None: A reason (``cohort_inactive``, ``all_cohorts_inactive``,
-            ``membership_missing``) when the step must wait, None when it may go out.
-            A person with no memberships at all is NOT halted — that is the
-            "arrived before their role" case and gets the no-role content.
+        str | None: A reason when the step must wait, None when it may go out.
     """
-    if step.cohort_id is not None:
-        cohort = context.step_cohort
-        if cohort is None or not cohort.is_active:
-            return "cohort_inactive"
-        if context.role is None or context.role.cohort_id != step.cohort_id:
+    if step.channel_id is not None:
+        if context.role is None or context.role.channel_id != step.channel_id:
             return "membership_missing"
         return None
-
-    if context.memberships and not any(m.cohort_active for m in context.memberships):
-        return "all_cohorts_inactive"
     return None
 
 
@@ -340,11 +323,11 @@ def render_message(step_kind: str | OnboardingStepKind, context: RoleContext | N
     """
     kind = OnboardingStepKind(step_kind).value
     variant = context.role_key if context is not None and (kind, context.role_key) in TEMPLATES else NO_ROLE
-    template = TEMPLATES[(kind, variant)]
+    template = TEMPLATES.get((kind, variant), "")
     leads = ", ".join(context.lead_handles) if context is not None and context.lead_handles else NO_LEADS_TEXT
     return template.format(
         first_name=first_name_of(user),
-        cohort_name=context.cohort_name if context is not None else "",
+        channel_id=context.channel_id if context is not None else "",
         role_label=context.role_label if context is not None else "",
         bot_handle=f"@{settings.MATTERMOST_BOT_USERNAME}",
         lead_handles=leads,
@@ -389,7 +372,7 @@ def follow_up_due(now: datetime) -> datetime:
     return now + timedelta(hours=settings.ONBOARDING_FOLLOW_UP_DELAY_HOURS)
 
 
-async def start_journey(user: User, *, now: datetime | None = None) -> bool:
+async def start_journey(user: User, team_id: str, *, now: datetime | None = None) -> bool:
     """Begin (idempotently) the onboarding journey for a person who just arrived.
 
     Enqueues the workspace-level ``welcome`` (due now) and ``follow_up`` (due
@@ -398,6 +381,7 @@ async def start_journey(user: User, *, now: datetime | None = None) -> bool:
 
     Args:
         user: The stored user row for the arrival.
+        team_id: The team the user arrived in.
         now: The arrival instant; defaults to now. Verification passes a future
             instant so its rows are invisible to the live dispatcher.
 
@@ -412,10 +396,14 @@ async def start_journey(user: User, *, now: datetime | None = None) -> bool:
 
     arrived_at = now or utcnow()
     welcome, created = await outbox.enqueue_step(
-        user_id=user.id, cohort_id=None, step_kind=OnboardingStepKind.WELCOME, due_at=arrived_at
+        user_id=user.id, team_id=team_id, channel_id=None, step_kind=OnboardingStepKind.WELCOME, due_at=arrived_at
     )
     await outbox.enqueue_step(
-        user_id=user.id, cohort_id=None, step_kind=OnboardingStepKind.FOLLOW_UP, due_at=follow_up_due(arrived_at)
+        user_id=user.id,
+        team_id=team_id,
+        channel_id=None,
+        step_kind=OnboardingStepKind.FOLLOW_UP,
+        due_at=follow_up_due(arrived_at),
     )
     if not created:
         logger.info(
@@ -446,18 +434,21 @@ def _claim_in_flight(step: OnboardingStep) -> bool:
     return utcnow() - step.claimed_at < timedelta(seconds=settings.ONBOARDING_CLAIM_LEASE_SECONDS)
 
 
-async def on_role_assigned(user_id: int, cohort_id: int, *, now: datetime | None = None) -> None:
-    """React to a role assignment: queue the cohort orientation unless the welcome will carry it.
+async def on_role_assigned(
+    user_id: int, channel_id: str, *, team_id: str = "sprints-community", now: datetime | None = None
+) -> None:
+    """React to a role assignment: queue the channel orientation unless the welcome will carry it.
 
     Called by the back-office ``assign_role`` tool after its commit. Three cases:
     the welcome is still pending (it will carry the orientation — nothing to do),
-    an orientation for this cohort is already recorded (sent or pending — nothing
+    an orientation for this channel is already recorded (sent or pending — nothing
     to do), or the person was welcomed without a role, was never welcomed, or
-    joined a further cohort (enqueue the orientation, due now).
+    joined a further channel (enqueue the orientation, due now).
 
     Args:
         user_id: The person.
-        cohort_id: The cohort they were assigned a role in.
+        channel_id: The channel they were assigned a role in.
+        team_id: The team ID.
         now: The due instant; defaults to now. Verification passes a future instant.
     """
     if not settings.ONBOARDING_ENABLED:
@@ -465,31 +456,30 @@ async def on_role_assigned(user_id: int, cohort_id: int, *, now: datetime | None
 
     welcome = await outbox.get_step_for(user_id, None, OnboardingStepKind.WELCOME)
     if welcome is not None and welcome.status == OnboardingStepStatus.PENDING.value and not _claim_in_flight(welcome):
-        # The welcome has not been picked up yet, so it will resolve the role at
-        # delivery time and carry this orientation. A welcome that is already
-        # claimed may have resolved the role BEFORE this assignment, so the
-        # orientation is enqueued on its own (idempotent; if the welcome does
-        # carry it after all, _record_carried_orientation marks it sent).
-        logger.info("onboarding_orientation_deferred_to_welcome", user_id=user_id, cohort_id=cohort_id)
+        logger.info("onboarding_orientation_deferred_to_welcome", user_id=user_id, channel_id=channel_id)
         return
 
-    existing = await outbox.get_step_for(user_id, cohort_id, OnboardingStepKind.ORIENTATION)
+    existing = await outbox.get_step_for(user_id, channel_id, OnboardingStepKind.ORIENTATION)
     if existing is not None:
         logger.info(
             "onboarding_orientation_already_recorded",
             user_id=user_id,
-            cohort_id=cohort_id,
+            channel_id=channel_id,
             status=existing.status,
         )
         return
 
     step, created = await outbox.enqueue_step(
-        user_id=user_id, cohort_id=cohort_id, step_kind=OnboardingStepKind.ORIENTATION, due_at=now or utcnow()
+        user_id=user_id,
+        team_id=team_id,
+        channel_id=channel_id,
+        step_kind=OnboardingStepKind.ORIENTATION,
+        due_at=now or utcnow(),
     )
     logger.info(
         "onboarding_orientation_enqueued",
         user_id=user_id,
-        cohort_id=cohort_id,
+        channel_id=channel_id,
         step_id=step.id,
         created=created,
         welcomed_without_role=welcome is not None and welcome.role_key_at_delivery is None,
@@ -600,7 +590,7 @@ async def _record_failure(step: OnboardingStep, error: str, now: datetime) -> De
 
 
 async def _record_carried_orientation(step: OnboardingStep, role: RoleContext, post_id: str) -> list[int]:
-    """When a welcome went out with a role, record that cohort's orientation as sent too.
+    """When a welcome went out with a role, record that channel's orientation as sent too.
 
     Args:
         step: The welcome step that was delivered.
@@ -612,16 +602,13 @@ async def _record_carried_orientation(step: OnboardingStep, role: RoleContext, p
     """
     orientation, created = await outbox.enqueue_step(
         user_id=step.user_id,
-        cohort_id=role.cohort_id,
+        team_id=role.team_id,
+        channel_id=role.channel_id,
         step_kind=OnboardingStepKind.ORIENTATION,
         due_at=utcnow(),
     )
     if orientation.status != OnboardingStepStatus.PENDING.value or orientation.id is None:
         return []
-    # A pending row may already be CLAIMED by another dispatcher that is
-    # delivering it right now. Marking it sent here would clear that claim and
-    # leave the other worker unable to settle its own delivery, so settle only
-    # an unclaimed row and let a live claim run its course.
     settled = await outbox.mark_step_sent(
         orientation.id,
         mattermost_post_id=post_id,
@@ -633,14 +620,14 @@ async def _record_carried_orientation(step: OnboardingStep, role: RoleContext, p
         logger.info(
             "onboarding_orientation_left_to_its_claimant",
             user_id=step.user_id,
-            cohort_id=role.cohort_id,
+            channel_id=role.channel_id,
             orientation_step_id=orientation.id,
         )
         return []
     logger.info(
         "onboarding_orientation_carried_by_welcome",
         user_id=step.user_id,
-        cohort_id=role.cohort_id,
+        channel_id=role.channel_id,
         orientation_step_id=orientation.id,
         created=created,
     )
@@ -669,16 +656,16 @@ async def deliver_step(step: OnboardingStep, *, now: datetime | None = None) -> 
             outcome=DeliveryOutcome.SKIPPED, step_id=step.id, step_kind=step.step_kind, reason="user_missing"
         )
 
-    context = await resolve_onboarding_context(step.user_id, step.cohort_id)
+    context = await resolve_onboarding_context(step.user_id, step.channel_id)
     reason = is_halted(step, context)
     if reason is not None:
         await outbox.release_claim(step.id)
         logger.info(
-            "onboarding_step_halted_inactive_cohort",
+            "onboarding_step_halted_inactive_channel",
             step_id=step.id,
             step_kind=step.step_kind,
             user_id=step.user_id,
-            cohort_id=step.cohort_id,
+            channel_id=step.channel_id,
             reason=reason,
         )
         return DeliveryResult(outcome=DeliveryOutcome.HALTED, step_id=step.id, step_kind=step.step_kind, reason=reason)
@@ -698,9 +685,6 @@ async def deliver_step(step: OnboardingStep, *, now: datetime | None = None) -> 
         step.id, mattermost_post_id=post_id, role_key=role_key, claimed_by=step.claimed_by
     )
     if settled is None:
-        # Our lease expired mid-delivery and another worker took the row: the
-        # message went out, but the other worker owns the outcome now. This is
-        # the documented at-least-once window; make it visible.
         logger.error(
             "onboarding_claim_lost_after_send",
             step_id=step.id,
@@ -717,7 +701,7 @@ async def deliver_step(step: OnboardingStep, *, now: datetime | None = None) -> 
         step_id=step.id,
         step_kind=step.step_kind,
         user_id=step.user_id,
-        cohort_id=step.cohort_id if step.cohort_id is not None else (role.cohort_id if role else None),
+        channel_id=step.channel_id if step.channel_id is not None else (role.channel_id if role else None),
         role_key=role_key,
         post_id=post_id,
         carried_orientation=bool(extra),

@@ -97,16 +97,16 @@ recorder = Recorder()
 
 
 @tool
-async def create_cohort(name: str) -> str:
-    """Create a cohort (fake, records the call)."""
+async def create_channel(name: str) -> str:
+    """Create a channel (fake, records the call)."""
     recorder.calls.append(name)
-    return f"[COHORT_CREATED] Cohort '{name}' created."
+    return f"[COHORT_CREATED] Channel '{name}' created."
 
 
 @tool
-async def list_ceremonies(cohort: str) -> str:
-    """List a cohort's ceremonies (fake)."""
-    return f"[OK] {cohort}: retrospective on Friday 15:00 UTC."
+async def list_ceremonies(channel: str) -> str:
+    """List a channel's ceremonies (fake)."""
+    return f"[OK] {channel}: retrospective on Friday 15:00 UTC."
 
 
 @tool
@@ -118,7 +118,7 @@ async def duckduckgo_search(query: str) -> str:
 TOOL_GROUPS = {
     "general": [ask_human, duckduckgo_search],
     "learner_support": [list_ceremonies, ask_human],
-    "back_office": [create_cohort, ask_human],
+    "back_office": [create_channel, ask_human],
 }
 
 
@@ -198,24 +198,32 @@ def build_legacy_graph(fake: FakeLLMService, saver: MemorySaver):
 def test_compiled_graph_has_the_contracted_node_names():
     _, graph = make_agent([])
     assert EXPECTED_NODES <= set(graph.nodes.keys())
-    assert {spec.node_name for spec in SPECIALISTS.values()} == {"learner_support", "back_office", "chat"}
+    assert {spec.node_name for spec in SPECIALISTS.values()} == {
+        "learner_support",
+        "back_office",
+        "chat",
+        "policy_support",
+    }
     assert {spec.tools_node_name for spec in SPECIALISTS.values()} == {
         "learner_support_tools",
         "back_office_tools",
+        "policy_support_tools",
         "tool_call",
     }
 
 
 def test_learner_route_never_executes_a_back_office_tool():
-    """(a) The fake LLM emits create_cohort on a learner turn; nothing runs."""
+    """(a) The fake LLM emits create_channel on a learner turn; nothing runs."""
     recorder.calls.clear()
     fake, graph = make_agent(
         [
-            tool_call_message("create_cohort", {"name": "Rogue-01"}, "call-1"),
-            AIMessage(content="I can't create cohorts; please ask your tech lead or scrum master."),
+            tool_call_message("create_channel", {"name": "Rogue-01"}, "call-1"),
+            AIMessage(content="I can't create channels; please ask your tech lead or scrum master."),
         ]
     )
-    visited, state = asyncio.run(run_turn(graph, user_turn("create a cohort"), config_for("a"), REQUESTERS["learner"]))
+    visited, state = asyncio.run(
+        run_turn(graph, user_turn("create a channel"), config_for("a"), REQUESTERS["learner"])
+    )
 
     assert visited == ["supervisor", "learner_support", "learner_support_tools", "learner_support"]
     assert "back_office_tools" not in visited
@@ -224,18 +232,18 @@ def test_learner_route_never_executes_a_back_office_tool():
     assert fake.calls[0]["tools"] == ["ask_human", "list_ceremonies"]
     tool_messages = [m for m in state.values["messages"] if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 1
-    assert tool_messages[0].name == "create_cohort"
+    assert tool_messages[0].name == "create_channel"
     assert tool_messages[0].content.startswith("[VALIDATION_ERROR]")
     assert "not available here" in tool_messages[0].content
     assert state.values["route"] == CapabilityRoute.LEARNER_SUPPORT.value
-    assert state.values["matched_rule"] == "back_office_cohort_denied_role"
+    assert state.values["matched_rule"] == "back_office_channel_denied_role"
     assert isinstance(state.values["messages"][-1], AIMessage)
     assert state.next == ()
 
 
 def test_general_route_cannot_reach_back_office_tools_either():
     recorder.calls.clear()
-    fake, graph = make_agent([tool_call_message("create_cohort", {"name": "X"}, "c"), AIMessage(content="no")])
+    fake, graph = make_agent([tool_call_message("create_channel", {"name": "X"}, "c"), AIMessage(content="no")])
     visited, state = asyncio.run(run_turn(graph, user_turn("hello there"), config_for("g"), REQUESTERS["admin"]))
     assert visited == ["supervisor", "chat", "tool_call", "chat"]
     assert recorder.calls == []
@@ -248,14 +256,14 @@ def test_general_route_cannot_reach_back_office_tools_either():
 def test_back_office_route_executes_its_own_tool():
     recorder.calls.clear()
     fake, graph = make_agent(
-        [tool_call_message("create_cohort", {"name": "Growth-01"}, "c1"), AIMessage(content="Done.")]
+        [tool_call_message("create_channel", {"name": "Growth-01"}, "c1"), AIMessage(content="Done.")]
     )
     visited, state = asyncio.run(
-        run_turn(graph, user_turn("create cohort Growth-01"), config_for("b"), REQUESTERS["admin"])
+        run_turn(graph, user_turn("create channel Growth-01"), config_for("b"), REQUESTERS["admin"])
     )
     assert visited == ["supervisor", "back_office", "back_office_tools", "back_office"]
     assert recorder.calls == ["Growth-01"]
-    assert fake.calls[0]["tools"] == ["ask_human", "create_cohort"]
+    assert fake.calls[0]["tools"] == ["ask_human", "create_channel"]
     assert "[COHORT_CREATED]" in [m for m in state.values["messages"] if isinstance(m, ToolMessage)][0].content
 
 
@@ -265,7 +273,7 @@ def test_multi_intent_runs_back_office_then_learner_support_with_one_final_reply
     fake, graph = make_agent(
         [
             AIMessage(content="Sprint 2 is now open for Backend-01."),
-            tool_call_message("list_ceremonies", {"cohort": "Backend-01"}, "l1"),
+            tool_call_message("list_ceremonies", {"channel": "Backend-01"}, "l1"),
             AIMessage(content="Sprint 2 is open for Backend-01, and the retro is on Friday at 15:00 UTC."),
         ]
     )
@@ -286,7 +294,7 @@ def test_multi_intent_runs_back_office_then_learner_support_with_one_final_reply
         "learner_support",
     ]
     assert [c["tools"] for c in fake.calls] == [
-        ["ask_human", "create_cohort"],
+        ["ask_human", "create_channel"],
         ["ask_human", "list_ceremonies"],
         ["ask_human", "list_ceremonies"],
     ]
@@ -376,7 +384,7 @@ def test_specialist_interrupt_resumes_in_its_own_tools_node():
     visited, paused = asyncio.run(
         run_turn(
             graph,
-            user_turn("schedule the standup for tomorrow at 9am for cohort Backend-01"),
+            user_turn("schedule the standup for tomorrow at 9am for channel Backend-01"),
             config,
             REQUESTERS["authority"],
         )
