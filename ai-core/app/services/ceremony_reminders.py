@@ -147,13 +147,13 @@ async def due_ceremonies(
     now: datetime | None = None,
     poll_margin_minutes: int = _POLL_MARGIN_MINUTES,
 ) -> list[Ceremony]:
-    """Return scheduled ceremonies whose start falls inside the reminder window.
+    """Return scheduled ceremonies whose start falls inside or before the reminder window.
 
-    The window is centred on ``now + window_hours``:
-        ``now + W - margin ≤ scheduled_at ≤ now + W + margin``
-
-    Only non-cancelled ceremonies are returned (the status filter comes from
-    the existing ``list_upcoming_ceremonies`` helper).
+    Supports downtime catch-up: if the worker was offline when a ceremony crossed
+    its reminder threshold (e.g. 24h or 1h before start), any upcoming ceremony
+    scheduled in the future (``now < scheduled_at <= now + window_hours + margin``) is returned.
+    The ``CeremonyReminder`` table acts as the durable idempotency guard: if a reminder
+    was already delivered, ``_already_sent`` skips it, ensuring at-most-once delivery.
 
     Args:
         window_hours: Hours before the ceremony to send this reminder.
@@ -161,21 +161,18 @@ async def due_ceremonies(
         poll_margin_minutes: Half-width of the matching band (default 6 min).
 
     Returns:
-        list[Ceremony]: Ceremonies that need this reminder now.
+        list[Ceremony]: Ceremonies that need this reminder.
     """
     reference = now or utcnow()
     margin = timedelta(minutes=poll_margin_minutes)
-    target = reference + timedelta(hours=window_hours)
-    lower = target - margin
-    upper = target + margin
+    upper = reference + timedelta(hours=window_hours) + margin
 
-    # list_upcoming_ceremonies already filters status == "scheduled".
-    # We pass `now=lower` and `within=(upper-lower)` to get everything in band.
     all_upcoming = await ceremony_repo.list_upcoming_ceremonies(
         within=upper - reference,
         now=reference,
     )
-    return [c for c in all_upcoming if lower <= c.scheduled_at <= upper]
+    return [c for c in all_upcoming if reference < c.scheduled_at <= upper]
+
 
 
 async def get_channel_members(channel_id: str) -> list[str]:

@@ -32,6 +32,9 @@ Before dispatching a DM, the worker queries this table to see if a row already e
 
 ## Handling Edge Cases
 
+### Downtime Catch-Up & Poller Restart Safety
+If the application process or container is offline during a scheduled reminder boundary (e.g. 24 hours or 1 hour before a ceremony), the poller performs a downtime catch-up upon startup. Any ceremony scheduled in the future whose reminder threshold has passed (`now < scheduled_at <= now + window_hours + margin`) is returned by `due_ceremonies`. The worker attempts dispatch and checks `CeremonyReminder`. If the DM was already dispatched prior to downtime, `_already_sent` returns `True` and the DM is skipped. If it was missed due to downtime, the DM is delivered immediately and recorded, ensuring no reminders are permanently lost.
+
 ### Cancelled Ceremonies
 The reminder worker only fetches ceremonies that are actively scheduled. The underlying repository query (`list_upcoming_ceremonies`) inherently filters out ceremonies where `status != "scheduled"`. Thus, if a ceremony is cancelled before a 24-hour or 1-hour window, no reminder will be triggered.
 

@@ -85,20 +85,33 @@ def test_due_ceremonies_correct_window():
 
 
 def test_due_ceremonies_margin_inclusive():
-    """Ceremonies exactly at the margin boundaries are included."""
+    """Ceremonies exactly at the upper margin boundary are included."""
     margin_minutes = 6
-    at_lower = make_ceremony(scheduled_at=NOW + timedelta(hours=24) - timedelta(minutes=margin_minutes))
     at_upper = make_ceremony(ceremony_id=2, scheduled_at=NOW + timedelta(hours=24) + timedelta(minutes=margin_minutes))
 
     with patch(
         "app.services.ceremony_reminders.ceremony_repo.list_upcoming_ceremonies",
         new_callable=AsyncMock,
-        return_value=[at_lower, at_upper],
+        return_value=[at_upper],
     ):
         result = asyncio.run(due_ceremonies(24, now=NOW, poll_margin_minutes=margin_minutes))
 
-    assert at_lower in result
     assert at_upper in result
+
+
+def test_downtime_catchup_included():
+    """Ceremonies scheduled within the window (e.g. 18h) missed during downtime are returned for catch-up."""
+    catchup_ceremony = make_ceremony(ceremony_id=3, scheduled_at=NOW + timedelta(hours=18))
+
+    with patch(
+        "app.services.ceremony_reminders.ceremony_repo.list_upcoming_ceremonies",
+        new_callable=AsyncMock,
+        return_value=[catchup_ceremony],
+    ):
+        result = asyncio.run(due_ceremonies(24, now=NOW))
+
+    assert catchup_ceremony in result
+
 
 
 # ---------------------------------------------------------------------------
