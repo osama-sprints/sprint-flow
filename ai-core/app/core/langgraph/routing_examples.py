@@ -166,15 +166,15 @@ ROUTING_EXAMPLES: Tuple[RoutingExample, ...] = (
     RoutingExample("what ceremonies are scheduled for Backend-01?", "admin", (LEARNER,), "learner_calendar"),
     RoutingExample("is the retro cancelled?", "authority", (LEARNER,), "learner_calendar"),
     # ---- learner questions ---------------------------------------------------------
-    RoutingExample("what's the deadline for the assignment?", "learner", (LEARNER,), "learner_support"),
+    RoutingExample("what's the deadline for the assignment?", "learner", (POLICY,), "policy_support"),
     RoutingExample("what is the leave policy?", "learner", (POLICY,), "policy_support"),
     RoutingExample("I'm blocked on the docker setup, who do I ask?", "learner", (LEARNER,), "learner_support"),
-    RoutingExample("how do I submit my project?", "learner", (LEARNER,), "learner_support"),
+    RoutingExample("how do I submit my project?", "learner", (POLICY,), "policy_support"),
     RoutingExample("which channel am I in?", "learner", (LEARNER,), "learner_support"),
     RoutingExample("what's my role?", "learner", (LEARNER,), "learner_support"),
     RoutingExample("who is my tech lead?", "learner", (LEARNER,), "learner_support"),
     RoutingExample("can I take a day off next week?", "learner", (POLICY,), "policy_support"),
-    RoutingExample("what is a sprint?", "learner", (LEARNER,), "learner_support"),
+    RoutingExample("what is a sprint?", "learner", (POLICY,), "policy_support"),
     # ---- directory reads (gated like the member-listing tool) ----------------------
     RoutingExample("list channels", "authority", (LEARNER,), "channel_directory"),
     RoutingExample("who is in channel Backend-01?", "authority", (LEARNER,), "channel_directory"),

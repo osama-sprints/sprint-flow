@@ -1,6 +1,8 @@
 import re
+from typing import Sequence
 
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.tools.base import BaseTool
 from langgraph.graph import END
 from langgraph.types import Command
 
@@ -9,6 +11,15 @@ from app.core.logging import logger
 from app.services.escalation import EscalationType, open_escalation
 from app.services.policy_retrieval import get_grounded_answer_or_refusal
 from app.schemas import GraphState
+from app.core.langgraph.tools.ceremonies import TOOLS as CEREMONY_TOOLS
+
+
+def bind_meeting_tools(tool_group: Sequence[BaseTool]) -> list[BaseTool]:
+    """Keep ceremony tools available to the meeting specialist and its executor."""
+    bound = list(tool_group)
+    names = {tool.name for tool in bound}
+    bound.extend(tool for tool in CEREMONY_TOOLS if tool.name not in names)
+    return bound
 
 
 def _extract_last_text(messages: list) -> str:

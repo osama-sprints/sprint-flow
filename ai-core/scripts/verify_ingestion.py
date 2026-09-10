@@ -18,7 +18,7 @@ logger = logging.getLogger("verify_ingestion")
 
 DOCUMENTS = {
     "acc_faqs": ("_ACC FAQs Presentation (editable).pdf", "learner"),
-    "ops_circle_chatbot_scripts": ("Ops Circle Chatbot Scripts.docx", "internal_operator"),
+    "ops_circle_chatbot_scripts": ("Ops Circle Chatbot Scripts.docx", "learner"),
 }
 
 

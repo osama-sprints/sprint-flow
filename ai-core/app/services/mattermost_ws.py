@@ -407,13 +407,13 @@ class MattermostWebSocketListener:
 
         1. Direct and group messages — always ours; there is no one else in the
            conversation and no webhook can reach them.
-        2. Public channel, first word is a webhook trigger word — NOT ours. The
-           outgoing webhook is already delivering this message, and answering
-           here too would post the reply twice.
-        3. The bot is mentioned anywhere in the message — ours. This also picks
+          2. The bot is mentioned anywhere in the message — ours. This also picks
            up mentions that are not the first word ("thanks @bot, can you..."),
-           which the webhook's first-word matching silently ignores.
-        4. Inside a thread the bot already participates in — ours. This is
+              and ensures public mentions are not lost to channel configuration.
+          3. Public channel, first word is a webhook trigger word — NOT ours. The
+              outgoing webhook is already delivering this message, and answering
+              here too would post the reply twice.
+          4. Inside a thread the bot already participates in — ours. This is
            thread continuity: once the bot is in a conversation, follow-ups no
            longer need to re-mention it.
         5. Anything else — ignored, with no API call and no model call.
@@ -429,11 +429,11 @@ class MattermostWebSocketListener:
         if channel_type in _DIRECT_CHANNEL_TYPES:
             return True
 
-        if channel_type in _WEBHOOK_OWNED_CHANNEL_TYPES and _starts_with_trigger_word(message):
-            return False
-
         if _MENTION_RE.search(message):
             return True
+
+        if channel_type in _WEBHOOK_OWNED_CHANNEL_TYPES and _starts_with_trigger_word(message):
+            return False
 
         if root_id:
             return await self._bot_is_in_thread(root_id)
@@ -448,7 +448,9 @@ class MattermostWebSocketListener:
                 that has to be decoded a second time.
         """
         channel_type = data.get("channel_type", "")
-        if channel_type not in settings.MATTERMOST_WS_CHANNEL_TYPES:
+        # Public-channel mentions must be handled regardless of the configured
+        # private-channel allowlist; role mapping is resolved later per turn.
+        if channel_type not in settings.MATTERMOST_WS_CHANNEL_TYPES and channel_type != "O":
             return
 
         try:

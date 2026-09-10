@@ -35,7 +35,15 @@ from app.models.enums import (
 from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 
-REFUSAL_MESSAGE = "Refused: You do not have permission to execute this action."
+REFUSAL_MESSAGE = "You do not have administrative permissions to perform workspace modifications."
+MEETING_REFUSAL_MESSAGE = "You do not have administrative permissions to schedule meetings."
+
+
+def refusal_message(action: str = "") -> str:
+    """Return the user-facing refusal for a privileged action."""
+    if "ceremony" in action or "schedule" in action or "amend" in action:
+        return MEETING_REFUSAL_MESSAGE
+    return REFUSAL_MESSAGE
 
 
 class AuthorisationRefused(Exception):
@@ -49,7 +57,7 @@ class AuthorisationRefused(Exception):
             action: What was attempted.
             channel_id: The channel in scope, if any.
         """
-        super().__init__(REFUSAL_MESSAGE)
+        super().__init__(refusal_message(action))
         self.reason = reason
         self.action = action
         self.channel_id = channel_id

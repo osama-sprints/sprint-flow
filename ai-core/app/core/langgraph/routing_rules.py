@@ -177,6 +177,23 @@ ROUTING_RULES: List[Rule] = [
         ),
         confidence=0.85,
     ),
+    # ---- Policy support: general program and policy questions --------------------
+    Rule(
+        name="policy_support",
+        route=CapabilityRoute.POLICY_SUPPORT,
+        mutation=False,
+        requires_channel_authority=False,
+        patterns=_compile(
+            r"\b(sprint|program|module|tasks?|live\s+sessions?|self-paced|project|deadline|online|offline|fees?|cost|graduation)\b",
+            r"\b(policy|policies|guideline|guidelines|rule|rules)\b",
+            r"\b(leave|holiday|vacation|absence|absent|day\s+off|time\s+off|sick|late)\b",
+            r"\b(allowed|permitted|playbook|refund)\b",
+            r"\bamerican\s+center\s+cairo\b",
+            r"\bACC\b",
+            r"\bpartner\s+programs?\b",
+            r"\bprogram\s+graduation\s+criteria\b",
+        ),
+    ),
     # ---- Learner support: calendar reads, open to any member --------------------
     Rule(
         name="learner_calendar",
@@ -224,21 +241,6 @@ ROUTING_RULES: List[Rule] = [
             r"\b(?:remove|kick)\b.{0,40}\b(?:from\s+(?:the\s+)?team|user)\b",
         ),
         confidence=0.9,
-    ),
-    Rule(
-        name="policy_support",
-        route=CapabilityRoute.POLICY_SUPPORT,
-        mutation=False,
-        requires_channel_authority=False,
-        patterns=_compile(
-            r"\b(policy|policies|guideline|guidelines|rule|rules)\b",
-            r"\b(leave|holiday|vacation|absence|absent|day\s+off|time\s+off|sick|late)\b",
-            r"\b(allowed|permitted|playbook|refund|fee)\b",
-            r"\bamerican\s+center\s+cairo\b",
-            r"\bACC\b",
-            r"\bpartner\s+programs?\b",
-            r"\bprogram\s+graduation\s+criteria\b",
-        ),
     ),
 ]
 
@@ -289,6 +291,19 @@ def _matches(rule: Rule, text: str) -> bool:
     return any(pattern.search(text) for pattern in rule.patterns)
 
 
+def _is_generic_live_session_question(text: str) -> bool:
+    """Identify program live-session timing questions, not channel ceremonies."""
+    return bool(
+        re.search(r"\blive\s+sessions?\b", text, re.IGNORECASE)
+        and not re.search(
+            r"\b(?:stand-?ups?|dail(?:y|ies)|planning|review|retro(?:spective)?|demo|q\s*&?\s*a|"
+            r"office\s+hours|ceremon(?:y|ies)|meeting)s?\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
 def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> List[RoutingResult]:
     """Return every distinct route a message calls for, in rule order.
 
@@ -315,9 +330,22 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     seen: set[CapabilityRoute] = set()
     has_authority = bool(requester and requester.has_any_channel_authority())
     question = is_question_shaped(normalised)
+    mutation_matched = any(rule.mutation and _matches(rule, normalised) for rule in ROUTING_RULES)
+    calendar_rule = next(rule for rule in ROUTING_RULES if rule.name == "learner_calendar")
+    calendar_matched = _matches(calendar_rule, normalised)
+    policy_rule = next(rule for rule in ROUTING_RULES if rule.name == "policy_support")
+    policy_matched = _matches(policy_rule, normalised)
+    generic_live_session_question = question and _is_generic_live_session_question(normalised)
 
     for rule in ROUTING_RULES:
         if rule.mutation and question:
+            continue
+        if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
+            if not generic_live_session_question:
+                continue
+        if rule.name == "learner_calendar" and generic_live_session_question:
+            continue
+        if rule.name == "learner_support" and question and policy_matched:
             continue
         if not _matches(rule, normalised):
             continue

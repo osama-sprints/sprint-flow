@@ -98,7 +98,7 @@ from app.utils import (
     prepare_messages,
     process_llm_response,
 )
-from app.core.langgraph.nodes import policy_retrieval_node
+from app.core.langgraph.nodes import bind_meeting_tools, policy_retrieval_node
 
 PostgresConnPool = AsyncConnectionPool[AsyncConnection[DictRow]]
 
@@ -357,6 +357,8 @@ class LangGraphAgent:
             )
             messages = prepare_messages(state.messages, system_prompt)
             tool_group = list(self.tool_groups.get(spec.tool_group, ()))
+            if spec.tool_group == "back_office" and self.tool_groups is TOOL_GROUPS:
+                tool_group = bind_meeting_tools(tool_group)
 
             try:
                 with llm_inference_duration_seconds.labels(model=model_name).time():
@@ -439,7 +441,10 @@ class LangGraphAgent:
 
         async def tools_node(state: GraphState) -> Command:
             tool_calls = state.messages[-1].tool_calls
-            available = {tool.name: tool for tool in self.tool_groups.get(spec.tool_group, ())}
+            tool_group = list(self.tool_groups.get(spec.tool_group, ()))
+            if spec.tool_group == "back_office" and self.tool_groups is TOOL_GROUPS:
+                tool_group = bind_meeting_tools(tool_group)
+            available = {tool.name: tool for tool in tool_group}
 
             async def _execute_tool(tool_call: dict) -> ToolMessage:
                 tool = available.get(tool_call["name"])

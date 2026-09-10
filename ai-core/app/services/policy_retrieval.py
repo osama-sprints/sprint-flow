@@ -8,9 +8,11 @@ try:
 except ImportError:
     PolicyVectorStore = None
 
+DEFAULT_SIMILARITY_THRESHOLD = 0.45
+
 
 async def get_grounded_answer_or_refusal(
-    query: str, audience: str | None = None, top_k: int = 5, threshold: float = 0.6
+    query: str, audience: str | None = None, top_k: int = 5, threshold: float = DEFAULT_SIMILARITY_THRESHOLD
 ) -> Tuple[str, List[Dict[str, Any]]]:
     if not PolicyVectorStore:
         logger.warning("Vector store is not available. Returning empty results.")
