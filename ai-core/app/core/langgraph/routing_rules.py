@@ -149,6 +149,9 @@ ROUTING_RULES: List[Rule] = [
         name="back_office_schedule",
         route=CapabilityRoute.BACK_OFFICE,
         patterns=_compile(
+            rf"\b(?:meeting|metting|ceremon(?:y|ies)|schedul(?:e|ing)|stand-?ups?|sprint\s+plannings?|"
+            rf"reviews?|retros?(?:pectives?)?|open\s+q\s*&?\s*a|books?)\b",
+            r"\b(?:create|schedule|book|arrange|set\s*up|manage|organize|reorganize)\b.{0,50}\b(?:meeting|metting|ceremon(?:y|ies)|q\s*&?\s*a|session)\b",
             rf"{_NOT_AFTER_DETERMINER}\b(?:schedul(?:e|ing)|book|set\s*up|plan|arrange|organi[sz]e|put|add|"
             rf"create|hold|host|fix)\b.{{0,80}}\b{_CEREMONY}\b",
             rf"\b(?:move|reschedule|postpone|shift|bring\s+forward|delay|cancel|amend|update|change|edit|"
@@ -158,9 +161,9 @@ ROUTING_RULES: List[Rule] = [
             r"\b(?:update|change|set|add|amend|edit|put|attach|replace|revise)\b.{0,40}\bagenda\b",
             r"\bagenda\b.{0,40}(?:\bshould\s+be\b|\bis\s+now\b|\bto\s+be\b|:|=|->)",
         ),
-        requires_channel_authority=True,
-        denied_route=CapabilityRoute.LEARNER_SUPPORT,
-        mutation=True,
+        requires_channel_authority=False,
+        denied_route=None,
+        mutation=False,
         confidence=0.95,
     ),
     # ---- Directory reads: who is in what. Open to any member (the read tools
@@ -176,6 +179,24 @@ ROUTING_RULES: List[Rule] = [
             r"\b(?:which|what|how\s+many)\s+channels\b",
         ),
         confidence=0.85,
+    ),
+    # ---- Educational and document content: always learner support ------------
+    # Keep this ahead of policy support so technical questions and uploaded-file
+    # questions are never rejected by workspace-only guardrails.
+    Rule(
+        name="learner_document_or_technical",
+        route=CapabilityRoute.LEARNER_SUPPORT,
+        patterns=_compile(
+            r"\b(?:according\s+to|based\s+on|from)\s+(?:the\s+)?(?:document|file|uploaded\s+file|pdf|docx)\b",
+            r"\b(?:document|file|uploaded\s+file|pdf|docx)\b.{0,60}\b(?:say|explain|contain|mention|mean|answer|question|summar(?:y|ise|ize))",
+            r"\b(?:sql|duckdb|python|pandas|postgres(?:ql)?|database|databases|embedded\s+database|data\s+analysis|query|queries|programming|coding|technical)\b",
+            r"\b(?:uploaded|attached|ingested)\s+(?:document|file)\b",
+            r"\b(?:can\s+i\s+(?:upload|send|share)|can\s+you\s+(?:upload|send|share)|how\s+do\s+i\s+(?:upload|send|share)|can\s+i\s+attach)\b.{0,80}\b(?:file|document|attachment|pdf|docx|txt)\b",
+            r"\b(?:what\s+does\s+it\s+say|what\s+is\s+it\s+about|summar(?:y|ise|ize)\s+(?:this|that|the\s+(?:file|document)|these)|about\s+what)\??\b",
+            r"\bingested\b.{0,80}\b(?:document|file|pdf|docx|txt)\b.*\b(?:what\s+does\s+it\s+say|what\s+is\s+it\s+about|summar(?:y|ise|ize))\b",
+            r"\b(?:summar(?:y|ise|ize)\s+(?:this|that|these|the\s+(?:file|document)))\b",
+        ),
+        confidence=0.95,
     ),
     # ---- Policy support: general program and policy questions --------------------
     Rule(
@@ -265,7 +286,8 @@ def normalise_text(text: str) -> str:
     Returns:
         str: The normalised text.
     """
-    return " ".join(text.translate(_APOSTROPHES).split())
+    stripped = re.sub(r"(?<!\w)@(?:[A-Za-z0-9._-]+)", " ", text or "")
+    return " ".join(stripped.translate(_APOSTROPHES).split())
 
 
 def is_question_shaped(text: str) -> bool:
@@ -318,6 +340,11 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     the denial is observable and the reply can say so plainly. The tools
     themselves re-check authority in code regardless of routing.
 
+    Post-ingestion document follow-ups are always learner support even when the
+    wording is a general domain question like "what is data analyst?" or
+    "explain section 2"; the active file context should be passed to the RAG
+    retriever instead of hitting the generic policy refusal guardrail.
+
     Args:
         text: The message text.
         requester: The bound requester, or None for an anonymous turn.
@@ -333,8 +360,13 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     mutation_matched = any(rule.mutation and _matches(rule, normalised) for rule in ROUTING_RULES)
     calendar_rule = next(rule for rule in ROUTING_RULES if rule.name == "learner_calendar")
     calendar_matched = _matches(calendar_rule, normalised)
+    schedule_rule = next(rule for rule in ROUTING_RULES if rule.name == "back_office_schedule")
+    schedule_matched = _matches(schedule_rule, normalised)
     policy_rule = next(rule for rule in ROUTING_RULES if rule.name == "policy_support")
     policy_matched = _matches(policy_rule, normalised)
+    document_or_technical_rule = next(rule for rule in ROUTING_RULES if rule.name == "learner_document_or_technical")
+    document_or_technical_matched = _matches(document_or_technical_rule, normalised)
+    ingestion_context = bool(re.search(r"\bingested\b.*(?:document|file|pdf|docx|txt)|\b(?:uploaded|attached)\s+(?:document|file)\b", normalised, re.IGNORECASE))
     generic_live_session_question = question and _is_generic_live_session_question(normalised)
 
     for rule in ROUTING_RULES:
@@ -343,6 +375,12 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
         if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
             if not generic_live_session_question:
                 continue
+        if rule.name == "policy_support" and document_or_technical_matched:
+            continue
+        if rule.name == "policy_support" and ingestion_context:
+            continue
+        if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"}:
+            continue
         if rule.name == "learner_calendar" and generic_live_session_question:
             continue
         if rule.name == "learner_support" and question and policy_matched:

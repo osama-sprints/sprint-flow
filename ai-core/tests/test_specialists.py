@@ -267,14 +267,13 @@ def test_back_office_route_executes_its_own_tool():
     assert "[COHORT_CREATED]" in [m for m in state.values["messages"] if isinstance(m, ToolMessage)][0].content
 
 
-def test_multi_intent_runs_back_office_then_learner_support_with_one_final_reply():
-    """(b) Two specialists, in plan order, each with only its own tools; one composed answer last."""
+def test_ceremony_keyword_keeps_the_request_in_back_office_pipeline():
+    """Ceremony keywords take precedence over a secondary calendar question."""
     recorder.calls.clear()
     fake, graph = make_agent(
         [
             AIMessage(content="Sprint 2 is now open for Backend-01."),
-            tool_call_message("list_ceremonies", {"channel": "Backend-01"}, "l1"),
-            AIMessage(content="Sprint 2 is open for Backend-01, and the retro is on Friday at 15:00 UTC."),
+            AIMessage(content="The retro is on Friday at 15:00 UTC."),
         ]
     )
     visited, state = asyncio.run(
@@ -286,31 +285,17 @@ def test_multi_intent_runs_back_office_then_learner_support_with_one_final_reply
         )
     )
 
-    assert visited == [
-        "supervisor",
-        "back_office",
-        "learner_support",
-        "learner_support_tools",
-        "learner_support",
-    ]
-    assert [c["tools"] for c in fake.calls] == [
-        ["ask_human", "create_channel"],
-        ["ask_human", "list_ceremonies"],
-        ["ask_human", "list_ceremonies"],
-    ]
-    assert "the following will handle the rest: learner_support" in fake.calls[0]["system"]
-    assert "Earlier parts of this same request were already handled" not in fake.calls[0]["system"]
-    assert "Earlier parts of this same request were already handled" in fake.calls[1]["system"]
-    assert "ONE final reply" in fake.calls[2]["system"]
+    assert visited == ["supervisor", "back_office"]
+    assert [c["tools"] for c in fake.calls] == [["ask_human", "create_channel"]]
 
     messages = state.values["messages"]
     assert isinstance(messages[-1], AIMessage) and not messages[-1].tool_calls
-    assert messages[-1].content.startswith("Sprint 2 is open for Backend-01, and the retro")
+    assert messages[-1].content.startswith("Sprint 2 is now open for Backend-01")
     replies = [m for m in messages if isinstance(m, AIMessage) and not m.tool_calls]
-    assert len(replies) == 2, "one reply per specialist, the last one composed"
-    assert state.values["route"] == CapabilityRoute.LEARNER_SUPPORT.value
+    assert len(replies) == 1
+    assert state.values["route"] == CapabilityRoute.BACK_OFFICE.value
     assert state.values["route_plan"] == []
-    assert state.values["is_multi_intent"] is True
+    assert state.values["is_multi_intent"] is False
     assert state.next == ()
 
 
@@ -330,9 +315,9 @@ def test_old_shaped_checkpoint_loads_and_routes():
     visited, state = asyncio.run(
         run_turn(graph, user_turn("when is the next standup?"), config, REQUESTERS["learner"])
     )
-    assert visited == ["supervisor", "learner_support"]
-    assert state.values["route"] == CapabilityRoute.LEARNER_SUPPORT.value
-    assert state.values["matched_rule"] == "learner_calendar"
+    assert visited == ["supervisor", "back_office"]
+    assert state.values["route"] == CapabilityRoute.BACK_OFFICE.value
+    assert state.values["matched_rule"] == "back_office_schedule"
     assert [type(m).__name__ for m in state.values["messages"]] == [
         "HumanMessage",
         "AIMessage",

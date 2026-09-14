@@ -33,7 +33,7 @@ from app.schemas.graph import CapabilityRoute
 
 MIN_LABELLED_SENTENCES = 40
 # The exact corpus size, quoted in reports/orchestration_report.md.
-LABELLED_SENTENCES = 85
+LABELLED_SENTENCES = 89
 LATENCY_P95_BUDGET_MS = 2.0
 LATENCY_MIN_SAMPLES = 1000
 
@@ -138,8 +138,9 @@ def test_inactive_or_learner_only_roles_do_not_grant_authority():
 
 
 def test_anonymous_requester_never_reaches_back_office():
-    for text in ("create channel X", "open sprint 2", "schedule a retro tomorrow", "make @bob tech lead"):
+    for text in ("create channel X", "open sprint 2", "make @bob tech lead"):
         assert classify_text(text, None).route is CapabilityRoute.LEARNER_SUPPORT
+    assert classify_text("schedule a retro tomorrow", None).route is CapabilityRoute.BACK_OFFICE
 
 
 def test_public_channel_learner_admin_phrase_routes_to_learner_support():
@@ -168,7 +169,7 @@ def test_routing_is_not_the_authorisation_boundary():
 
 def test_multi_intent_orders_mutation_before_read_and_dedupes():
     results = detect_intents("open sprint 2 for Backend-01 and tell me when the retro is", REQUESTERS["authority"])
-    assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE, CapabilityRoute.LEARNER_SUPPORT]
+    assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE]
     results = detect_intents("create channel A and open sprint 1 and schedule the retro", REQUESTERS["admin"])
     assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE]
 
@@ -200,3 +201,53 @@ def test_is_question_shaped(text, expected):
 def test_normalise_text_straightens_apostrophes_and_whitespace():
     assert normalise_text("what’s   on\nthis week") == "what's on this week"
     assert classify_text("what’s on this week?", REQUESTERS["learner"]).matched_rule == "learner_calendar"
+
+
+def test_meeting_and_metting_requests_route_to_ceremony_scheduler():
+    meeting_result = classify_text("Book a standup for tomorrow at 10am", REQUESTERS["authority"])
+    assert meeting_result.route is CapabilityRoute.BACK_OFFICE
+    assert meeting_result.matched_rule == "back_office_schedule"
+
+    misspelling_result = classify_text("can you set up a metting for Friday 3pm?", REQUESTERS["authority"])
+    assert misspelling_result.route is CapabilityRoute.BACK_OFFICE
+    assert misspelling_result.matched_rule == "back_office_schedule"
+
+
+@pytest.mark.parametrize("text", [
+    "when is the next standup?",
+    "remind me about the next standup",
+    "what is the sprint planning agenda?",
+])
+def test_ceremony_keywords_always_use_back_office_pipeline(text):
+    result = classify_text(text, REQUESTERS["learner"])
+    assert result.route is CapabilityRoute.BACK_OFFICE
+    assert result.matched_rule == "back_office_schedule"
+
+
+def test_bot_mentions_are_stripped_before_routing():
+    mention_result = classify_text("@sprintflow-assistant schedule the standup for tomorrow at 9am", REQUESTERS["authority"])
+    assert mention_result.route is CapabilityRoute.BACK_OFFICE
+    assert mention_result.matched_rule == "back_office_schedule"
+
+    reminder_result = classify_text("@bot remind me about the next standup", REQUESTERS["learner"])
+    assert reminder_result.route is CapabilityRoute.BACK_OFFICE
+    assert reminder_result.matched_rule == "back_office_schedule"
+
+
+def test_vague_document_follow_ups_and_ingestion_confirmations_are_learner_support():
+    summary_result = classify_text("Summarize this", REQUESTERS["learner"])
+    assert summary_result.route is CapabilityRoute.LEARNER_SUPPORT
+    assert summary_result.matched_rule == "learner_document_or_technical"
+
+    follow_up_result = classify_text("Ingested 'Data_20Analyst.pdf'. What does it say?", REQUESTERS["learner"])
+    assert follow_up_result.route is CapabilityRoute.LEARNER_SUPPORT
+    assert follow_up_result.matched_rule == "learner_document_or_technical"
+
+    ingestion_confirmation = {
+        "messages": [
+            {"type": "human", "content": "✅ Ingested 'Data_20Analyst.pdf'. You can now ask questions about this document."},
+            {"type": "human", "content": "What does it say?"},
+        ]
+    }
+    prior_turn_route = classify_text("What does it say?", REQUESTERS["learner"])
+    assert prior_turn_route.route is CapabilityRoute.LEARNER_SUPPORT

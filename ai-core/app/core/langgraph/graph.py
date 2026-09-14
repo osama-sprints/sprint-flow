@@ -604,6 +604,7 @@ class LangGraphAgent:
         session_id: str,
         user_id: Optional[str] = None,
         username: Optional[str] = None,
+        thread_history: Optional[list[Message]] = None,
     ) -> list[Message]:
         """Get a response from the LLM.
 
@@ -612,6 +613,7 @@ class LangGraphAgent:
             session_id (str): The session ID for the conversation.
             user_id (Optional[str]): The user ID for the conversation.
             username (Optional[str]): The display name of the user.
+            thread_history (Optional[list[Message]]): Fetched Mattermost thread context for a new session.
 
         Returns:
             list[Message]: The response from the LLM.
@@ -645,8 +647,11 @@ class LangGraphAgent:
                     # it. That is not an interrupt; treat this as a fresh turn.
                     logger.warning("stale_pending_state_discarded", session_id=session_id, next_nodes=state.next)
                 relevant_memory = relevant_memory or "No relevant memory found."
+                graph_messages = messages
+                if thread_history and not (state.values and state.values.get("messages")):
+                    graph_messages = [*thread_history, *messages]
                 response = await graph.ainvoke(
-                    input={"messages": dump_messages(messages), "long_term_memory": relevant_memory},
+                    input={"messages": dump_messages(graph_messages), "long_term_memory": relevant_memory},
                     config=config,
                 )
 

@@ -43,11 +43,15 @@ from app.services import escalation_closure
 from app.services.conversation import (
     IncomingMessage,
     answer_and_reply,
+    claim_mattermost_event,
     clean_text,
+    handle_attachment_and_reply,
+    get_thread_history,
     is_own_post,
 )
 from app.services.identity import sync_mattermost_user
 from app.services.mattermost import mattermost_client
+from app.services.mattermost_ingestion import extract_file_ids
 
 # Reconnect backoff: double on each consecutive failure, capped. Reset to the
 # floor as soon as a connection authenticates.
@@ -466,7 +470,9 @@ class MattermostWebSocketListener:
         # Anything posted by a bot or an incoming webhook, including our own
         # replies. Checked before the id lookup because it needs no round trip.
         props = post.get("props") or {}
-        if props.get("from_bot") == "true" or props.get("from_webhook") == "true":
+        if props.get("from_bot") is True or str(props.get("from_bot")).lower() == "true":
+            return
+        if props.get("from_webhook") is True or str(props.get("from_webhook")).lower() == "true":
             return
 
         user_id = str(post.get("user_id") or "")
@@ -478,6 +484,37 @@ class MattermostWebSocketListener:
 
         raw_message = str(post.get("message") or "")
         root_id = str(post.get("root_id") or "")
+        file_ids = extract_file_ids(post)
+        channel_id = str(post.get("channel_id") or "")
+        team_id = str(data.get("team_id") or "")
+        post_id = str(post.get("id") or "")
+        if not channel_id:
+            return
+
+        if file_ids:
+            if not await claim_mattermost_event(post_id):
+                logger.info("mattermost_ws_ignored_duplicate", post_id=post_id)
+                return
+            handler = asyncio.create_task(
+                handle_attachment_and_reply(
+                    IncomingMessage(
+                        channel_id=channel_id,
+                        team_id=team_id,
+                        post_id=post_id,
+                        text=raw_message,
+                        user_id=user_id,
+                        user_name=user_name,
+                        channel_type=channel_type,
+                        root_id=root_id,
+                        source="websocket",
+                        file_ids=file_ids,
+                    )
+                ),
+                name=f"mm-ws-ingestion-{post_id or 'unknown'}",
+            )
+            self._handlers.add(handler)
+            handler.add_done_callback(self._handlers.discard)
+            return
 
         # Sprint 2 / escalation closure: a reviewer's reply must never reach
         # the normal chat pipeline -- it would be answered by the general
@@ -514,11 +551,11 @@ class MattermostWebSocketListener:
         if not prompt:
             return
 
-        channel_id = str(post.get("channel_id") or "")
-        team_id = str(data.get("team_id") or "")
-        post_id = str(post.get("id") or "")
-        if not channel_id:
+        if not await claim_mattermost_event(post_id):
+            logger.info("mattermost_ws_ignored_duplicate", post_id=post_id)
             return
+
+        thread_history = await get_thread_history(root_id, post_id)
 
         self._messages_handled += 1
         logger.info(
@@ -550,6 +587,8 @@ class MattermostWebSocketListener:
                     # the reply then stays in that thread even in a DM.
                     root_id=root_id,
                     source="websocket",
+                    file_ids=extract_file_ids(post),
+                    thread_history=thread_history,
                 )
             ),
             name=f"mm-ws-turn-{post_id or 'unknown'}",
