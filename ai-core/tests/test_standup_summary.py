@@ -78,6 +78,15 @@ def test_summary_reports_submitted_and_missing_active_members(monkeypatch):
                 what_i_will_do="N/A",
                 blockers="N/A",
             ),
+            DailyStandup(
+                id=12,
+                sprint_id=7,
+                learner_id=2,
+                log_date=date(2026, 9, 15),
+                what_i_did="Waiting on review",
+                what_i_will_do="Address feedback",
+                blockers="Production access is still pending",
+            ),
         ]
 
     monkeypatch.setattr(authorisation, "require_channel_authority", allow)
@@ -93,9 +102,16 @@ def test_summary_reports_submitted_and_missing_active_members(monkeypatch):
             "what_i_did": "Finished API work",
             "what_i_will_do": "Add tests",
             "blockers": None,
-        }
+        },
+        {
+            "learner_id": 2,
+            "what_i_did": "Waiting on review",
+            "what_i_will_do": "Address feedback",
+            "blockers": "Production access is still pending",
+        },
     ]
-    assert summary.missing_members == [{"user_id": 2, "username": "bob", "display_name": "Bob"}]
+    assert summary.blockers == [{"learner_id": 2, "blockers": "Production access is still pending"}]
+    assert summary.missing_members == []
 
 
 @pytest.mark.parametrize("target_date", [date(2026, 9, 13), date(2026, 9, 26)])
@@ -201,7 +217,40 @@ def test_summary_returns_all_active_members_when_no_one_submitted(monkeypatch):
     summary = asyncio.run(standups.get_standup_summary_for_channel("channel-1", date(2026, 9, 15)))
 
     assert summary.submitted_updates == []
+    assert summary.blockers == []
+    assert summary.message == "No daily standup updates were submitted for 2026-09-15 in this channel."
     assert summary.missing_members == [
         {"user_id": 1, "username": "alice", "display_name": "Alice"},
         {"user_id": 2, "username": "bob", "display_name": "Bob"},
     ]
+
+
+def test_cohort_a_admin_cannot_query_cohort_b_or_receive_its_data(monkeypatch):
+    """A Cohort A administrator cannot cross the channel authorization boundary."""
+    calls: list[str] = []
+    cohort_a_token = current_requester.set(
+        RequesterContext(mattermost_user_id="cohort-a-admin", channel_id="cohort-a")
+    )
+
+    async def authorize(requester, channel_id, **kwargs):
+        assert kwargs["allowed_roles"] == authorisation.CHANNEL_ADMIN_ROLES
+        calls.append(f"authorize:{channel_id}")
+        if channel_id == "cohort-b":
+            raise authorisation.AuthorisationRefused("not_a_member", action="summarize_standups")
+        return SimpleNamespace(allowed=True)
+
+    async def should_not_read(*args, **kwargs):
+        raise AssertionError("Cohort B data must not be read after authorization fails")
+
+    monkeypatch.setattr(authorisation, "require_channel_authority", authorize)
+    monkeypatch.setattr(standups.sprints, "get_active_sprint", should_not_read)
+    monkeypatch.setattr(standups.channels, "list_channel_roles", should_not_read)
+    monkeypatch.setattr(standups, "list_daily_standups", should_not_read)
+
+    try:
+        with pytest.raises(authorisation.AuthorisationRefused):
+            asyncio.run(standups.get_standup_summary_for_channel("cohort-b", date(2026, 9, 15)))
+
+        assert calls == ["authorize:cohort-b"]
+    finally:
+        current_requester.reset(cohort_a_token)

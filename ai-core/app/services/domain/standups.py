@@ -19,11 +19,13 @@ from app.services.database import session_scope
 
 
 class StandupSummary(NamedTuple):
-    """The submitted and missing standups for one channel and calendar day."""
+    """The submitted, blocked, and missing standups for one channel and day."""
 
     submitted_updates: list[dict[str, object]]
+    blockers: list[dict[str, object]]
     missing_members: list[dict[str, object]]
     sprint_info: dict[str, object]
+    message: str
 
 
 async def upsert_daily_standup(
@@ -188,10 +190,24 @@ async def get_standup_summary_for_channel(
         if entry.learner_id in active_member_ids
     ]
     submitted_ids = {update["learner_id"] for update in submitted_updates}
+    blockers = [
+        {
+            "learner_id": update["learner_id"],
+            "blockers": update["blockers"],
+        }
+        for update in submitted_updates
+        if isinstance(update["blockers"], str) and update["blockers"].strip()
+    ]
     missing_members = [member for member in active_members if member["user_id"] not in submitted_ids]
+    message = (
+        f"No daily standup updates were submitted for {target_date.isoformat()} in this channel."
+        if not submitted_updates
+        else f"Daily standup summary for {target_date.isoformat()}."
+    )
 
     return StandupSummary(
         submitted_updates=submitted_updates,
+        blockers=blockers,
         missing_members=missing_members,
         sprint_info={
             "id": sprint.id,
@@ -199,4 +215,5 @@ async def get_standup_summary_for_channel(
             "start_date": sprint.start_date.isoformat(),
             "end_date": sprint.end_date.isoformat(),
         },
+        message=message,
     )
