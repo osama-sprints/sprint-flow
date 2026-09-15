@@ -85,6 +85,8 @@ _BACK_OFFICE_CONTEXT = (
     "standup, planning, retrospective, Q&A, or book must be handled by the ceremony scheduling pipeline. "
     "NEVER deny capability with statements like 'I do not have the tools' or 'I can only help with workspace administration' — "
     "you do have the tools to schedule ceremonies and must assist the user in collecting details to do so.\n"
+    "When the user asks for a standup summary, submitted updates, missing members, or blockers for a date, this is a read-only "
+    "summary request rather than scheduling: call summarize_standups with the requested YYYY-MM-DD date and relay its result. "
     "CONTEXT AWARENESS: in a public or private channel, use the current channel context automatically and do not ask which channel "
     "to use unless the user explicitly asks to schedule elsewhere. In a direct message, you cannot infer the channel, so ask: "
     "'Which team channel should this meeting be scheduled for?' before creating the meeting.\n"
