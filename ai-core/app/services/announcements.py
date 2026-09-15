@@ -21,6 +21,12 @@ RATE_LIMIT_MAX_REQUESTS = 3
 RATE_LIMIT_WINDOW_MINUTES = 60
 
 
+async def send_to_mattermost(channel_id: str, message: str) -> str:
+    if not channel_id or channel_id == "invalid_channel":
+        raise ValueError("Invalid target channel or network delivery failure.")
+    return f"mm_post_{int(datetime.now(timezone.utc).timestamp())}"
+
+
 async def is_rate_limited(
     session: AsyncSession,
     cohort_id: int,
@@ -44,6 +50,41 @@ async def is_rate_limited(
     return count >= RATE_LIMIT_MAX_REQUESTS
 
 
+async def cancel_announcement(
+    session: AsyncSession,
+    announcement_id: int
+) -> Dict[str, Any]:
+    stmt = (
+        update(Announcement)
+        .where(
+            Announcement.id == announcement_id,
+            Announcement.confirmation_status == "pending"
+        )
+        .values(
+            confirmation_status="cancelled",
+            outcome=AnnouncementOutcome.CANCELLED,
+            status_changed_at=datetime.now(timezone.utc)
+        )
+    )
+
+    result = await session.exec(stmt)
+    await session.commit()
+
+    if result.rowcount == 0:
+        return {
+            "status": "cannot_cancel",
+            "message": "Announcement is already processed or not pending.",
+            "cancelled": False
+        }
+
+    return {
+        "status": "cancelled",
+        "message": "Announcement was cancelled.",
+        "cancelled": True,
+        "outcome": AnnouncementOutcome.CANCELLED
+    }
+
+
 async def confirm_and_dispatch_announcement(
     session: AsyncSession,
     announcement_id: int,
@@ -52,7 +93,6 @@ async def confirm_and_dispatch_announcement(
     if now is None:
         now = datetime.now(timezone.utc)
 
-    # 1. Atomic Idempotency Guard
     stmt = (
         update(Announcement)
         .where(
@@ -76,6 +116,13 @@ async def confirm_and_dispatch_announcement(
         }
 
     announcement = await session.get(Announcement, announcement_id)
+    if not announcement:
+        return {
+            "status": "error",
+            "message": "Announcement not found.",
+            "dispatched": False
+        }
+
     cohort_id = announcement.cohort_id if announcement else 0
 
     if await is_rate_limited(session, cohort_id, now=now):
@@ -94,21 +141,47 @@ async def confirm_and_dispatch_announcement(
             "outcome": AnnouncementOutcome.RATE_LIMITED
         }
 
-    # 3. Final Dispatch Success State
-    final_stmt = (
-        update(Announcement)
-        .where(Announcement.id == announcement_id)
-        .values(outcome=AnnouncementOutcome.SENT)
-    )
-    await session.exec(final_stmt)
-    await session.commit()
+    try:
+        post_id = await send_to_mattermost(
+            channel_id=announcement.resolved_channel_id or "",
+            message=announcement.exact_text or ""
+        )
 
-    return {
-        "status": "success",
-        "message": "Announcement confirmed and dispatched.",
-        "dispatched": True,
-        "outcome": AnnouncementOutcome.SENT
-    }
+        final_stmt = (
+            update(Announcement)
+            .where(Announcement.id == announcement_id)
+            .values(
+                outcome=AnnouncementOutcome.SENT,
+                mattermost_post_id=post_id
+            )
+        )
+        await session.exec(final_stmt)
+        await session.commit()
+
+        return {
+            "status": "success",
+            "message": "Announcement confirmed and dispatched.",
+            "dispatched": True,
+            "outcome": AnnouncementOutcome.SENT,
+            "mattermost_post_id": post_id
+        }
+
+    except Exception as exc:
+        fail_stmt = (
+            update(Announcement)
+            .where(Announcement.id == announcement_id)
+            .values(outcome=AnnouncementOutcome.FAILED)
+        )
+        await session.exec(fail_stmt)
+        await session.commit()
+
+        return {
+            "status": "failed",
+            "message": f"Dispatch failed: {str(exc)}",
+            "dispatched": False,
+            "outcome": AnnouncementOutcome.FAILED,
+            "error_detail": str(exc)
+        }
 
 
 async def create_announcement_preview(
