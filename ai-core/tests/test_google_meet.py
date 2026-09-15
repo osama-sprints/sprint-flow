@@ -47,11 +47,12 @@ def mock_google_api(monkeypatch):
 @pytest.mark.anyio
 async def test_create_meet_event_success(mock_google_settings, mock_google_api):
     mock_google_api.return_value = {
+        "id": "evt_abc123",
         "conferenceData": {"entryPoints": [{"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij"}]}
     }
 
     start = datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc)
-    link = await create_meet_event(
+    link, event_id = await create_meet_event(
         title="Sprint Planning",
         start=start,
         duration_minutes=60,
@@ -60,7 +61,7 @@ async def test_create_meet_event_success(mock_google_settings, mock_google_api):
     )
 
     assert link == "https://meet.google.com/abc-defg-hij"
-
+    assert event_id == "evt_abc123"
 
 @pytest.mark.anyio
 async def test_create_meet_event_api_failure_returns_none(mock_google_settings, mock_google_api):
@@ -68,9 +69,10 @@ async def test_create_meet_event_api_failure_returns_none(mock_google_settings, 
     mock_google_api.side_effect = Exception("API Error")
 
     start = datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc)
-    link = await create_meet_event(title="Sprint Planning", start=start, duration_minutes=60)
+    link, event_id = await create_meet_event(title="Sprint Planning", start=start, duration_minutes=60)
 
     assert link is None
+    assert event_id is None
 
 
 @pytest.mark.anyio
@@ -78,9 +80,10 @@ async def test_meet_disabled_via_settings(monkeypatch, mock_google_api):
     monkeypatch.setattr(settings, "GOOGLE_MEET_ENABLED", False)
 
     start = datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc)
-    link = await create_meet_event(title="Sprint Planning", start=start, duration_minutes=60)
+    link, event_id = await create_meet_event(title="Sprint Planning", start=start, duration_minutes=60)
 
     assert link is None
+    assert event_id is None
     mock_google_api.assert_not_called()
 
 
