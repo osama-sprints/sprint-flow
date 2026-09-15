@@ -8,6 +8,12 @@ values, their display labels and the aliases people type are defined.
 from enum import StrEnum
 
 
+class AnnouncementOutcome(StrEnum):
+    SENT = "sent"
+    CANCELLED = "cancelled"
+    RATE_LIMITED = "rate_limited"
+    UNAUTHORIZED = "unauthorized"
+    FAILED = "failed"
 class RoleKey(StrEnum):
     """Channel-scoped role keys. A person holds one of these per channel."""
 
