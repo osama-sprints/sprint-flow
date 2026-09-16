@@ -9,7 +9,7 @@ in. See ``choosing_the_human`` in ``reports/escalation_report.md``.
 
 from langchain_core.tools import tool
 from langchain_core.tools.base import BaseTool
-
+from app.models.enums import EscalationType
 from app.core.langgraph.tools.results import (
     guarded_tool,
     tool_result,
@@ -40,7 +40,7 @@ async def escalate_to_human(question: str) -> str:
         str: ``[CODE] sentence`` — ESCALATION_OPENED, ESCALATION_OPENED_NO_HUMAN,
         VALIDATION_ERROR or SYSTEM_ERROR. Relay the sentence to the learner as-is.
     """
-    result = await escalation.open_escalation(question)
+    result = await escalation.open_escalation(question, ticket_type=EscalationType.OPS)
     return tool_result(result.code, result.message)
 
 
