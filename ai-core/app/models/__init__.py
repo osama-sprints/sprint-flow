@@ -15,6 +15,7 @@ from app.models.policy import PolicyDocumentChunk
 from app.models.role import Role
 from app.models.sprint import Sprint
 from app.models.user import User
+from app.models.knowledge_candidate import KnowledgeCandidate
 
 DOMAIN_TABLES: tuple[str, ...] = (
     "users",
@@ -27,6 +28,7 @@ DOMAIN_TABLES: tuple[str, ...] = (
     "ceremony_reminders",
     "daily_standups",
     "escalation_tickets",
+    "knowledge_candidates",
     "onboarding_steps",
     "policy_document_chunks",
 )
@@ -41,6 +43,7 @@ __all__ = [
     "DailyStandup",
     "DomainBase",
     "EscalationTicket",
+    "KnowledgeCandidate",
     "OnboardingStep",
     "PolicyDocumentChunk",
     "Role",

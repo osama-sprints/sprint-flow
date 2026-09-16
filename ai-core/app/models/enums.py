@@ -165,6 +165,19 @@ class OnboardingStepStatus(StrEnum):
     FAILED = "failed"
     HALTED = "halted"
 
+class KnowledgeCandidateStatus(StrEnum):
+    """Lifecycle of a knowledge candidate awaiting human review.
+ 
+    Only APPROVED candidates are ever indexed into policy_document_chunks --
+    see app/services/knowledge_review.py. PENDING and REJECTED are both
+    excluded from search by construction: nothing ever writes them into the
+    vector table in the first place.
+    """
+ 
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
 
 def normalise_role_key(value: str) -> RoleKey | None:
     """Map a typed role name to its machine key.

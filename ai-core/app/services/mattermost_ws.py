@@ -40,6 +40,8 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.services import onboarding
 from app.services import escalation_closure
+from app.services import knowledge_review
+
 from app.services.conversation import (
     IncomingMessage,
     answer_and_reply,
@@ -523,6 +525,13 @@ class MattermostWebSocketListener:
         # DMs (rule 1) and would otherwise let the reply through untouched.
         # Never raised past here: a bug in closure must not take the
         # listener down, same principle as onboarding's arrival handling.
+                # 1. Check Knowledge Candidate commands FIRST (approve KC-X, reject KC-X, list KC)
+        if await knowledge_review.handle_reviewer_reply(
+            mattermost_user_id=user_id, channel_id=channel_id, channel_type=channel_type, text=raw_message
+        ):
+            return
+
+        # 2. Then check Escalation Ticket closure
         try:
             closure_result = await escalation_closure.handle_reviewer_reply(
                 mattermost_user_id=user_id,

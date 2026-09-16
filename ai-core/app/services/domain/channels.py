@@ -303,3 +303,34 @@ async def set_channel_role_status(
         await s.flush()
         await s.refresh(membership)
         return membership
+async def find_any_ops_support_user(
+    *,
+    session: AsyncSession | None = None,
+) -> User | None:
+    """Find any active OPS_SUPPORT member across all channels.
+
+    Used as a system-wide fallback when no OPS_SUPPORT is assigned in
+    the specific channel an escalation came from. Returns the first
+    active holder found (by join time), or None if no one is assigned
+    the role anywhere in the workspace.
+
+    Args:
+        session: Optional session to reuse.
+
+    Returns:
+        User | None: The user, or None when no OPS_SUPPORT exists anywhere.
+    """
+    statement = (
+        select(User)
+        .join(ChannelRole, ChannelRole.user_id == User.id)
+        .join(Role, Role.id == ChannelRole.role_id)
+        .where(
+            Role.key == RoleKey.OPS_SUPPORT.value,
+            ChannelRole.status == MembershipStatus.ACTIVE.value,
+        )
+        .order_by(ChannelRole.joined_at)
+        .limit(1)
+    )
+    async with session_scope(session) as s:
+        result = await s.exec(statement)
+        return result.first()

@@ -8,7 +8,7 @@ try:
 except ImportError:
     PolicyVectorStore = None
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.45
+DEFAULT_SIMILARITY_THRESHOLD = 0.50
 
 
 async def get_grounded_answer_or_refusal(
