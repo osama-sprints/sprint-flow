@@ -165,10 +165,7 @@ network call to Google is faked.
 5. **Disabled mode** — scheduling succeeds, zero external calls made, fields
    stay null.
 
-Additionally validated manually end-to-end through the live Mattermost bot: a
-real ceremony was created with a genuine Google Meet link attached, listed
-correctly via `render_calendar`, and successfully rescheded through the
-conversational interface.
+Manual testing through the live Mattermost bot confirmed the scheduling, reschedule, and cancellation conversational flow end-to-end; live testing of a real Google Meet link was not possible in this environment (no Workspace domain-wide delegation credentials available), so the create/update/cancel-with-a-real-provider path is verified via the automated script's mocked-API-boundary tests only, not a live external call.
 
 Full regression suite re-run after all changes: no new failures introduced;
 the only failures present (`test_complete_policy_tasks.py`,
