@@ -25,7 +25,15 @@ failure):
   4. The real ``StandupDispatcher.run_once`` pass (restricted to the probe's
      own learner) ensures, claims and delivers end-to-end with exactly one DM,
      and a delivered row is no longer claimable.
-  5. Probe rows are cleaned up even on failure.
+  5. The active-cohort filter and recipient timezone scheduling: a learner in an
+     inactive (``completed``) cohort or with an inactive channel membership is
+     never prompted, while active learners in two different timezones get a
+     prompt whose ``dispatch_at`` is their configured local hour converted to
+     UTC (09:00 Riyadh = 06:00 UTC, 09:00 PDT = 16:00 UTC), not the server's
+     wall clock — and a not-yet-due west-coast prompt is only claimable once
+     its local hour arrives. The timezone-scheduled prompt is then delivered
+     end to end by ``StandupDispatcher.run_once``.
+  6. Probe rows are cleaned up even on failure.
 
 Run with the stack up, from the repository root:
 

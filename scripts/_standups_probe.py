@@ -33,8 +33,11 @@ for _candidate in ("/app", os.path.join(os.getcwd(), "ai-core"), os.getcwd()):
 
 from sqlalchemy import text  # noqa: E402
 
+from app.core.config import settings  # noqa: E402
 from app.models.enums import (  # noqa: E402
+    MembershipStatus,
     RoleKey,
+    SprintStatus,
     StandupPromptStatus,
 )
 from app.services import standups  # noqa: E402
@@ -87,7 +90,7 @@ class FakeMattermost:
         return reply
 
 
-async def make_learner(tag: str) -> dict:
+async def make_learner(tag: str, *, timezone: str = "UTC") -> dict:
     """Seed a learner identity, an active sprint and its LEARNER ChannelRole."""
     mattermost_user_id = f"{PREFIX}{tag}-{STAMP}"
     user = await identity_repo.upsert_mattermost_user(
@@ -95,7 +98,7 @@ async def make_learner(tag: str) -> dict:
         username=f"{PREFIX}{tag}-{STAMP}",
         email=f"{PREFIX}{tag}-{STAMP}@example.test",
         display_name=tag.title(),
-        timezone="UTC",
+        timezone=timezone,
         is_superadmin=False,
     )
     role = await channel_repo.get_role_by_key(RoleKey.LEARNER)
@@ -348,6 +351,108 @@ async def scenario() -> None:
     check("a dispatched row is no longer claimable", await standup_repo.claim_due_prompts(
         worker_id="other", lease_seconds=300, now=FORCED, user_ids=[again_dispatcher["user"].id]  # type: ignore[list-item]
     ) == [])
+
+    print("--- active cohort filter and recipient timezone scheduling (a cohort lives in a channel)")
+    night = await make_learner("night", timezone="Asia/Riyadh")  # UTC+3, no DST
+    west = await make_learner("west", timezone="America/Los_Angeles")  # UTC-7 during PDT
+    cold = await make_learner("cold")
+    dormant = await make_learner("dormant")
+    await sprint_repo.set_sprint_status(cold["sprint_id"], SprintStatus.COMPLETED)
+    await channel_repo.set_channel_role_status(
+        dormant["user"].id,  # type: ignore[arg-type]
+        dormant["channel_id"],
+        MembershipStatus.INACTIVE,
+    )
+
+    night_created = await standups.ensure_scope(now=FORCED, user_ids=[night["user"].id])  # type: ignore[list-item]
+    check(
+        "an active cohort learner is prompted (active sprint + active role)",
+        night_created == 1,
+        f"{night_created} prompt(s)",
+    )
+    night_prompt = await standup_repo.get_prompt_for(
+        night["sprint_id"], night["user"].id, date(2026, 9, 15)  # type: ignore[arg-type]
+    )
+    check(
+        "the recipient's day is their local calendar day",
+        night_prompt is not None and night_prompt.local_date == date(2026, 9, 15) and night_prompt.timezone == "Asia/Riyadh",
+        night_prompt.local_date.isoformat() if night_prompt else "missing",
+    )
+    check(
+        "the dispatch instant is the cohort's 09:00 local, not the server's wall clock",
+        night_prompt is not None and night_prompt.dispatch_at == datetime(2026, 9, 15, 6, 0, tzinfo=UTC),
+        night_prompt.dispatch_at.isoformat() if night_prompt else "missing",
+    )
+
+    west_created = await standups.ensure_scope(now=FORCED, user_ids=[west["user"].id])  # type: ignore[list-item]
+    check("an active west-coast learner is prompted too", west_created == 1, f"{west_created} prompt(s)")
+    west_prompt = await standup_repo.get_prompt_for(
+        west["sprint_id"], west["user"].id, date(2026, 9, 15)  # type: ignore[arg-type]
+    )
+    check(
+        "a UTC-7 recipient dispatches at 16:00 UTC (their 09:00 local)",
+        west_prompt is not None and west_prompt.dispatch_at == datetime(2026, 9, 15, 16, 0, tzinfo=UTC),
+        west_prompt.dispatch_at.isoformat() if west_prompt else "missing",
+    )
+    check(
+        "that prompt is NOT due at server-10:00 UTC — it waits for the local hour",
+        await standup_repo.claim_due_prompts(
+            worker_id="verify", lease_seconds=300, now=FORCED, user_ids=[west["user"].id]  # type: ignore[list-item]
+        ) == [],
+    )
+    check(
+        "and becomes claimable exactly once its local hour arrives",
+        [p.id for p in await standup_repo.claim_due_prompts(
+            worker_id="verify", lease_seconds=300, now=FORCED + timedelta(hours=7), user_ids=[west["user"].id]  # type: ignore[list-item]
+        )] == [west_prompt.id],  # type: ignore[union-attr]
+    )
+
+    cold_created = await standups.ensure_scope(now=FORCED, user_ids=[cold["user"].id])  # type: ignore[list-item]
+    check(
+        "a completed (inactive) cohort is never prompted",
+        cold_created == 0
+        and await standup_repo.get_prompt_for(cold["sprint_id"], cold["user"].id, date(2026, 9, 15))  # type: ignore[arg-type]
+        is None,
+        f"{cold_created} prompt(s)",
+    )
+    dormant_created = await standups.ensure_scope(now=FORCED, user_ids=[dormant["user"].id])  # type: ignore[list-item]
+    check(
+        "an inactive membership in an active cohort is never prompted",
+        dormant_created == 0
+        and await standup_repo.get_prompt_for(dormant["sprint_id"], dormant["user"].id, date(2026, 9, 15))  # type: ignore[arg-type]
+        is None,
+        f"{dormant_created} prompt(s)",
+    )
+
+    night_pass = StandupDispatcher(
+        worker_id="verify-tz", claim_batch_size=10, only_user_ids=[night["user"].id]  # type: ignore[list-item]
+    )
+    fake.posts = []
+    tz_summary = await night_pass.run_once(now=FORCED)
+    night_after = await standup_repo.get_prompt_for(
+        night["sprint_id"], night["user"].id, date(2026, 9, 15)  # type: ignore[arg-type]
+    )
+    check(
+        "the timezone-scheduled prompt is delivered end to end by the real dispatcher",
+        tz_summary.ensured == 0 and tz_summary.claimed == 1 and tz_summary.sent == 1
+        and night_after is not None and night_after.status == StandupPromptStatus.DISPATCHED.value,
+        f"{tz_summary}",
+    )
+    # The DISPATCHED night prompt has a post id; a second pass claims nothing new.
+    check(
+        "the delivered timezone prompt is no longer claimable",
+        await standup_repo.claim_due_prompts(
+            worker_id="other", lease_seconds=300, now=FORCED + timedelta(hours=1), user_ids=[night["user"].id]  # type: ignore[list-item]
+        ) == [],
+    )
+    check(
+        "the configured local hour reproduces both asserted dispatch instants",
+        standups.dispatch_at_for(date(2026, 9, 15), "Asia/Riyadh", settings.STANDUP_PROMPT_LOCAL_HOUR)
+        == datetime(2026, 9, 15, 6, 0, tzinfo=UTC)
+        and standups.dispatch_at_for(date(2026, 9, 15), "America/Los_Angeles", settings.STANDUP_PROMPT_LOCAL_HOUR)
+        == datetime(2026, 9, 15, 16, 0, tzinfo=UTC),
+        f"hour={settings.STANDUP_PROMPT_LOCAL_HOUR}",
+    )
 
     print("--- retained raw replies and cleanup bookkeeping")
     from app.core.metrics import standup_prompts_total

@@ -38,6 +38,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models import (
     DailyStandup,
     DailyStandupPrompt,
+    Sprint,
     StandupReply,
     require_aware,
     utcnow,
@@ -140,6 +141,50 @@ async def list_daily_standups(
     if log_date is not None:
         statement = statement.where(DailyStandup.log_date == log_date)
     statement = statement.order_by(DailyStandup.log_date, DailyStandup.learner_id)  # type: ignore[arg-type]
+    async with session_scope(session) as s:
+        result = await s.exec(statement)
+        return list(result.all())
+
+
+async def list_standups_for_channel(
+    channel_id: str,
+    *,
+    start_date: date,
+    end_date: date,
+    learner_ids: Collection[int] | None = None,
+    session: AsyncSession | None = None,
+) -> list[DailyStandup]:
+    """Every standup entry written in a cohort's channel within a date range.
+
+    A cohort's home is a Mattermost channel in this branch (see the
+    ``refactor_cohort_to_channel`` migration), so the cohort-level read for
+    downstream summarisation joins ``daily_standups`` onto ``sprints`` by the
+    sprint's ``channel_id`` — callers never reach for raw SQL. Missed days
+    produce no ``daily_standups`` row (see ``mark_prompt_missed``), so what this
+    returns is exactly the material a summary may quote.
+
+    Args:
+        channel_id: The cohort's channel.
+        start_date: Inclusive first day.
+        end_date: Inclusive last day (may equal ``start_date``).
+        learner_ids: Only these people's entries, or everyone when None.
+        session: Optional session to reuse.
+
+    Returns:
+        list[DailyStandup]: The entries, by day then person.
+    """
+    statement = (
+        select(DailyStandup)
+        .join(Sprint, Sprint.id == DailyStandup.sprint_id)  # type: ignore[arg-type]
+        .where(
+            Sprint.channel_id == channel_id,
+            DailyStandup.log_date >= start_date,
+            DailyStandup.log_date <= end_date,
+        )
+        .order_by(DailyStandup.log_date, DailyStandup.learner_id)  # type: ignore[arg-type]
+    )
+    if learner_ids is not None:
+        statement = statement.where(col(DailyStandup.learner_id).in_(list(learner_ids)))
     async with session_scope(session) as s:
         result = await s.exec(statement)
         return list(result.all())

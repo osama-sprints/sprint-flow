@@ -503,6 +503,63 @@ def test_dispatcher_run_once_delivers_and_metric_counts():
     run(scenario())
 
 
+def test_list_standups_for_channel_returns_cohort_entries_across_a_date_range():
+    async def scenario():
+        user_a, sprint_a, channel_a = await make_learner("coho")
+        user_b, sprint_b, channel_b = await make_learner("cohd")
+        await repo.upsert_daily_standup(
+            sprint_id=sprint_a,
+            learner_id=user_a.id,  # type: ignore[arg-type]
+            log_date=date(2026, 9, 14),
+            what_i_did="day one",
+            what_i_will_do="keep going",
+        )
+        await repo.upsert_daily_standup(
+            sprint_id=sprint_a,
+            learner_id=user_a.id,  # type: ignore[arg-type]
+            log_date=date(2026, 9, 16),
+            what_i_did="day three",
+            what_i_will_do="finish",
+            blockers="tired",
+        )
+        # One day before the requested range and one in another cohort's channel
+        # must never leak into the result.
+        await repo.upsert_daily_standup(
+            sprint_id=sprint_a,
+            learner_id=user_a.id,  # type: ignore[arg-type]
+            log_date=date(2026, 9, 13),
+            what_i_did="early",
+            what_i_will_do="later",
+        )
+        await repo.upsert_daily_standup(
+            sprint_id=sprint_b,
+            learner_id=user_b.id,  # type: ignore[arg-type]
+            log_date=date(2026, 9, 15),
+            what_i_did="other cohort",
+            what_i_will_do="none",
+        )
+        rows = await repo.list_standups_for_channel(
+            channel_a, start_date=date(2026, 9, 14), end_date=date(2026, 9, 16)
+        )
+        assert [r.log_date for r in rows] == [date(2026, 9, 14), date(2026, 9, 16)]
+        assert {r.sprint_id for r in rows} == {sprint_a}
+        assert {r.what_i_did for r in rows} == {"day one", "day three"}
+        # Single-day and learner-narrowed reads.
+        single = await repo.list_standups_for_channel(
+            channel_a, start_date=date(2026, 9, 14), end_date=date(2026, 9, 14)
+        )
+        assert [r.log_date for r in single] == [date(2026, 9, 14)]
+        narrowed = await repo.list_standups_for_channel(
+            channel_a,
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 9, 30),
+            learner_ids=[user_b.id],  # type: ignore[list-item]
+        )
+        assert narrowed == []
+
+    run(scenario())
+
+
 def test_remove_prompts_between_cleans_verification_rows():
     async def scenario():
         user, sprint_id, channel_id = await make_learner("remove")

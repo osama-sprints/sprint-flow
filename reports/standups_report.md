@@ -82,7 +82,12 @@ learner said is ever lost to a parse edge case.
   `mark_prompt_answered`, `create_standup_entry`, `record_reply`,
   `count_prompts`, `remove_prompts_between` (verification hygiene),
   `list_daily_standups`; plus `list_active_sprints` in
-  `app/services/domain/sprints.py`.
+  `app/services/domain/sprints.py`. **Cohort-level read for summarisation:**
+  `list_standups_for_channel` returns every entry written in a cohort's channel
+  (a cohort's home is the sprint channel in this branch — see the
+  `refactor_cohort_to_channel` migration) within a `[start_date, end_date]`
+  range, joining `daily_standups → sprints`, ordered by day then learner, with
+  an optional `learner_ids` narrowing — no caller writes SQL.
 - Orchestration (`app/services/standups.py`): prompt rendering, the timezone
   math (`resolve_timezone`, `local_date_of`, `dispatch_at_for`, `day_end_utc`),
   `deliver_prompt`, `ensure_today_prompts` / `ensure_scope` (with
@@ -141,16 +146,18 @@ learner said is ever lost to a parse edge case.
 - DB integration tests: `ai-core/tests/integration/test_standups_db.py`, run
   against a throwaway migrated Postgres with `SPRINTFLOW_INTEGRATION_DB=1`
   (SkipUnless), driven by the same seeded-fake-Mattermost pattern the
-  onboarding tests use. 10 tests covering prompt idempotency, the lease
-  lifecycle, delivered/retried dispatch, no-fabrication missed days, and the
-  full ingest classification (accepted/duplicate/late/redelivery/not-a-standup).
+  onboarding tests use. 11 tests covering prompt idempotency, the lease
+  lifecycle, delivered/retried dispatch, no-fabrication missed days, the
+  full ingest classification (accepted/duplicate/late/redelivery/not-a-standup),
+  and the cohort-level `list_standups_for_channel` read (date range, cross-
+  cohort isolation, learner narrowing).
   (The pre-existing onboarding/back-office DB tests are stale — they exercise
   the removed `channels`/`channel_memberships` schema — so this suite is the
   current-schema reference; the whole non-integration suite, 431 tests, stays
   green.)
 - Repeatable end-to-end verifier: `scripts/verify_standups.py` pipes
   `scripts/_standups_probe.py` into the running ai-core container against the
-  live database with a faked Mattermost. It proves, with 28 PASS/FAIL lines and
+  live database with a faked Mattermost. It proves, with 40 PASS/FAIL lines and
   a non-zero exit:
 
   1. idempotent prompt creation;
@@ -160,7 +167,14 @@ learner said is ever lost to a parse edge case.
   5. missed day closes with no entry; late reply still captured, stays closed;
   6. the real `StandupDispatcher.run_once` restricted to the probe's own learner
      registers, claims and delivers in one typed pass;
-  7. probe rows always cleaned up.
+  7. the active-cohort filter and recipient timezone scheduling: a learner in a
+     `completed` cohort or with an inactive channel membership is never prompted,
+     while active learners in two timezones each get a prompt whose `dispatch_at`
+     is their 09:00 local converted to UTC (06:00 UTC for Riyadh, 16:00 UTC for
+     Los Angeles) — not the server's wall clock — and a not-yet-due west-coast
+     prompt becomes claimable only once its local hour arrives, then is
+     delivered end-to-end by the same dispatcher;
+  8. probe rows always cleaned up.
 
 Run it with the stack up:
 
