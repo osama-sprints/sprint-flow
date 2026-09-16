@@ -18,8 +18,8 @@ from app.core.langgraph.tools.results import (
     tool_result,
 )
 from app.services import back_office
-from sqlmodel.ext.asyncio.session import AsyncSession
-from typing import Dict, Any, Optional
+from app.services.database import session_scope
+from typing import Any, Dict, Optional
 
 from app.services.announcements import (
     resolve_announcement_channel,
@@ -38,43 +38,43 @@ async def prepare_announcement_preview_tool(
     target_type: str,
     target_value: Optional[str] = None,
     created_by_user_id: int = 1,
-    session: AsyncSession = None
 ) -> Dict[str, Any]:
     """Prepare a preview for an announcement before confirmation."""
-    resolved_channel = await resolve_announcement_channel(session, None, cohort_id)
-    if target_type == "role" and target_value:
-        resolved_audience = await resolve_recipients_by_role(session, cohort_id, target_value)
-    elif target_type == "usernames" and target_value:
-        usernames = [u.strip() for u in target_value.split(",")]
-        resolved_audience = await resolve_recipients_by_usernames(session, cohort_id, usernames)
-    else:
-        resolved_audience = []
+    async with session_scope() as session:
+        resolved_channel = await resolve_announcement_channel(session, None, cohort_id)
+        if target_type == "role" and target_value:
+            resolved_audience = await resolve_recipients_by_role(session, cohort_id, target_value)
+        elif target_type == "usernames" and target_value:
+            usernames = [u.strip() for u in target_value.split(",")]
+            resolved_audience = await resolve_recipients_by_usernames(session, cohort_id, usernames)
+        else:
+            resolved_audience = []
 
-    return await create_announcement_preview(
-        session=session,
-        cohort_id=cohort_id,
-        raw_text=raw_text,
-        delivery_mode=delivery_mode,
-        resolved_channel=resolved_channel,
-        resolved_audience=resolved_audience,
-        created_by_user_id=created_by_user_id
-    )
+        return await create_announcement_preview(
+            session=session,
+            cohort_id=cohort_id,
+            raw_text=raw_text,
+            delivery_mode=delivery_mode,
+            resolved_channel=resolved_channel,
+            resolved_audience=resolved_audience,
+            created_by_user_id=created_by_user_id,
+        )
 
 @tool
 async def confirm_announcement_tool(
     announcement_id: int,
-    session: AsyncSession = None
 ) -> Dict[str, Any]:
     """Confirm and dispatch a prepared announcement."""
-    return await confirm_and_dispatch_announcement(session, announcement_id)
+    async with session_scope() as session:
+        return await confirm_and_dispatch_announcement(session, announcement_id)
 
 @tool
 async def cancel_announcement_tool(
     announcement_id: int,
-    session: AsyncSession = None
 ) -> Dict[str, Any]:
     """Cancel a prepared announcement."""
-    return await cancel_announcement(session, announcement_id)
+    async with session_scope() as session:
+        return await cancel_announcement(session, announcement_id)
 
 @tool
 @guarded_tool

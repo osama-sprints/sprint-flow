@@ -1,6 +1,7 @@
 """Smoke tests for the September 15-16 wiring changes."""
 
 import os
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import pytest
@@ -29,6 +30,13 @@ async def test_announcement_tools_are_registered_and_delegate(monkeypatch: pytes
     monkeypatch.setattr(back_office_tools, "create_announcement_preview", create_preview)
     monkeypatch.setattr(back_office_tools, "confirm_and_dispatch_announcement", confirm)
     monkeypatch.setattr(back_office_tools, "cancel_announcement", cancel)
+    internal_session = object()
+
+    @asynccontextmanager
+    async def fake_session_scope():
+        yield internal_session
+
+    monkeypatch.setattr(back_office_tools, "session_scope", fake_session_scope)
 
     preview = await back_office_tools.prepare_announcement_preview_tool.ainvoke(
         {
@@ -53,5 +61,5 @@ async def test_announcement_tools_are_registered_and_delegate(monkeypatch: pytes
     resolve_channel.assert_awaited_once()
     resolve_audience.assert_awaited_once()
     create_preview.assert_awaited_once()
-    confirm.assert_awaited_once_with(None, 12)
-    cancel.assert_awaited_once_with(None, 13)
+    confirm.assert_awaited_once_with(internal_session, 12)
+    cancel.assert_awaited_once_with(internal_session, 13)
