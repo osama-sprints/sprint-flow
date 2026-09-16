@@ -29,6 +29,7 @@ from app.models import (
     utcnow,
 )
 from app.models.enums import (
+    MembershipStatus,
     OnboardingStepStatus,
     RoleKey,
 )
@@ -79,28 +80,34 @@ def run(coro: Awaitable[T]) -> T:
             await database_service.engine.dispose()
 
     return asyncio.run(wrapped())
-
-
 async def cleanup() -> None:
     async with database_service.session() as s:
-        await s.execute(
-            text(
-                "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-                " OR channel_id IN (SELECT id FROM channels WHERE name LIKE :p)"
-            ),
-            {"p": f"{PREFIX}%"},
-        )
-        await s.execute(
-            text(
-                "DELETE FROM channel_memberships WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-                " OR channel_id IN (SELECT id FROM channels WHERE name LIKE :p)"
-            ),
-            {"p": f"{PREFIX}%"},
-        )
-        await s.execute(text("DELETE FROM channels WHERE name LIKE :p"), {"p": f"{PREFIX}%"})
-        await s.execute(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), {"p": f"{PREFIX}%"})
-        await s.commit()
-
+        async with s.begin():
+            await s.execute(
+                text(
+                    "DELETE FROM onboarding_steps "
+                    "WHERE user_id::text IN (SELECT id::text FROM users WHERE mattermost_user_id LIKE :p) "
+                    "OR channel_id::text IN (SELECT id::text FROM channels WHERE name LIKE :p)"
+                ),
+                {"p": f"{PREFIX}%"},
+            )
+            await s.execute(
+                text(
+                    "DELETE FROM channel_roles "
+                    "WHERE user_id::text IN (SELECT id::text FROM users WHERE mattermost_user_id LIKE :p) "
+                    "OR channel_id::text IN (SELECT id::text FROM channels WHERE name LIKE :p) "
+                    "OR channel_id LIKE :p"
+                ),
+                {"p": f"{PREFIX}%"},
+            )
+            await s.execute(
+                text("DELETE FROM channels WHERE name LIKE :p"),
+                {"p": f"{PREFIX}%"},
+            )
+            await s.execute(
+                text("DELETE FROM users WHERE mattermost_user_id LIKE :p"),
+                {"p": f"{PREFIX}%"},
+            )
 
 @pytest.fixture()
 def fake(monkeypatch: pytest.MonkeyPatch):
@@ -127,14 +134,23 @@ async def make_user(tag: str, display_name: str = "Test Person") -> User:
     )
 
 
-async def make_channel(tag: str) -> str:
-    return f"{PREFIX}{tag}-{uuid.uuid4().hex[:6]}"
+from types import SimpleNamespace
+
+async def make_channel(tag: str, team_id: str = "test-team") -> Any:
+    name = f"{PREFIX}{tag}-{uuid.uuid4().hex[:6]}"
+    return SimpleNamespace(id=f"mm-{name}", name=name, team_id=team_id)
 
 
-async def assign(user: User, channel: str, role_key: RoleKey) -> None:
+async def assign(user: User, channel: Any, role_key: RoleKey) -> None:
     role = await channel_repo.get_role_by_key(role_key)
     assert role is not None and role.id is not None and user.id is not None and channel.id is not None
-    await channel_repo.upsert_membership(user_id=user.id, channel_id=channel, role_id=role.id, assigned_by_id=None)
+    await channel_repo.upsert_channel_role(
+        user_id=user.id,
+        team_id=getattr(channel, "team_id", "test-team"),
+        channel_id=channel.id,
+        role_id=role.id,
+        assigned_by_id=None,
+    )
 
 
 async def steps_of(user: User) -> dict[str, OnboardingStep]:
@@ -153,8 +169,8 @@ def dispatcher(name: str = "w1", batch: int = 50) -> OnboardingDispatcher:
 def test_arrival_twice_creates_one_welcome_and_one_delivery(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("arrive")
-        assert await onboarding.start_journey(user) is True
-        assert await onboarding.start_journey(user) is False
+        assert await onboarding.start_journey(user, "test-team") is True
+        assert await onboarding.start_journey(user, "test-team") is False
         steps = await steps_of(user)
         assert set(steps) == {"welcome:None", "follow_up:None"}
         assert steps["follow_up:None"].due_at - steps["welcome:None"].due_at == timedelta(hours=72)
@@ -179,7 +195,7 @@ def test_arrival_twice_creates_one_welcome_and_one_delivery(fake: FakeMattermost
 def test_delivery_failure_is_retried_and_then_sent(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("retry")
-        await onboarding.start_journey(user)
+        await onboarding.start_journey(user, "test-team")
         fake.fail_mode = "raise"
         now = utcnow()
 
@@ -215,7 +231,7 @@ def test_delivery_failure_is_retried_and_then_sent(fake: FakeMattermost):
 def test_post_refused_counts_as_failure(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("refused")
-        await onboarding.start_journey(user)
+        await onboarding.start_journey(user, "test-team")
         fake.fail_mode = "none"
         summary = await dispatcher().run_once()
         assert summary.retry == 1
@@ -230,7 +246,7 @@ def test_gives_up_after_max_attempts(fake: FakeMattermost, monkeypatch: pytest.M
 
     async def scenario() -> None:
         user = await make_user("giveup")
-        await onboarding.start_journey(user)
+        await onboarding.start_journey(user, "test-team")
         fake.fail_mode = "raise"
         now = utcnow()
         first = await dispatcher().run_once(now=now)
@@ -253,7 +269,7 @@ def test_two_dispatchers_deliver_twenty_steps_exactly_once(fake: FakeMattermost)
     async def scenario() -> None:
         users = [await make_user(f"conc{i}") for i in range(20)]
         for user in users:
-            await onboarding.start_journey(user)
+            await onboarding.start_journey(user, "test-team")
         left, right = dispatcher("left", batch=3), dispatcher("right", batch=3)
         claimed_by: dict[str, int] = {"left": 0, "right": 0}
         for _ in range(40):
@@ -284,7 +300,7 @@ def test_role_assigned_after_roleless_welcome_sends_one_orientation(fake: FakeMa
         assert channel.id is not None and user.id is not None
         await assign(lead, channel, RoleKey.SCRUM_MASTER)
 
-        await onboarding.start_journey(user)
+        await onboarding.start_journey(user, "test-team")
         assert (await dispatcher().run_once()).sent == 1
         assert (await steps_of(user))["welcome:None"].role_key_at_delivery is None
 
@@ -316,7 +332,7 @@ def test_role_before_welcome_makes_welcome_carry_orientation(fake: FakeMattermos
         channel = await make_channel("early-role")
         assert channel.id is not None and user.id is not None
         await assign(user, channel, RoleKey.TECH_LEAD)
-        await onboarding.start_journey(user)
+        await onboarding.start_journey(user, "test-team")
         await onboarding.on_role_assigned(user.id, channel.id)
         assert f"orientation:{channel.id}" not in await steps_of(user), "welcome pending: no separate orientation"
 
@@ -340,7 +356,7 @@ def test_follow_up_due_in_the_past_is_sent(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("followup")
         arrived = utcnow() - timedelta(hours=100)
-        await onboarding.start_journey(user, now=arrived)
+        await onboarding.start_journey(user, "test-team", now=arrived)
         summary = await dispatcher().run_once()
         assert summary.sent == 2
         assert len(fake.posts) == 2
@@ -351,15 +367,24 @@ def test_follow_up_due_in_the_past_is_sent(fake: FakeMattermost):
 
     run(scenario())
 
-
 def test_only_inactive_memberships_halt_workspace_steps(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("halt-all")
         inactive = await make_channel("halt-inactive")
         assert inactive.id is not None
         await assign(user, inactive, RoleKey.LEARNER)
-        await channel_repo.set_channel_active(inactive.id, False)
-        await onboarding.start_journey(user)
+        async with database_service.session() as s:
+            async with s.begin():
+                await s.execute(
+                    text(
+                        "UPDATE channel_roles "
+                        "SET status = :status "
+                        "WHERE channel_id = :cid AND user_id = :uid"
+                    ),
+                    {"status": MembershipStatus.INACTIVE.value, "cid": inactive.id, "uid": user.id},
+                )
+
+        await onboarding.start_journey(user, "test-team")
         assert (await dispatcher().run_once()).halted == 1
 
         active = await make_channel("halt-active")
@@ -368,16 +393,13 @@ def test_only_inactive_memberships_halt_workspace_steps(fake: FakeMattermost):
         assert summary.sent == 1
         assert "policy" in fake.posts[0]["message"].lower()
         assert (await steps_of(user))["welcome:None"].role_key_at_delivery == RoleKey.OPS_SUPPORT.value
-
     run(scenario())
-
-
 def test_start_journey_is_noop_when_disabled(fake: FakeMattermost, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "ONBOARDING_ENABLED", False)
 
     async def scenario() -> None:
         user = await make_user("disabled")
-        assert await onboarding.start_journey(user) is False
+        assert await onboarding.start_journey(user, "test-team") is False
         assert await steps_of(user) == {}
 
     run(scenario())
@@ -390,7 +412,7 @@ def test_settlement_requires_the_claim_holder(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("claim")
         assert user.id is not None
-        await onboarding.start_journey(user)
+        await onboarding.start_journey(user, "test-team")
         claimed = await outbox.claim_due_steps(worker_id=f"{PREFIX}holder", lease_seconds=600, limit=5)
         welcome = next(step for step in claimed if step.step_kind == "welcome")
         assert welcome.id is not None and welcome.claimed_by == f"{PREFIX}holder"
@@ -421,7 +443,7 @@ def test_role_assigned_while_welcome_is_claimed_still_gets_an_orientation(fake: 
         user = await make_user("inflight")
         channel = await make_channel("inflight")
         assert user.id is not None and channel.id is not None
-        await onboarding.start_journey(user)
+        await onboarding.start_journey(user, "test-team")
         # A worker claims the welcome (delivery in progress, role resolved as "none yet").
         await outbox.claim_due_steps(worker_id=f"{PREFIX}slow", lease_seconds=600, limit=5)
         # The role lands while the welcome is in flight: the orientation must be queued on its own.
