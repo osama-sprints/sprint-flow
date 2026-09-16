@@ -19,7 +19,7 @@ from app.core.langgraph.tools.results import (
 )
 from app.services import back_office
 from sqlmodel.ext.asyncio.session import AsyncSession
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, Optional
 
 from app.services.announcements import (
     resolve_announcement_channel,

@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from pytz import timezone as pytz_timezone
 from sqlmodel import func, select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -47,6 +46,8 @@ async def is_rate_limited(
     )
     result = await session.exec(stmt)
     count = result.one()
+    if not isinstance(count, int):
+        return False
     return count >= RATE_LIMIT_MAX_REQUESTS
 
 

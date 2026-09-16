@@ -1,12 +1,9 @@
 from datetime import datetime, timedelta, timezone
-from typing import Optional , List
+from typing import Optional
 from sqlmodel import Field
 from sqlmodel import Session, select, func
 from app.models.domain_base import DomainBase
 from app.models.enums import AnnouncementOutcome
-from pydantic import BaseModel
-
-from sqlmodel import Session
 from app.schemas.announcement import RecipientAudience
 
 def resolve_audience_by_role(session: Session, cohort_id: int, role_input: str) -> RecipientAudience:
@@ -31,7 +28,7 @@ class Announcement(DomainBase, table=True):
     delivery_mode: str = Field(description="e.g. broadcast or targeted")
     confirmation_status: str = Field(default="pending", description="pending, confirmed, or declined")
     mattermost_post_id: Optional[str] = Field(default=None, description="Set only on successful post")
-    outcome: AnnouncementOutcome = Field(default=AnnouncementOutcome.SENT)
+    outcome: AnnouncementOutcome = Field(default=AnnouncementOutcome.PENDING)
     status_changed_at: datetime = Field(default_factory=datetime.utcnow)
 
 def check_rate_limit(session: Session, cohort_id: int, window_minutes: int = 10, max_allowed: int = 1) -> bool:

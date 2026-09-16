@@ -247,7 +247,7 @@ async def resolve_role_context(user_id: int, channel_id: str | None = None) -> R
 
 
 async def resolve_onboarding_context(user_id: int, channel_id: str | None = None) -> OnboardingContext:
-    """Read everything a delivery decision needs, in short indep"""
+    """Read everything a delivery decision needs, in short independent queries."""
     active_rows = await channel_repo.list_roles_for_user(user_id, active_only=True)
     active_memberships = _membership_info(active_rows)
     all_rows = await channel_repo.list_roles_for_user(user_id, active_only=False)
@@ -272,7 +272,9 @@ def is_halted(step: OnboardingStep, context: OnboardingContext) -> str | None:
         return "inactive_membership"
 
     return None
-def _first_name(user: User) -> str:
+
+
+def first_name_of(user: User) -> str:
     display = (user.display_name or getattr(user, "first_name", "") or "").strip()
     if display:
         return display.split()[0]
@@ -294,7 +296,7 @@ def render_message(step_kind: str | OnboardingStepKind, context: RoleContext | N
     template = TEMPLATES.get((kind, variant), "")
     leads = ", ".join(context.lead_handles) if context is not None and context.lead_handles else NO_LEADS_TEXT
     return template.format(
-        first_name=_first_name(user),
+        first_name=first_name_of(user),
         channel_id=context.channel_id if context is not None else "",
         role_label=context.role_label if context is not None else "",
         bot_handle=f"@{settings.MATTERMOST_BOT_USERNAME}",
@@ -426,6 +428,7 @@ async def on_role_assigned(
     if welcome is not None and welcome.status == OnboardingStepStatus.PENDING.value and not _claim_in_flight(welcome):
         logger.info("onboarding_orientation_deferred_to_welcome", user_id=user_id, channel_id=channel_id)
         return
+
 
     existing = await outbox.get_step_for(user_id, channel_id, OnboardingStepKind.ORIENTATION)
     if existing is not None:

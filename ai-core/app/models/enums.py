@@ -9,6 +9,7 @@ from enum import StrEnum
 
 
 class AnnouncementOutcome(StrEnum):
+    PENDING = "pending"
     SENT = "sent"
     CANCELLED = "cancelled"
     RATE_LIMITED = "rate_limited"
