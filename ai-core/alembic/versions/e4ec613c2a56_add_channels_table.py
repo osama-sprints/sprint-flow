@@ -1,8 +1,8 @@
-"""create announcements table.
+"""add channels table.
 
-Revision ID: 88dc2e879c6b
-Revises: 41cec28ef92a
-Create Date: 2026-09-15 09:54:53.077676
+Revision ID: e4ec613c2a56
+Revises: 88dc2e879c6b
+Create Date: 2026-09-16 12:50:32.190730
 
 """
 from typing import Sequence, Union
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '88dc2e879c6b'
-down_revision = ('9199422f052d', 'e79a5dd80fe3', '0004_escalation_raw_response')
+revision: str = 'e4ec613c2a56'
+down_revision: Union[str, Sequence[str], None] = '88dc2e879c6b'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
