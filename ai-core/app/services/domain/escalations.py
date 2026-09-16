@@ -209,8 +209,7 @@ async def set_escalation_status(
             ticket.human_dm_channel_id = human_dm_channel_id
         if human_dm_thread_id is not None:
             ticket.human_dm_thread_id = human_dm_thread_id
-        if status == EscalationStatus.RESOLVED:
-            ticket.resolved_at = now
+
         ticket.updated_at = now
         s.add(ticket)
         await s.flush()

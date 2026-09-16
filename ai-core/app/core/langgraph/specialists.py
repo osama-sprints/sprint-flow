@@ -72,7 +72,14 @@ _LEARNER_SUPPORT_CONTEXT = (
     "that it needs a tech lead or scrum master of their channel (or a platform administrator "
     "for a new channel) and suggest they ask that person; do not attempt it and do not "
     "promise to do it later.\n"
-    "If a tool answers with [AUTHORISATION_REFUSED], relay the refusal sentence exactly."
+    "If a tool answers with [AUTHORISATION_REFUSED], relay the refusal sentence exactly.\n"
+    "MANDATORY ESCALATION RULE: If you cannot provide a grounded, supported answer to a policy, "
+    "process, programme or operational question — whether because no document context was provided, "
+    "the context does not cover it, or you are genuinely uncertain — you MUST call the "
+    "'escalate_to_human' tool immediately. Do NOT say 'I\u2019m not sure', 'you should contact ops', "
+    "or any soft refusal without first calling that tool. The tool opens a tracked ticket and "
+    "contacts the right person automatically. Relay the tool's returned sentence to the learner verbatim. "
+    "Never skip this step for unanswered policy or programme questions."
 )
 
 _BACK_OFFICE_CONTEXT = (
@@ -141,12 +148,14 @@ _POLICY_SUPPORT_CONTEXT = (
     "Provide clean answers only; do not expose internal state strings, code blocks, or system tags such as "
     "[ESCALATION_OPENED_NO_HUMAN], [ESCALATED], or similar markers in your final response. "
     "Do not explain retrieval mechanics, vector search internals, or mention that a document does not contain specific snippets. "
-    "Answer directly from the retrieved context or general knowledge when appropriate. "
+    "Answer directly from the retrieved context when appropriate. "
     "Answer strictly using ONLY the provided document snippets below when they are relevant. "
     "Do not include file metadata or citation lines anywhere in your response. Never append strings such as "
-    "Source:, Section:, or Page:. Present only the core answer with natural explanatory formatting. "
-    "If the provided text does not contain enough information to answer any part of the question, "
-    "state clearly that the documentation does not cover it instead of speculating or adding outside knowledge."
+    "Source:, Section:, or Page:. Present only the core answer with natural explanatory formatting.\n"
+    "MANDATORY ESCALATION RULE: If the provided document text does NOT contain enough information to answer "
+    "the user's question, or if the question asks about a policy/topic not covered in the retrieved text, "
+    "you MUST call the 'escalate_to_human' tool immediately. Do NOT say 'the documentation does not cover it' "
+    "or issue any text refusal without calling that tool. Relay the tool's returned sentence verbatim."
 )
 
 SPECIALISTS: Dict[str, Specialist] = {

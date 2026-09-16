@@ -63,10 +63,16 @@ BACK_OFFICE_TOOLS: list[BaseTool] = [
     *STANDUP_TOOLS,
 ]
 
+POLICY_SUPPORT_TOOLS: list[BaseTool] = [
+    ask_human,
+    escalate_to_human,
+]
+
 TOOL_GROUPS: dict[str, list[BaseTool]] = {
     "general": GENERAL_TOOLS,
     "learner_support": LEARNER_SUPPORT_TOOLS,
     "back_office": BACK_OFFICE_TOOLS,
+    "policy_support": POLICY_SUPPORT_TOOLS,
 }
 
 
