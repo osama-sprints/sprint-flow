@@ -1,3 +1,4 @@
+from app.models.announcement import Announcement  
 from app.models.ceremony import Ceremony
 from app.models.ceremony_reminder import CeremonyReminder
 from app.models.ceremony_amendment import CeremonyAmendment
@@ -31,11 +32,13 @@ DOMAIN_TABLES: tuple[str, ...] = (
     "knowledge_candidates",
     "onboarding_steps",
     "policy_document_chunks",
+    "announcements", 
 )
 
 __all__ = [
     "DOMAIN_TABLES",
     "Ceremony",
+    "Announcement", 
     "CeremonyAmendment",
     "CeremonyReminder",
     "CeremonyType",
