@@ -61,6 +61,16 @@ from app.services.domain import sprints as sprint_repo
 from app.services.domain.channels import ChannelMember
 from app.services.identity import resolve_person
 
+from app.services.database import session_scope
+from app.services.announcements import (
+    cancel_announcement as _cancel_announcement,
+    confirm_and_dispatch_announcement,
+    create_announcement_preview,
+    resolve_announcement_channel,
+    resolve_recipients_by_role,
+    resolve_recipients_by_usernames,
+)
+
 SPRINT_NAME_MAX_LENGTH = 128
 
 KNOWN_ROLES_SENTENCE = ", ".join(ROLE_LABELS[key].lower() for key in RoleKey)
@@ -112,6 +122,14 @@ class ChannelMembersResult:
     channel_id: str
     members: list[ChannelMember]
     message: str
+@dataclass(frozen=True)
+class AnnouncementResult:
+    """Outcome of the announcement actions."""
+
+    code: ResultCode
+    announcement_id: int | None
+    message: str
+    detail: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +436,110 @@ async def open_sprint(
         f"Opened sprint '{sprint.name}' for this channel "
         f"({sprint.start_date.isoformat()} to {sprint.end_date.isoformat()}).",
     )
+
+async def prepare_announcement_preview(
+    cohort_id: int,
+    raw_text: str,
+    delivery_mode: str,
+    target_type: str,
+    target_value: str | None = None,
+) -> AnnouncementResult:
+    """Prepare a preview for an announcement to a cohort, pending confirmation.
+
+    Args:
+        cohort_id: The cohort (sprint) to announce to.
+        raw_text: The announcement's exact text.
+        delivery_mode: How it will be delivered.
+        target_type: ``"role"`` or ``"usernames"``.
+        target_value: The role word, or a comma-separated list of usernames.
+
+    Returns:
+        AnnouncementResult: The prepared preview, pending confirmation.
+
+    Raises:
+        AuthorisationRefused: When the requester may not announce to this cohort's channel.
+        ValidationFailed: Unknown or inactive cohort, or unknown/non-member usernames.
+    """
+    requester_user = await require_requester_user(action="prepare_announcement_preview")
+
+    async with session_scope() as session:
+        resolved_channel = await resolve_announcement_channel(session, requester_user, cohort_id)
+
+        if target_type == "role" and target_value:
+            resolved_audience = await resolve_recipients_by_role(session, cohort_id, target_value)
+        elif target_type == "usernames" and target_value:
+            usernames = [u.strip() for u in target_value.split(",") if u.strip()]
+            resolved_audience = await resolve_recipients_by_usernames(session, cohort_id, usernames)
+        else:
+            resolved_audience = []
+
+        preview = await create_announcement_preview(
+            session=session,
+            cohort_id=cohort_id,
+            raw_text=raw_text,
+            delivery_mode=delivery_mode,
+            resolved_channel=resolved_channel,
+            resolved_audience=resolved_audience,
+            created_by_user_id=requester_user.id,
+        )
+
+    logger.info(
+        "back_office_announcement_previewed",
+        user_id=requester_user.id,
+        cohort_id=cohort_id,
+        announcement_id=preview["audit_id"],
+    )
+    return AnnouncementResult(
+        ResultCode.ANNOUNCEMENT_PREVIEW_READY,
+        preview["audit_id"],
+        f"Prepared announcement {preview['audit_id']} for cohort {cohort_id} "
+        f"(audience of {len(resolved_audience)}). Reply to confirm or cancel it.",
+        preview,
+    )
+
+
+async def confirm_announcement(announcement_id: int) -> AnnouncementResult:
+    """Confirm and dispatch a previously prepared announcement.
+
+    Args:
+        announcement_id: The prepared announcement to send.
+
+    Returns:
+        AnnouncementResult: The dispatch outcome.
+    """
+    await require_requester_user(action="confirm_announcement")
+
+    async with session_scope() as session:
+        outcome = await confirm_and_dispatch_announcement(session, announcement_id)
+
+    code_by_status = {
+        "success": ResultCode.ANNOUNCEMENT_CONFIRMED,
+        "already_processed": ResultCode.ANNOUNCEMENT_ALREADY_PROCESSED,
+        "rate_limited": ResultCode.ANNOUNCEMENT_RATE_LIMITED,
+        "failed": ResultCode.ANNOUNCEMENT_DISPATCH_FAILED,
+    }
+    code = code_by_status.get(outcome["status"], ResultCode.SYSTEM_ERROR)
+    logger.info("back_office_announcement_confirmed", announcement_id=announcement_id, outcome=outcome["status"])
+    return AnnouncementResult(code, announcement_id, outcome["message"], outcome)
+
+
+async def cancel_announcement(announcement_id: int) -> AnnouncementResult:
+    """Cancel a prepared announcement before it is sent.
+
+    Args:
+        announcement_id: The prepared announcement to cancel.
+
+    Returns:
+        AnnouncementResult: The cancellation outcome.
+    """
+    await require_requester_user(action="cancel_announcement")
+
+    async with session_scope() as session:
+        outcome = await _cancel_announcement(session, announcement_id)
+
+    code = ResultCode.ANNOUNCEMENT_CANCELLED if outcome["cancelled"] else ResultCode.ANNOUNCEMENT_CANNOT_CANCEL
+    logger.info("back_office_announcement_cancelled", announcement_id=announcement_id, cancelled=outcome["cancelled"])
+    return AnnouncementResult(code, announcement_id, outcome["message"], outcome)
 
 
 async def _open_existing_sprint(sprint: Sprint, channel_id: str, actor: User) -> SprintResult:
