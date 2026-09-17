@@ -287,6 +287,8 @@ class Settings:
         self.MATTERMOST_OUTGOING_WEBHOOK_TOKEN = os.getenv("MATTERMOST_OUTGOING_WEBHOOK_TOKEN", "")
         self.MATTERMOST_BOT_USERNAME = os.getenv("MATTERMOST_BOT_USERNAME", "sprintflow-assistant")
         self.MATTERMOST_HTTP_TIMEOUT = float(os.getenv("MATTERMOST_HTTP_TIMEOUT", "30"))
+        self.MATTERMOST_EVENT_DEDUP_TTL = int(os.getenv("MATTERMOST_EVENT_DEDUP_TTL", "60"))
+        self.MATTERMOST_INGESTION_DIR = os.getenv("MATTERMOST_INGESTION_DIR", "/app/data/sample_policies")
 
         # WebSocket listener — the only way to receive direct messages, since
         # Mattermost never fires outgoing webhooks outside public channels.

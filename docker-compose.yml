@@ -149,7 +149,7 @@ services:
       - ./ai-core/scripts:/app/scripts
       - ./ai-core/logs:/app/logs
       - ./ai-core/tests:/app/tests
-      - ./data:/app/data:ro
+      - ./data:/app/data:rw
     healthcheck:
       # python:3.13-slim has no curl. urlopen raises on 503, which is what we
       # want: /health returns 503 when the database is unreachable.

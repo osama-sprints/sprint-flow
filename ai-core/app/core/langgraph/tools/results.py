@@ -23,9 +23,9 @@ from langgraph.errors import GraphBubbleUp
 
 from app.core.logging import logger
 from app.services.authorisation import (
-    REFUSAL_MESSAGE,
     AuthorisationRefused,
     ValidationFailed,
+    refusal_message,
 )
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -107,7 +107,7 @@ def _handle(exc: BaseException, tool_name: str) -> str:
         raise exc
     if isinstance(exc, AuthorisationRefused):
         logger.warning("tool_refused", tool=tool_name, reason=exc.reason, action=exc.action, channel_id=exc.channel_id)
-        return tool_result(ResultCode.AUTHORISATION_REFUSED, REFUSAL_MESSAGE)
+        return tool_result(ResultCode.AUTHORISATION_REFUSED, refusal_message(exc.action))
     if isinstance(exc, ValidationFailed):
         logger.info("tool_validation_failed", tool=tool_name, detail=str(exc))
         return tool_result(ResultCode.VALIDATION_ERROR, str(exc))

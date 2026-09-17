@@ -71,3 +71,4 @@ class EscalationTicket(DomainBase, table=True):
     human_dm_channel_id: str | None = Field(default=None, max_length=64)
     human_dm_thread_id: str | None = Field(default=None, max_length=64)
     sprint_id: int | None = Field(default=None, foreign_key="sprints.id")
+    resolved_at: datetime | None = Field(default=None, sa_type=TZ_DATETIME)

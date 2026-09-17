@@ -18,7 +18,63 @@ from app.core.langgraph.tools.results import (
     tool_result,
 )
 from app.services import back_office
+from app.services.database import session_scope
+from typing import Any, Dict, Optional
 
+from app.services.announcements import (
+    resolve_announcement_channel,
+    resolve_recipients_by_role,
+    resolve_recipients_by_usernames,
+    create_announcement_preview,
+    confirm_and_dispatch_announcement,
+    cancel_announcement,
+)
+
+@tool
+async def prepare_announcement_preview_tool(
+    cohort_id: int,
+    raw_text: str,
+    delivery_mode: str,
+    target_type: str,
+    target_value: Optional[str] = None,
+    created_by_user_id: int = 1,
+) -> Dict[str, Any]:
+    """Prepare a preview for an announcement before confirmation."""
+    async with session_scope() as session:
+        resolved_channel = await resolve_announcement_channel(session, None, cohort_id)
+        if target_type == "role" and target_value:
+            resolved_audience = await resolve_recipients_by_role(session, cohort_id, target_value)
+        elif target_type == "usernames" and target_value:
+            usernames = [u.strip() for u in target_value.split(",")]
+            resolved_audience = await resolve_recipients_by_usernames(session, cohort_id, usernames)
+        else:
+            resolved_audience = []
+
+        return await create_announcement_preview(
+            session=session,
+            cohort_id=cohort_id,
+            raw_text=raw_text,
+            delivery_mode=delivery_mode,
+            resolved_channel=resolved_channel,
+            resolved_audience=resolved_audience,
+            created_by_user_id=created_by_user_id,
+        )
+
+@tool
+async def confirm_announcement_tool(
+    announcement_id: int,
+) -> Dict[str, Any]:
+    """Confirm and dispatch a prepared announcement."""
+    async with session_scope() as session:
+        return await confirm_and_dispatch_announcement(session, announcement_id)
+
+@tool
+async def cancel_announcement_tool(
+    announcement_id: int,
+) -> Dict[str, Any]:
+    """Cancel a prepared announcement."""
+    async with session_scope() as session:
+        return await cancel_announcement(session, announcement_id)
 
 @tool
 @guarded_tool
@@ -108,6 +164,14 @@ async def list_channel_members() -> str:
     return tool_result(result.code, result.message)
 
 
-TOOLS: list[BaseTool] = [assign_role, open_sprint, list_channel_roles_for_requester, list_channel_members]
+TOOLS: list[BaseTool] = [
+    assign_role, 
+    open_sprint,
+    list_channel_roles_for_requester,
+    list_channel_members,
+    prepare_announcement_preview_tool,
+    confirm_announcement_tool,
+    cancel_announcement_tool
+]
 
-__all__ = ["TOOLS", "assign_role", "list_channel_members", "list_channel_roles_for_requester", "open_sprint"]
+__all__ = ["TOOLS", "assign_role", "list_channel_members", "list_channel_roles_for_requester", "open_sprint", "prepare_announcement_preview_tool", "confirm_announcement_tool", "cancel_announcement_tool"]

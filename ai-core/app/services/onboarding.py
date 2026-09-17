@@ -247,68 +247,38 @@ async def resolve_role_context(user_id: int, channel_id: str | None = None) -> R
 
 
 async def resolve_onboarding_context(user_id: int, channel_id: str | None = None) -> OnboardingContext:
-    """Read everything a delivery decision needs, in short independent queries.
-
-    Args:
-        user_id: The person.
-        channel_id: The step's channel, or None for workspace-level steps.
-
-    Returns:
-        OnboardingContext: Role and active memberships.
-    """
-    rows = await channel_repo.list_roles_for_user(user_id, active_only=True)
-    memberships = _membership_info(rows)
+    """Read everything a delivery decision needs, in short independent queries."""
+    active_rows = await channel_repo.list_roles_for_user(user_id, active_only=True)
+    active_memberships = _membership_info(active_rows)
+    all_rows = await channel_repo.list_roles_for_user(user_id, active_only=False)
+    all_memberships = _membership_info(all_rows)
 
     if channel_id is not None:
-        chosen = next((m for m in memberships if m.channel_id == channel_id), None)
+        chosen = next((m for m in active_memberships if m.channel_id == channel_id), None)
     else:
-        chosen = pick_primary_membership(memberships)
+        chosen = pick_primary_membership(active_memberships)
 
     role = await _role_context_for(chosen, user_id) if chosen is not None else None
-    return OnboardingContext(role=role, memberships=memberships)
-
-
+    return OnboardingContext(role=role, memberships=all_memberships)
 # ---------------------------------------------------------------------------
 # Halting
 # ---------------------------------------------------------------------------
-
-
 def is_halted(step: OnboardingStep, context: OnboardingContext) -> str | None:
-    """Decide whether a step must not be delivered right now.
-
-    Args:
-        step: The claimed outbox row.
-        context: What is known about the person at delivery time.
-
-    Returns:
-        str | None: A reason when the step must wait, None when it may go out.
-    """
     if step.channel_id is not None:
         if context.role is None or context.role.channel_id != step.channel_id:
             return "membership_missing"
         return None
+    if context.role is None and len(context.memberships) > 0:
+        return "inactive_membership"
+
     return None
 
 
-# ---------------------------------------------------------------------------
-# Rendering
-# ---------------------------------------------------------------------------
-
-
 def first_name_of(user: User) -> str:
-    """Pick how to address a person.
-
-    Args:
-        user: The stored user row.
-
-    Returns:
-        str: The first word of the display name, else the handle.
-    """
-    display = (user.display_name or "").strip()
+    display = (user.display_name or getattr(user, "first_name", "") or "").strip()
     if display:
         return display.split()[0]
     return user.username or "there"
-
 
 def render_message(step_kind: str | OnboardingStepKind, context: RoleContext | None, user: User) -> str:
     """Render the Markdown for one step.
@@ -458,6 +428,7 @@ async def on_role_assigned(
     if welcome is not None and welcome.status == OnboardingStepStatus.PENDING.value and not _claim_in_flight(welcome):
         logger.info("onboarding_orientation_deferred_to_welcome", user_id=user_id, channel_id=channel_id)
         return
+
 
     existing = await outbox.get_step_for(user_id, channel_id, OnboardingStepKind.ORIENTATION)
     if existing is not None:

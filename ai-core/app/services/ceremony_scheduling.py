@@ -408,9 +408,10 @@ def render_calendar(view: CalendarView) -> str:
             else format_utc(ceremony.scheduled_at)
         )
         agenda = ceremony.agenda or "no agenda"
+        link_suffix = f" — link: {ceremony.meet_link}" if ceremony.meet_link else ""
         lines.append(
             f"- #{ceremony.id} {entry.type_label} — {when} — {ceremony.duration_minutes} min — "
-            f"organiser {entry.organizer_handle} — agenda: {agenda} — status: {ceremony.status}"
+            f"organiser {entry.organizer_handle} — agenda: {agenda} — status: {ceremony.status}{link_suffix}"
         )
     return "\n".join(lines)
 
@@ -614,21 +615,22 @@ async def commit_schedule(
         org_user = await identity_repo.get_user(user.id)
         org_email = org_user.email if org_user else None
 
-        link = await create_meeting_link(
+        link, event_id = await create_meeting_link(
             title=proposal.ceremony_type_label,
             start=proposal.scheduled_at,
             duration_minutes=proposal.duration_minutes,
             description=proposal.agenda,
             organizer_email=org_email,
         )
-        if link:
+        if link or event_id:
             await ceremony_repo.update_ceremony(
                 ceremony.id,  # type: ignore[arg-type]
                 amended_by_id=user.id,
-                changes={"meet_link": link},
+                changes={"meet_link": link, "external_event_id": event_id},
                 reason="Generated meeting link",
             )
             ceremony.meet_link = link
+            ceremony.external_event_id = event_id
 
     return ceremony
 
@@ -790,6 +792,20 @@ async def commit_amendment(
     )
     if updated is None:
         raise ValidationFailed(f"There is no ceremony #{proposal.ceremony_id}.")
+
+    if updated.external_event_id:
+        from app.services.meeting_link import cancel_meeting_link, update_meeting_link
+
+        if proposal.cancel:
+            await cancel_meeting_link(updated.external_event_id)
+        elif "scheduled_at" in proposal.changes:
+            await update_meeting_link(
+                updated.external_event_id,
+                start=updated.scheduled_at,
+                duration_minutes=updated.duration_minutes,
+                description=updated.agenda,
+            )
+
     trail = await ceremony_repo.list_amendments(proposal.ceremony_id)
     logger.info(
         "ceremony_amended",
