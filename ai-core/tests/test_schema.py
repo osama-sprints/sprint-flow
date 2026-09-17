@@ -107,7 +107,24 @@ def test_migration_downgrade_drops_exactly_the_domain_tables_in_reverse_order():
     op = RecordingOp()
     migration.op = op
     migration.downgrade()
-    assert op.dropped == list(reversed(DOMAIN_TABLES[:11]))
+    # Migration 0001 created these tables; later migrations add their own
+    # (notably the standup prompt pair), so derive the list by name instead of
+    # a position slice that later FKs like daily_standups -> daily_standup_prompts
+    # would silently invalidate.
+    created_by_0001 = {
+        "users",
+        "roles",
+        "ceremony_types",
+        "channel_roles",
+        "sprints",
+        "ceremonies",
+        "ceremony_amendments",
+        "ceremony_reminders",
+        "daily_standups",
+        "escalation_tickets",
+        "onboarding_steps",
+    }
+    assert [n for n in reversed(DOMAIN_TABLES) if n in created_by_0001] == op.dropped
 
 
 def test_migration_head_revision_id():

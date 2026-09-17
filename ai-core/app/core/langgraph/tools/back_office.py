@@ -18,7 +18,8 @@ from app.core.langgraph.tools.results import (
     tool_result,
 )
 from app.services import back_office
-from typing import Optional
+from app.services.database import session_scope
+from typing import Any, Dict, Optional
 
 
 @tool
@@ -29,65 +30,44 @@ async def prepare_announcement_preview_tool(
     delivery_mode: str,
     target_type: str,
     target_value: Optional[str] = None,
-) -> str:
-    """Prepare a preview for an announcement to a cohort, pending confirmation.
+    created_by_user_id: int = 1,
+) -> Dict[str, Any]:
+    """Prepare a preview for an announcement before confirmation."""
+    async with session_scope() as session:
+        resolved_channel = await resolve_announcement_channel(session, None, cohort_id)
+        if target_type == "role" and target_value:
+            resolved_audience = await resolve_recipients_by_role(session, cohort_id, target_value)
+        elif target_type == "usernames" and target_value:
+            usernames = [u.strip() for u in target_value.split(",")]
+            resolved_audience = await resolve_recipients_by_usernames(session, cohort_id, usernames)
+        else:
+            resolved_audience = []
 
-    Use this when a tech lead, scrum master or superadmin asks to draft or
-    preview an announcement. The tool enforces cohort-channel authority from
-    stored data; relay an ``[AUTHORISATION_REFUSED]`` result verbatim.
-
-    Args:
-        cohort_id: The cohort to announce to.
-        raw_text: The announcement's exact text.
-        delivery_mode: How it will be delivered.
-        target_type: ``"role"`` or ``"usernames"``.
-        target_value: The role word, or a comma-separated list of usernames.
-
-    Returns:
-        str: ``[CODE] sentence`` — ANNOUNCEMENT_PREVIEW_READY,
-        AUTHORISATION_REFUSED, VALIDATION_ERROR or SYSTEM_ERROR.
-    """
-    result = await back_office.prepare_announcement_preview(
-        cohort_id=cohort_id,
-        raw_text=raw_text,
-        delivery_mode=delivery_mode,
-        target_type=target_type,
-        target_value=target_value,
-    )
-    return tool_result(result.code, result.message)
-
+        return await create_announcement_preview(
+            session=session,
+            cohort_id=cohort_id,
+            raw_text=raw_text,
+            delivery_mode=delivery_mode,
+            resolved_channel=resolved_channel,
+            resolved_audience=resolved_audience,
+            created_by_user_id=created_by_user_id,
+        )
 
 @tool
-@guarded_tool
-async def confirm_announcement_tool(announcement_id: int) -> str:
-    """Confirm and dispatch a previously prepared announcement.
-
-    Args:
-        announcement_id: The prepared announcement to send.
-
-    Returns:
-        str: ``[CODE] sentence`` — ANNOUNCEMENT_CONFIRMED, ANNOUNCEMENT_ALREADY_PROCESSED,
-        ANNOUNCEMENT_RATE_LIMITED, ANNOUNCEMENT_DISPATCH_FAILED, AUTHORISATION_REFUSED
-        or SYSTEM_ERROR.
-    """
-    result = await back_office.confirm_announcement(announcement_id)
-    return tool_result(result.code, result.message)
-
+async def confirm_announcement_tool(
+    announcement_id: int,
+) -> Dict[str, Any]:
+    """Confirm and dispatch a prepared announcement."""
+    async with session_scope() as session:
+        return await confirm_and_dispatch_announcement(session, announcement_id)
 
 @tool
-@guarded_tool
-async def cancel_announcement_tool(announcement_id: int) -> str:
-    """Cancel a prepared announcement before it is sent.
-
-    Args:
-        announcement_id: The prepared announcement to cancel.
-
-    Returns:
-        str: ``[CODE] sentence`` — ANNOUNCEMENT_CANCELLED, ANNOUNCEMENT_CANNOT_CANCEL,
-        AUTHORISATION_REFUSED or SYSTEM_ERROR.
-    """
-    result = await back_office.cancel_announcement(announcement_id)
-    return tool_result(result.code, result.message)
+async def cancel_announcement_tool(
+    announcement_id: int,
+) -> Dict[str, Any]:
+    """Cancel a prepared announcement."""
+    async with session_scope() as session:
+        return await cancel_announcement(session, announcement_id)
 
 @tool
 @guarded_tool

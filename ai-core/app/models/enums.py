@@ -9,6 +9,7 @@ from enum import StrEnum
 
 
 class AnnouncementOutcome(StrEnum):
+    PENDING = "pending"
     SENT = "sent"
     CANCELLED = "cancelled"
     RATE_LIMITED = "rate_limited"
@@ -183,6 +184,35 @@ class KnowledgeCandidateStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+class StandupPromptStatus(StrEnum):
+    """Lifecycle of one daily standup prompt.
+
+    The row is written as ``pending`` *before* the DM goes out; ``dispatched``
+    means the prompt was posted and we are waiting for the reply. A day that
+    closes without a reply becomes ``missed`` (no standup entry is fabricated),
+    and a prompt that could never be delivered becomes ``failed`` after its
+    retries are exhausted.
+    """
+
+    PENDING = "pending"
+    DISPATCHED = "dispatched"
+    ANSWERED = "answered"
+    MISSED = "missed"
+    FAILED = "failed"
+
+
+class StandupReplyOutcome(StrEnum):
+    """What a raw standup reply became when it was recorded.
+
+    ``accepted`` created (or filled) today's standup entry; ``duplicate`` came
+    after the day was already answered; ``late`` after the day closed missed.
+    """
+
+    ACCEPTED = "accepted"
+    DUPLICATE = "duplicate"
+    LATE = "late"
 
 
 def normalise_role_key(value: str) -> RoleKey | None:
