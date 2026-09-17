@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-
+from contextlib import asynccontextmanager
 import pytest
 
 from app.services import knowledge_extraction, knowledge_review
@@ -231,22 +231,52 @@ def test_deterministic_chunk_id_is_stable_across_calls():
     assert first != different_escalation
 
 
-def test_pending_candidate_not_retrievable_via_search():
-    captured_chunks: list = []
+def test_extraction_never_touches_the_vector_store(monkeypatch):
+    """A pending candidate must never become searchable. Rather than asserting
+    on a list nothing ever populated, this patches the real PolicyVectorStore
+    class and proves extraction genuinely never calls it."""
+    from app.services.document_ingestion.vector_store import PolicyVectorStore
 
-    async def fake_upsert(chunks, embeddings):
-        captured_chunks.extend(chunks)
+    upsert_mock = AsyncMock()
+    monkeypatch.setattr(PolicyVectorStore, "upsert_chunks", upsert_mock)
 
-    with patch.object(
-        knowledge_review, "generate_embeddings", AsyncMock(return_value=[0.1] * 1536)
-    ), patch.object(
-        knowledge_review,
-        "PolicyVectorStore",
-        return_value=SimpleNamespace(upsert_chunks=fake_upsert),
-    ):
-        pass
+    ticket = SimpleNamespace(
+        id=42,
+        status="resolved",
+        answer="answer text",
+        raw_human_response="Approved, one-off due to the outage.",
+        question="Can I get an extension?",
+        channel_id="C1",
+        ticket_ref="ESC-000042",
+    )
 
-    assert captured_chunks == []
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, model, pk):
+            return ticket
+
+        async def exec(self, stmt):
+            class FakeResult:
+                def scalar_one_or_none(self_):
+                    return 1
+
+            return FakeResult()
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield FakeSession()
+
+    with patch.object(knowledge_extraction, "session_scope", fake_scope), patch.object(
+        knowledge_extraction, "_extract_candidate", AsyncMock(return_value=("learner", "narrowed statement"))
+    ), patch.object(knowledge_extraction, "_notify_reviewer", AsyncMock()):
+        asyncio.run(knowledge_extraction.extract_candidate_for_ticket(42))
+
+    upsert_mock.assert_not_awaited()
 
 
 def test_rejected_candidate_never_reaches_vector_store(mock_session):
@@ -263,27 +293,134 @@ def test_rejected_candidate_never_reaches_vector_store(mock_session):
 
 
 def test_internal_knowledge_not_exposed_to_learner_audience():
+    """Calls the real similarity_search() and inspects the actual WHERE ... IN (...)
+    clause it built, instead of re-deriving the allowed-audiences tuple in the test."""
+    from contextlib import asynccontextmanager
     from app.services.document_ingestion.vector_store import PolicyVectorStore
 
-    store = PolicyVectorStore()
-    learner_audience = "learner"
-    allowed = (
-        ("admin", "learner", "public", "internal_operator")
-        if learner_audience in (None, "admin", "superadmin")
-        else (learner_audience,)
+    captured = {}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def execute(self, stmt):
+            captured["stmt"] = stmt
+
+            class FakeResult:
+                def all(self_):
+                    return []
+
+            return FakeResult()
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield FakeSession()
+
+    with patch("app.services.document_ingestion.vector_store.session_scope", fake_scope):
+        asyncio.run(
+            PolicyVectorStore().similarity_search(query_embedding=[0.1] * 1536, audience="learner")
+        )
+
+    allowed_audiences = captured["stmt"].whereclause.right.value
+    assert "internal_operator" not in allowed_audiences
+    assert "learner" in allowed_audiences
+
+
+def test_staff_query_can_see_internal_knowledge():
+    """The other half of the guarantee above: a staff/superadmin query
+    (audience=None) must be able to see internal_operator content, or approved
+    internal knowledge would never be retrievable by anyone at all — this is
+    exactly the bug we found and fixed in allowed_audiences earlier."""
+    from contextlib import asynccontextmanager
+    from app.services.document_ingestion.vector_store import PolicyVectorStore
+
+    captured = {}
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def execute(self, stmt):
+            captured["stmt"] = stmt
+
+            class FakeResult:
+                def all(self_):
+                    return []
+
+            return FakeResult()
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield FakeSession()
+
+    with patch("app.services.document_ingestion.vector_store.session_scope", fake_scope):
+        asyncio.run(
+            PolicyVectorStore().similarity_search(query_embedding=[0.1] * 1536, audience=None)
+        )
+
+    allowed_audiences = captured["stmt"].whereclause.right.value
+    assert "internal_operator" in allowed_audiences
+
+
+def test_extraction_idempotent_across_two_runs():
+    """Runs the real extract_candidate_for_ticket() twice for the same
+    escalation, with a fake session that mimics Postgres's ON CONFLICT DO
+    NOTHING by tracking which escalation_ids have already been inserted --
+    reading the real escalation_id out of the real statement the function
+    built, not a value the test invented."""
+    ticket = SimpleNamespace(
+        id=42,
+        status="resolved",
+        answer="answer text",
+        raw_human_response="Approved, one-off due to the outage.",
+        question="Can I get an extension?",
+        channel_id="C1",
+        ticket_ref="ESC-000042",
     )
-    assert "internal_operator" not in allowed
-    assert "learner" in allowed
+    already_inserted: set[int] = set()
 
+    class FakeSession:
+        async def __aenter__(self):
+            return self
 
-def test_extraction_idempotency_on_conflict_do_nothing():
-    from unittest.mock import MagicMock
+        async def __aexit__(self, *exc):
+            return False
 
-    fake_result = MagicMock()
-    fake_result.scalar_one_or_none.return_value = None
+        async def get(self, model, pk):
+            return ticket
 
-    with patch("app.services.knowledge_extraction.database_service", create=True):
-        assert fake_result.scalar_one_or_none() is None
+        async def exec(self, stmt):
+            escalation_id = stmt.compile().params["escalation_id"]
+
+            class FakeResult:
+                def scalar_one_or_none(self_):
+                    if escalation_id in already_inserted:
+                        return None
+                    already_inserted.add(escalation_id)
+                    return 999
+
+            return FakeResult()
+
+    @asynccontextmanager
+    async def fake_scope():
+        yield FakeSession()
+
+    with patch.object(knowledge_extraction, "session_scope", fake_scope), patch.object(
+        knowledge_extraction, "_extract_candidate", AsyncMock(return_value=("learner", "narrowed statement"))
+    ), patch.object(knowledge_extraction, "_notify_reviewer", AsyncMock()) as notify_mock:
+        first_run = asyncio.run(knowledge_extraction.extract_candidate_for_ticket(42))
+        second_run = asyncio.run(knowledge_extraction.extract_candidate_for_ticket(42))
+
+    assert first_run is True
+    assert second_run is False
+    notify_mock.assert_awaited_once()
 
 
 def test_list_kc_command_is_recognised():
