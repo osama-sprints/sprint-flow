@@ -23,5 +23,6 @@ def load_system_prompt(username: Optional[str] = None, **kwargs):
         agent_name=settings.PROJECT_NAME + " Agent",
         current_date_and_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         user_context=user_context,
+        policy_context=kwargs.pop("policy_context", ""),
         **kwargs,
     )

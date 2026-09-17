@@ -98,6 +98,7 @@ verify: ## Run every verification suite in order (stack up + bootstrapped; takes
 	./scripts/smoke_test.sh && \
 	python3 scripts/verify_schema.py && \
 	python3 scripts/verify_authorisation.py && \
+	python3 scripts/verify_escalation.py && \
 	python3 scripts/verify_orchestration.py && \
 	python3 scripts/verify_scheduling.py && \
 	python3 scripts/verify_onboarding_journey.py && \

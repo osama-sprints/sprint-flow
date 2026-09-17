@@ -68,12 +68,8 @@ def _authorised() -> Optional[RequesterContext]:
         logger.warning("admin_tool_denied_no_requester")
         return None
 
-    if not requester.is_superadmin:
+    if not requester.is_admin:
         logger.warning("admin_tool_denied_not_allowlisted", user_name=requester.username, email=requester.email)
-        return None
-
-    if not requester.is_direct_message:
-        logger.warning("admin_tool_denied_not_dm", user_name=requester.username)
         return None
 
     return requester
