@@ -44,7 +44,7 @@ from app.core.requester import (  # noqa: E402
 from app.models.enums import RoleKey  # noqa: E402
 from app.services import escalation  # noqa: E402
 from app.services.database import database_service  # noqa: E402
-from app.services.domain import cohorts as cohort_repo  # noqa: E402
+from app.services.domain import channels as channel_repo  # noqa: E402
 from app.services.domain import escalations as escalation_repo  # noqa: E402
 from app.services.domain import identity as identity_repo  # noqa: E402
 
@@ -132,22 +132,28 @@ async def make_learner(tag: str) -> Any:
 
 async def make_cohort(tag: str, *, active: bool = True) -> Any:
     """Seed a cohort with a fake channel id, so ``get_cohort_by_channel_id`` resolves it."""
-    cohort = await cohort_repo.create_cohort(
+    cohort = await channel_repo.create_channel(
         f"{PREFIX}{tag}-{STAMP}",
         mattermost_channel_id=f"{PREFIX}channel-{tag}-{STAMP}",
     )
     if not active:
         assert cohort.id is not None
-        await cohort_repo.set_cohort_active(cohort.id, False)
-        cohort = await cohort_repo.get_cohort(cohort.id)
+        await channel_repo.set_channel_active(cohort.id, False)
+        cohort = await channel_repo.get_channel(cohort.id)
     return cohort
 
 
 async def add_role(user: Any, cohort_id: int, role_key: RoleKey) -> None:
     """Give ``user`` a role in a cohort."""
-    role = await cohort_repo.get_role_by_key(role_key)
+    role = await channel_repo.get_role_by_key(role_key)
     assert role is not None and role.id is not None and user.id is not None
-    await cohort_repo.upsert_membership(user_id=user.id, cohort_id=cohort_id, role_id=role.id, assigned_by_id=None)
+    await channel_repo.upsert_channel_role(
+        user_id=user.id,
+        channel_id=str(cohort_id),
+        team_id="",
+        role_id=role.id,
+        assigned_by_id=None,
+    )
 
 
 async def ticket_count() -> int:

@@ -62,8 +62,7 @@ ROLE_FOR_TICKET_TYPE: dict[EscalationType, RoleKey] = {
 # escalation opened from a distinctly operational flow) can still pass
 # ticket_type=EscalationType.OPS explicitly — the split is supported end to
 # end, just never inferred from a message.
-DEFAULT_TICKET_TYPE = EscalationType.TECH
-
+DEFAULT_TICKET_TYPE = EscalationType.OPS
 
 @dataclass(frozen=True)
 class EscalationResult:

@@ -29,6 +29,7 @@ from .mattermost_admin import (
     mattermost_find_or_create_team,
     mattermost_send_welcome_dm,
 )
+from .standups import TOOLS as STANDUP_TOOLS
 
 # The general route keeps exactly the pre-Sprint-1 tool set, so falling back to
 # it is falling back to the behaviour that already worked.
@@ -49,6 +50,7 @@ LEARNER_SUPPORT_TOOLS: list[BaseTool] = [
     list_ceremonies,
     list_channel_roles_for_requester,
     list_channel_members,
+    *STANDUP_TOOLS,
     escalate_to_human,
 ]
 
@@ -58,12 +60,19 @@ BACK_OFFICE_TOOLS: list[BaseTool] = [
     ask_human,
     *BACK_OFFICE_ADMIN_TOOLS,
     *CEREMONY_TOOLS,
+    *STANDUP_TOOLS,
+]
+
+POLICY_SUPPORT_TOOLS: list[BaseTool] = [
+    ask_human,
+    escalate_to_human,
 ]
 
 TOOL_GROUPS: dict[str, list[BaseTool]] = {
     "general": GENERAL_TOOLS,
     "learner_support": LEARNER_SUPPORT_TOOLS,
     "back_office": BACK_OFFICE_TOOLS,
+    "policy_support": POLICY_SUPPORT_TOOLS,
 }
 
 

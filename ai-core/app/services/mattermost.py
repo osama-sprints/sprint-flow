@@ -16,6 +16,7 @@ from typing import (
     Dict,
     Optional,
 )
+from email.parser import Parser
 
 import httpx
 from tenacity import (
@@ -203,6 +204,18 @@ class MattermostClient:
             return await self._request("GET", f"/users/{user_id}")
         except Exception as e:
             logger.warning("mattermost_get_user_failed", user_id=user_id, error=str(e))
+            return None
+
+    async def download_file(self, file_id: str) -> tuple[bytes, str] | None:
+        """Download a Mattermost file and return its bytes and safe filename."""
+        try:
+            response = await self._get_client().get(f"/files/{file_id}")
+            response.raise_for_status()
+            disposition = Parser().parsestr("Content-Disposition: " + response.headers.get("content-disposition", ""))
+            filename = disposition.get_filename() or f"mattermost-{file_id}"
+            return response.content, filename
+        except Exception as e:
+            logger.exception("mattermost_file_download_failed", file_id=file_id, error=str(e))
             return None
 
     async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:

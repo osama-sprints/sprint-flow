@@ -57,3 +57,8 @@ class Ceremony(DomainBase, table=True):
     time_zone: str | None = Field(default=None, max_length=64)
     # Google Meet join URL, set after a Meet event is created for this ceremony.
     meet_link: str | None = Field(default=None, max_length=512)
+    # Google Calendar event id backing meet_link, so reschedule/cancel can
+    # target the same external event. Only ever set by the google_meet
+    # provider; jitsi links have no external event.
+    external_event_id: str | None = Field(default=None, max_length=512)
+    
