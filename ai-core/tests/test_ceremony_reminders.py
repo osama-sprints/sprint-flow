@@ -113,6 +113,7 @@ def test_downtime_catchup_included():
     assert catchup_ceremony in result
 
 
+
 # ---------------------------------------------------------------------------
 # test_cancelled_ceremony_skipped
 # ---------------------------------------------------------------------------

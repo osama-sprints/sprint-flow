@@ -174,6 +174,7 @@ async def due_ceremonies(
     return [c for c in all_upcoming if reference < c.scheduled_at <= upper]
 
 
+
 async def get_channel_members(channel_id: str) -> list[str]:
     """Return Mattermost user ids for every active member of the channel."""
     members = await channel_repo.list_channel_roles(channel_id, active_only=True)

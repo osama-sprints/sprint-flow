@@ -12,11 +12,6 @@ import app.core.langgraph.specialists as specialists_module
 import app.core.langgraph.graph as graph_module
 
 
-@pytest.fixture
-def anyio_backend():
-    return "asyncio"
-
-
 def test_extract_last_text():
     human_msg = HumanMessage(content="What is the refund policy?")
     dict_msg = {"content": "What is the refund policy?"}
@@ -47,30 +42,24 @@ async def test_policy_retrieval_service():
         }
     ]
 
-    with (
-        patch("app.services.policy_retrieval.generate_embeddings", new_callable=AsyncMock) as mock_emb,
-        patch("app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock) as mock_sim,
-    ):
-        mock_emb.return_value = [0.1] * 1536
+    with patch(
+        "app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock
+    ) as mock_sim:
         mock_sim.return_value = mock_docs
         status, docs = await get_grounded_answer_or_refusal("what is the leave policy?", audience="learner")
         assert status == "grounded" and len(docs) == 1
         assert docs[0]["content"] == "Regular employees receive 21 days of paid leave per year."
 
-    with (
-        patch("app.services.policy_retrieval.generate_embeddings", new_callable=AsyncMock) as mock_emb,
-        patch("app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock) as mock_sim,
-    ):
-        mock_emb.return_value = [0.1] * 1536
+    with patch(
+        "app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock
+    ) as mock_sim:
         mock_sim.return_value = []
         status, docs = await get_grounded_answer_or_refusal("how to cook pizza?", audience="learner")
         assert status == "no_match" and len(docs) == 0
 
-    with (
-        patch("app.services.policy_retrieval.generate_embeddings", new_callable=AsyncMock) as mock_emb,
-        patch("app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock) as mock_sim,
-    ):
-        mock_emb.return_value = [0.1] * 1536
+    with patch(
+        "app.services.policy_retrieval.PolicyVectorStore.similarity_search", new_callable=AsyncMock
+    ) as mock_sim:
         mock_sim.side_effect = Exception("DB Error")
         status, docs = await get_grounded_answer_or_refusal("what is the leave policy?", audience="learner")
         assert status == "error" and len(docs) == 0
@@ -104,8 +93,8 @@ async def test_policy_retrieval_node_security_and_escalation():
 
         cmd = await policy_retrieval_node(state_with_human_message)
         mock_ret.assert_called_once_with(query="What is the leave policy?", audience="learner")
-        assert cmd.goto == "policy_support"
-        assert "21 days of paid leave" in cmd.update["policy_context"][0]["content"]
+        assert cmd.goto == "policy_support_llm_node"
+        assert "21 days of paid leave" in cmd.update["policy_context"]
 
     # Case B: Admin / Operator Role (Audience = None)
     admin_requester = MagicMock(spec=RequesterContext)
