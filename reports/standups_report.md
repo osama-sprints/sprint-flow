@@ -65,7 +65,13 @@ numbered 1/2(/3) sections, then labeled `done:`/`plan:`/`blocked:` blocks
 (including multi-line blocks and same-line content after the label), then flat
 fallback with the whole reply as progress. Whatever structure it finds, the
 **raw reply is always stored** (`DailyStandup.raw_response`), so nothing a
-learner said is ever lost to a parse edge case.
+learner said is ever lost to a parse edge case. The parser also tolerates the
+rest of what real people type: double-digit items (`10.`), tab-indented
+numbers, an uppercase or space-before-colon label, markdown-wrapped lines
+(`**1. x**`, `` `done:` x ``), a trailing `blockers:` line after numbered
+items, a `0.` leading item, blank leading lines, and a lone grey emoji.
+A richer catalogue of unexpected-user behaviours is maintained in
+`reports/standup_scenarios.md`.
 
 ## Added
 
@@ -141,19 +147,23 @@ learner said is ever lost to a parse edge case.
 ## Verification
 
 - Pure tests: `ai-core/tests/test_standups.py` — timezone math (incl. DST),
-  parsing (numbered/labeled/flat), ack + mention filtering, rendering, backoff.
-  28 tests.
+  parsing (numbered/labeled/flat + the unexpected-input battery: double-digit
+  items, markdown wraps, mixed numbered+label, ack variants, non-English,
+  tab indents), ack + mention filtering, rendering, backoff.
+  57 tests.
 - DB integration tests: `ai-core/tests/integration/test_standups_db.py`, run
   against a throwaway migrated Postgres with `SPRINTFLOW_INTEGRATION_DB=1`
   (SkipUnless), driven by the same seeded-fake-Mattermost pattern the
-  onboarding tests use. 11 tests covering prompt idempotency, the lease
+  onboarding tests use. 12 tests covering prompt idempotency, the lease
   lifecycle, delivered/retried dispatch, no-fabrication missed days, the
-  full ingest classification (accepted/duplicate/late/redelivery/not-a-standup),
-  and the cohort-level `list_standups_for_channel` read (date range, cross-
-  cohort isolation, learner narrowing).
+  full ingest classification (accepted/duplicate/late/redelivery/not-a-standup)
+  PLUS the cross-author guard (a reply in someone else's prompt thread is
+  `NOT_A_STANDUP`, the stranger's reads stay empty, the owner's own reply is
+  still accepted), and the cohort-level `list_standups_for_channel` read (date
+  range, cross-cohort isolation, learner narrowing).
   (The pre-existing onboarding/back-office DB tests are stale — they exercise
   the removed `channels`/`channel_memberships` schema — so this suite is the
-  current-schema reference; the whole non-integration suite, 431 tests, stays
+  current-schema reference; the whole non-integration suite, 460 tests, stays
   green.)
 - Repeatable end-to-end verifier: `scripts/verify_standups.py` pipes
   `scripts/_standups_probe.py` into the running ai-core container against the

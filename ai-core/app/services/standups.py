@@ -69,7 +69,7 @@ FALLBACK_TIMEZONE = "UTC"
 # Bare acknowledgements that are polite, not answers. A reply that is only this
 # is left to the chat pipeline instead of being parsed into a standup entry.
 ACK_ONLY_WORDS = frozenset(
-    {"ok", "okay", "k", "fine", "thanks", "thx", "thankyou", "ty", "noted", "gotit", "received", "sure", "surething", "cool", "done"}
+    {"ok", "okay", "k", "fine", "thanks", "thx", "thankyou", "ty", "noted", "gotit", "received", "sure", "surething", "cool", "done", "wellnoted"}
 )
 
 # Human-facing labels (lowercase) accepted as the first word of a section line.
@@ -80,7 +80,12 @@ _WILL_LABELS = frozenset(
 _BLOCK_LABELS = frozenset({"blocked", "blockers", "blocking", "risks", "issues", "problems", "stuck"})
 
 _ACK_RE = re.compile(r"[^a-z0-9]")
-_NUMBERED_RE = re.compile(r"^\s*\d[\)\.\:]+\s*(.*)$")
+# Double-digit items ("10.") after the third slot are ignored anyway, but a lone
+# "10. ..." must not lose its leading digit to a single-digit match.
+_NUMBERED_RE = re.compile(r"^\s*\d+[\)\.\:]+\s*(.*)$")
+# Surrounding markdown emphasis a user may wrap their reply in. Stripped only on
+# each physical line before structural matching; the raw text is stored as-is.
+_MD_WRAP = re.compile(r"^[\*_`]+|[\*_`]+$")
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +218,20 @@ def _match_label(line: str, labels: frozenset[str]) -> str | None:
     Returns:
         str | None: The matched label word, or None.
     """
-    head = line.strip().casefold().split(" ", 1)[0].strip(":.")
+    head = line.strip().casefold().split(" ", 1)[0].strip(":.`*_")
     return head if head in labels else None
+
+
+def _strip_markdown(line: str) -> str:
+    """Drop the markdown emphasis a user may wrap a line in, for structural matching.
+
+    Args:
+        line: One physical line of the reply.
+
+    Returns:
+        str: The line without leading/trailing ``*``/``_``/backtick runs.
+    """
+    return _MD_WRAP.sub("", line)
 
 
 def parse_standup_reply(text: str) -> ParsedStandup:
@@ -242,13 +259,21 @@ def parse_standup_reply(text: str) -> ParsedStandup:
 
     lines = text.splitlines()
 
-    # 1. Numbered 1/2/3.
+    # 1. Numbered 1/2/3. A trailing "blockers:" line after two numbered items
+    # starts the third slot, so mixed styles still reach the blocker field.
     sections: list[list[str]] = []
     current: list[str] | None = None
-    for line in lines:
+    for raw_line in lines:
+        line = _strip_markdown(raw_line)
         match = _NUMBERED_RE.match(line)
         if match is not None:
-            sections.append([match.group(1).strip()])
+            sections.append([_strip_markdown(match.group(1)).strip()])
+            current = sections[-1]
+            continue
+        label = _match_label(line, _BLOCK_LABELS)
+        if label is not None and len(sections) == 2:
+            _, _, rest = line.strip().partition(" ")
+            sections.append([rest.strip()])
             current = sections[-1]
         elif current is not None:
             current.append(line)
@@ -265,7 +290,7 @@ def parse_standup_reply(text: str) -> ParsedStandup:
     block: list[str] = []
     bucket: list[str] | None = None
     for line in lines:
-        stripped = line.strip()
+        stripped = _strip_markdown(line).strip()
         label = _match_label(stripped, _DID_LABELS) or _match_label(stripped, _WILL_LABELS) or _match_label(
             stripped, _BLOCK_LABELS
         )
@@ -277,7 +302,7 @@ def parse_standup_reply(text: str) -> ParsedStandup:
             )
             _, _, rest = stripped.partition(" ")
             if rest.strip():
-                bucket.append(rest.strip())
+                bucket.append(rest.lstrip(".:").strip())
             continue
         if bucket is not None and stripped:
             bucket.append(stripped)

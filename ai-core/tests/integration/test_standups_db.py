@@ -484,6 +484,48 @@ def test_not_a_standup_when_attribution_fails():
     run(scenario())
 
 
+def test_reply_in_someone_elses_prompt_thread_is_not_ours():
+    async def scenario():
+        owner, sprint_id, channel_id = await make_learner("owner")
+        stranger, _, _ = await make_learner("stranger")
+        prompt = await dispatched_prompt(
+            user=owner, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
+        assert prompt is not None and prompt.prompt_post_id is not None and prompt.dm_channel_id is not None
+        # The stranger replies under the owner's prompt post in the owner's DM.
+        # The thread root resolves to a prompt whose learner is NOT the author,
+        # and the stranger has no outstanding prompt of their own, so the
+        # message is not a standup and nothing is stored or confirmed.
+        result = await standups.ingest_standup_reply(
+            mattermost_user_id=stranger.mattermost_user_id,
+            dm_channel_id=prompt.dm_channel_id,
+            channel_type="D",
+            post_id="post-intruder",
+            root_id=prompt.prompt_post_id,
+            text="1. I sneak in\n2. done\n3. none",
+            now=NOW,
+        )
+        assert result.result == standups.ReplyResult.NOT_A_STANDUP
+        assert (await repo.get_prompt(prompt.id)).status == StandupPromptStatus.DISPATCHED.value  # type: ignore[union-attr]
+        entries = await repo.list_daily_standups(
+            sprint_id, learner_id=stranger.id, log_date=date(2026, 9, 15)  # type: ignore[arg-type]
+        )
+        assert entries == []
+        # And the owner's own answer in that thread is still accepted.
+        accepted = await standups.ingest_standup_reply(
+            mattermost_user_id=owner.mattermost_user_id,
+            dm_channel_id=prompt.dm_channel_id,
+            channel_type="D",
+            post_id="post-owner",
+            root_id=prompt.prompt_post_id,
+            text="1. mine\n2. own plan\n3. none",
+            now=NOW,
+        )
+        assert accepted.result == standups.ReplyResult.ACCEPTED
+
+    run(scenario())
+
+
 def test_dispatcher_run_once_delivers_and_metric_counts():
     from app.core.metrics import standup_prompts_total
 
