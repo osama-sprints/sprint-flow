@@ -43,6 +43,7 @@ from app.services.mattermost_ws import mattermost_ws_listener
 from app.services.memory import memory_service
 from app.workers.onboarding_dispatcher import onboarding_dispatcher
 from app.services.ceremony_reminders import reminder_poller
+from app.workers.standup_dispatcher import standup_dispatcher
 
 # Load environment variables
 load_dotenv()
@@ -116,6 +117,13 @@ async def lifespan(app: FastAPI):
         ceremony_reminder_task = None
         logger.exception("ceremony_reminder_poller_start_failed", error=str(e))
 
+    # Proactive daily standups: the dispatcher registers each learner's prompt
+    # row before any DM goes out, delivers the due ones, and closes silent days.
+    try:
+        await standup_dispatcher.start()
+    except Exception as e:
+        logger.exception("standup_dispatcher_start_failed", error=str(e))
+
     yield
 
     # Cleanup on shutdown
@@ -123,6 +131,7 @@ async def lifespan(app: FastAPI):
         ceremony_reminder_task.cancel()
         with suppress(asyncio.CancelledError):
             await ceremony_reminder_task
+    await standup_dispatcher.stop()
     await onboarding_dispatcher.stop()
     await mattermost_ws_listener.stop()
     await cache_service.close()
@@ -250,6 +259,7 @@ async def health_check(request: Request) -> JSONResponse:
             "database": "healthy" if db_healthy else "unhealthy",
             "domain_schema": "healthy" if schema_present else "missing",
             "onboarding_dispatcher": onboarding_dispatcher.status(),
+            "standup_dispatcher": standup_dispatcher.status(),
         },
         "timestamp": datetime.now(UTC).isoformat(),
     }

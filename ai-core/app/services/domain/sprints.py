@@ -122,6 +122,27 @@ async def get_active_sprint(channel_id: str, session: AsyncSession | None = None
         return result.first()
 
 
+async def list_active_sprints(session: AsyncSession | None = None) -> list[Sprint]:
+    """Every sprint currently open, most recently started first.
+
+    The standup dispatcher scans this list to know which channels are in an
+    active window before it prompts anyone in them.
+
+    Args:
+        session: Optional session to reuse.
+
+    Returns:
+        list[Sprint]: Active sprints, newest start date first.
+    """
+    async with session_scope(session) as s:
+        result = await s.exec(
+            select(Sprint)
+            .where(Sprint.status == SprintStatus.ACTIVE.value)
+            .order_by(Sprint.start_date.desc())  # type: ignore[union-attr]
+        )
+        return list(result.all())
+
+
 async def find_overlapping_sprints(
     channel_id: str,
     start_date: date,

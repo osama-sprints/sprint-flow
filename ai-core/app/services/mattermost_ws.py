@@ -39,6 +39,7 @@ from app.core.cache import (
 from app.core.config import settings
 from app.core.logging import logger
 from app.services import onboarding
+from app.services import standups
 from app.services import escalation_closure
 from app.services.conversation import (
     IncomingMessage,
@@ -496,6 +497,34 @@ class MattermostWebSocketListener:
                 return
         except Exception as e:
             logger.exception("escalation_closure_check_failed", error=str(e))
+
+        # Proactive standup collection: an attributable DM answer to an open
+        # prompt must never reach the normal chat pipeline, or the general
+        # agent would answer the same standup twice. Runs before _should_handle,
+        # which always accepts DMs. ingest_standup_reply returns NOT_A_STANDUP
+        # for anything that is not ours (an explicit @bot ask, a bare ack, or a
+        # DM with no open prompt), letting it through to the agent unchanged.
+        if settings.STANDUP_ENABLED:
+            try:
+                ingest = await standups.ingest_standup_reply(
+                    mattermost_user_id=user_id,
+                    dm_channel_id=str(post.get("channel_id") or ""),
+                    channel_type=channel_type,
+                    post_id=str(post.get("id") or ""),
+                    root_id=root_id,
+                    text=raw_message,
+                )
+                if ingest.result != standups.ReplyResult.NOT_A_STANDUP:
+                    logger.info(
+                        "mattermost_ws_standup_reply_handled",
+                        result=ingest.result.value,
+                        prompt_id=ingest.prompt.id if ingest.prompt else None,
+                        reply_id=ingest.reply_id,
+                        entry_id=ingest.entry_id,
+                    )
+                    return
+            except Exception as e:
+                logger.exception("standup_reply_ingest_failed", error=str(e))
 
         # Routing decision comes before any expensive work. Most public-channel
         # chatter is discarded here without an API call, let alone a model call.
