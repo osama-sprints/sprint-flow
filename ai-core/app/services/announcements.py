@@ -1,3 +1,28 @@
+"""Announcement service: preview, confirmation/idempotency, rate limiting, dispatch.
+
+Four fixes in this version, all confirmed against real code already
+reviewed (authorisation.py, channels.py, announcement.py):
+
+1. resolve_announcement_channel previously accepted a `channel_id` directly
+   from the caller and only authorisation-checked it — this is exactly the
+   "arbitrary channel override" the task brief prohibits. It now takes
+   `cohort_id`, resolves the channel from the stored Sprint/cohort record
+   itself, and authorises against that resolved value. The caller has no way
+   to supply a channel id.
+2. create_announcement_preview built an `Announcement(...)` without
+   `cohort_id`, which is a required (non-optional) field on the model — this
+   raised a pydantic ValidationError on every single call. Fixed to accept
+   and pass cohort_id through.
+3. resolve_recipients_by_role was calling
+   channel_repo.list_channel_roles(session, channel_id=channel_id) against a
+   real signature of (channel_id, *, active_only=True, session=None) — the
+   session object was being passed positionally into the channel_id
+   parameter. Fixed to match the real signature.
+4. resolve_recipients_by_usernames had the same class of bug against
+   channel_repo.get_role_for_user_in_channel's real signature of
+   (user_id, channel_id, *, active_only=True, session=None).
+"""
+
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -6,7 +31,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.requester import RequesterContext
 from app.models.announcement import Announcement
-from app.models import User
 from app.models.enums import AnnouncementOutcome
 from app.services.authorisation import (
     ValidationFailed,
@@ -14,6 +38,7 @@ from app.services.authorisation import (
 )
 from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
+from app.services.domain import sprints as sprint_repo
 
 RATE_LIMIT_MAX_REQUESTS = 3
 RATE_LIMIT_WINDOW_MINUTES = 60
@@ -177,22 +202,28 @@ async def confirm_and_dispatch_announcement(
 
 async def create_announcement_preview(
     session: AsyncSession,
-    channel_id: str,
+    cohort_id: int,
     raw_text: str,
     delivery_mode: str,
     resolved_channel: str,
     resolved_audience: List[Dict[str, Any]],
     created_by_user_id: int,
 ) -> Dict[str, Any]:
+    """Build the preview and write the audit row — posts nothing.
+
+    cohort_id is required here (fixed): Announcement.cohort_id has no
+    default, so omitting it raised a ValidationError on every call.
+    """
     preview_data = {
         "final_text": raw_text,
-        "channel_id": channel_id,
+        "cohort_id": cohort_id,
         "resolved_channel": resolved_channel,
         "resolved_audience": resolved_audience,
         "delivery_mode": delivery_mode,
     }
 
     audit_entry = Announcement(
+        cohort_id=cohort_id,
         requester_id=created_by_user_id,
         exact_text=raw_text,
         delivery_mode=delivery_mode,
@@ -216,10 +247,23 @@ async def create_announcement_preview(
 async def resolve_announcement_channel(
     session: AsyncSession,
     requester: RequesterContext,
-    channel_id: str,
+    cohort_id: int,
 ) -> str:
-    await require_channel_authority(requester, channel_id, action="send_announcement")
-    return channel_id
+    """Resolve the channel strictly from the stored cohort record.
+
+    The caller supplies cohort_id — never a channel_id — so there is no
+    parameter through which an arbitrary channel could be substituted. The
+    channel used for both authorisation and dispatch is always
+    sprint.channel_id, read fresh from the database.
+    """
+    sprint = await sprint_repo.get_sprint(cohort_id, session)
+    if not sprint:
+        raise ValidationFailed(f"Cohort {cohort_id} not found.")
+    if sprint.status != "active":
+        raise ValidationFailed(f"Cohort {cohort_id} is not active (current status: {sprint.status}).")
+
+    await require_channel_authority(requester, sprint.channel_id, action="send_announcement")
+    return sprint.channel_id
 
 
 async def resolve_recipients_by_role(
@@ -227,12 +271,13 @@ async def resolve_recipients_by_role(
     channel_id: str,
     role: str,
 ) -> List[Dict[str, Any]]:
-    roles = await channel_repo.list_channel_roles(session, channel_id=channel_id)
-    matching_users = [r for r in roles if str(r.role).lower() == role.lower()]
+    """Resolve every active member of a channel holding the given role."""
+    members = await channel_repo.list_channel_roles(channel_id, session=session)
+    matching = [m for m in members if str(m.role.key).lower() == role.lower()]
 
     return [
-        {"user_id": item.user_id, "role": role, "channel_id": channel_id}
-        for item in matching_users
+        {"user_id": m.user.id, "username": m.user.username, "role": role, "channel_id": channel_id}
+        for m in matching
     ]
 
 
@@ -248,12 +293,12 @@ async def resolve_recipients_by_usernames(
         if not user:
             raise ValidationFailed(f"User '{username}' does not exist.")
 
-        role = await channel_repo.get_role_for_user_in_channel(session, user.id, channel_id)
+        role = await channel_repo.get_role_for_user_in_channel(user.id, channel_id, session=session)
         if role is None:
             raise ValidationFailed(f"User '{username}' is not a member of channel {channel_id}.")
 
         resolved_recipients.append(
-            {"user_id": user.id, "username": user.username, "role": str(role), "channel_id": channel_id}
+            {"user_id": user.id, "username": user.username, "role": role.key, "channel_id": channel_id}
         )
 
     return resolved_recipients
