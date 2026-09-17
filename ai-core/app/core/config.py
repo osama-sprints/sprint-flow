@@ -403,6 +403,22 @@ class Settings:
         # default 30 s timeout), so a slow-but-alive worker is never overtaken.
         self.ONBOARDING_CLAIM_LEASE_SECONDS = int(os.getenv("ONBOARDING_CLAIM_LEASE_SECONDS", "600"))
 
+        # --- Sprint 1 / proactive daily standups (s1e7) --------------------------
+        self.STANDUP_ENABLED = os.getenv("STANDUP_ENABLED", "true").lower() in ("true", "1", "t", "yes")
+        # The local hour each learner's prompt becomes due, in their own timezone.
+        self.STANDUP_PROMPT_LOCAL_HOUR = int(os.getenv("STANDUP_PROMPT_LOCAL_HOUR", "9"))
+        # How often the dispatcher scans active sprints for new or due prompts.
+        self.STANDUP_POLL_INTERVAL_SECONDS = int(os.getenv("STANDUP_POLL_INTERVAL_SECONDS", "30"))
+        # Dispatch attempts before a prompt is marked failed for an operator.
+        self.STANDUP_MAX_ATTEMPTS = int(os.getenv("STANDUP_MAX_ATTEMPTS", "3"))
+        # Base of the exponential retry backoff after a failed dispatch.
+        self.STANDUP_RETRY_BACKOFF_SECONDS = int(os.getenv("STANDUP_RETRY_BACKOFF_SECONDS", "60"))
+        # How long a claimed prompt stays exclusive to one worker before another
+        # may take it over (covers a worker that died mid-delivery). Exceeds the
+        # worst-case delivery: open DM + post, each retried with backoff over
+        # MATTERMOST_HTTP_TIMEOUT, and the role re-check.
+        self.STANDUP_CLAIM_LEASE_SECONDS = int(os.getenv("STANDUP_CLAIM_LEASE_SECONDS", "300"))
+
         # Apply environment-specific settings
         self.apply_environment_settings()
 
