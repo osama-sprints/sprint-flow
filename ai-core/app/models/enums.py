@@ -8,8 +8,15 @@ values, their display labels and the aliases people type are defined.
 from enum import StrEnum
 
 
+class AnnouncementOutcome(StrEnum):
+    PENDING = "pending"
+    SENT = "sent"
+    CANCELLED = "cancelled"
+    RATE_LIMITED = "rate_limited"
+    UNAUTHORIZED = "unauthorized"
+    FAILED = "failed"
 class RoleKey(StrEnum):
-    """Cohort-scoped role keys. A person holds one of these per cohort."""
+    """Channel-scoped role keys. A person holds one of these per channel."""
 
     LEARNER = "learner"
     TECH_LEAD = "tech_lead"
@@ -25,10 +32,10 @@ ROLE_LABELS: dict[RoleKey, str] = {
 }
 
 ROLE_DESCRIPTIONS: dict[RoleKey, str] = {
-    RoleKey.LEARNER: "Takes part in the cohort's sprints, standups and ceremonies.",
-    RoleKey.TECH_LEAD: "Resolves technical escalations and may administer the cohort.",
-    RoleKey.OPS_SUPPORT: "Resolves policy and operational escalations for the cohort.",
-    RoleKey.SCRUM_MASTER: "Runs the agile ceremonies and may administer the cohort.",
+    RoleKey.LEARNER: "Takes part in the channel's sprints, standups and ceremonies.",
+    RoleKey.TECH_LEAD: "Resolves technical escalations and may administer the channel.",
+    RoleKey.OPS_SUPPORT: "Resolves policy and operational escalations for the channel.",
+    RoleKey.SCRUM_MASTER: "Runs the agile ceremonies and may administer the channel.",
 }
 
 # Words people use for a role, lower-cased, mapped to the machine key.
@@ -49,9 +56,9 @@ ROLE_ALIASES: dict[str, RoleKey] = {
     "scrummaster": RoleKey.SCRUM_MASTER,
 }
 
-# Roles that may administer the cohort they hold the role in: assign roles,
+# Roles that may administer the channel they hold the role in: assign roles,
 # open sprints and schedule ceremonies. Everything else is read-only.
-COHORT_ADMIN_ROLES: frozenset[RoleKey] = frozenset({RoleKey.TECH_LEAD, RoleKey.SCRUM_MASTER})
+CHANNEL_ADMIN_ROLES: frozenset[RoleKey] = frozenset({RoleKey.TECH_LEAD, RoleKey.SCRUM_MASTER})
 
 
 class CeremonyTypeKey(StrEnum):
@@ -112,7 +119,7 @@ CEREMONY_TYPE_ALIASES: dict[str, CeremonyTypeKey] = {
 
 
 class MembershipStatus(StrEnum):
-    """Lifecycle of a cohort membership."""
+    """Lifecycle of a channel membership."""
 
     ACTIVE = "active"
     INACTIVE = "inactive"
@@ -164,6 +171,48 @@ class OnboardingStepStatus(StrEnum):
     SENT = "sent"
     FAILED = "failed"
     HALTED = "halted"
+
+class KnowledgeCandidateStatus(StrEnum):
+    """Lifecycle of a knowledge candidate awaiting human review.
+ 
+    Only APPROVED candidates are ever indexed into policy_document_chunks --
+    see app/services/knowledge_review.py. PENDING and REJECTED are both
+    excluded from search by construction: nothing ever writes them into the
+    vector table in the first place.
+    """
+ 
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class StandupPromptStatus(StrEnum):
+    """Lifecycle of one daily standup prompt.
+
+    The row is written as ``pending`` *before* the DM goes out; ``dispatched``
+    means the prompt was posted and we are waiting for the reply. A day that
+    closes without a reply becomes ``missed`` (no standup entry is fabricated),
+    and a prompt that could never be delivered becomes ``failed`` after its
+    retries are exhausted.
+    """
+
+    PENDING = "pending"
+    DISPATCHED = "dispatched"
+    ANSWERED = "answered"
+    MISSED = "missed"
+    FAILED = "failed"
+
+
+class StandupReplyOutcome(StrEnum):
+    """What a raw standup reply became when it was recorded.
+
+    ``accepted`` created (or filled) today's standup entry; ``duplicate`` came
+    after the day was already answered; ``late`` after the day closed missed.
+    """
+
+    ACCEPTED = "accepted"
+    DUPLICATE = "duplicate"
+    LATE = "late"
 
 
 def normalise_role_key(value: str) -> RoleKey | None:

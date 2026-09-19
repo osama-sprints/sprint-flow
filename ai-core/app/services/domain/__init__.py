@@ -4,7 +4,7 @@ One module per aggregate so dependent tasks import a focused surface and never
 write their own queries:
 
 - ``identity``       people and their Mattermost mapping
-- ``cohorts``        cohorts, roles and cohort memberships
+- ``channels``       channels, roles and channel roles
 - ``sprints``        time-boxed sprints
 - ``ceremonies``     ceremony types, scheduled ceremonies and their amendments
 - ``standups``       daily progress entries
