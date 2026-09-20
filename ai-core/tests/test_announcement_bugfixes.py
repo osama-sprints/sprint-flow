@@ -17,6 +17,7 @@ from app.services.announcements import (
     resolve_recipients_by_role,
     resolve_recipients_by_usernames,
 )
+from app.models.enums import AnnouncementOutcome
 from app.services.authorisation import ValidationFailed
 
 
@@ -211,3 +212,109 @@ async def test_resolve_by_username_rejects_nonexistent_user(mocker):
 
     with pytest.raises(ValidationFailed):
         await resolve_recipients_by_usernames(AsyncMock(), channel_id="chan-2", usernames=["ghost"])
+
+
+# --------------------------------------------------------------------------
+# request_announcement: the single entry point that must write an audit row
+# on refusal. Regression test for the gap where back_office.py called
+# resolve_announcement_channel directly and swallowed the exception before
+# this function's own refusal-audit write ever ran.
+# --------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_request_announcement_writes_unauthorized_audit_row_on_refusal(mocker):
+    from app.services.announcements import request_announcement
+    from app.services.authorisation import AuthorisationRefused
+
+    mocker.patch(
+        "app.services.announcements.resolve_announcement_channel",
+        new_callable=AsyncMock,
+        side_effect=AuthorisationRefused("not_a_member"),
+    )
+
+    captured = {}
+
+    def fake_add(obj):
+        captured["announcement"] = obj
+
+    session = AsyncMock()
+    session.add = MagicMock(side_effect=fake_add)
+    session.commit = AsyncMock()
+
+    with pytest.raises(AuthorisationRefused):
+        await request_announcement(
+            session=session,
+            requester=MagicMock(),
+            cohort_id=1,
+            raw_text="unauthorized attempt",
+            delivery_mode="broadcast",
+            created_by_user_id=99,
+            target_type="role",
+            target_value="learner",
+        )
+
+    assert captured["announcement"].outcome == AnnouncementOutcome.UNAUTHORIZED
+    assert captured["announcement"].requester_id == 99
+    session.commit.assert_awaited()
+
+
+@pytest.mark.anyio
+async def test_request_announcement_writes_failed_audit_row_on_validation_error(mocker):
+    from app.services.announcements import request_announcement
+
+    mocker.patch(
+        "app.services.announcements.resolve_announcement_channel",
+        new_callable=AsyncMock,
+        side_effect=ValidationFailed("Cohort 1 not found."),
+    )
+
+    captured = {}
+    session = AsyncMock()
+    session.add = MagicMock(side_effect=lambda obj: captured.__setitem__("announcement", obj))
+    session.commit = AsyncMock()
+
+    with pytest.raises(ValidationFailed):
+        await request_announcement(
+            session=session,
+            requester=MagicMock(),
+            cohort_id=1,
+            raw_text="bad cohort",
+            delivery_mode="broadcast",
+            created_by_user_id=99,
+            target_type="role",
+            target_value="learner",
+        )
+
+    assert captured["announcement"].outcome == AnnouncementOutcome.FAILED
+
+
+# --------------------------------------------------------------------------
+# New: only the requester who created the preview may confirm it. Folded
+# into the same atomic UPDATE as the idempotency claim (see
+# confirm_and_dispatch_announcement's docstring) rather than a separate
+# read-then-check, so this test only proves the WHERE clause includes the
+# requester filter — not a live-DB race, which needs the real integration
+# script (verify_announcements.py, scenario 4).
+# --------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_confirm_query_filters_by_confirming_user_id():
+    from app.services.announcements import confirm_and_dispatch_announcement
+
+    captured = {}
+
+    async def fake_exec(stmt):
+        captured.setdefault("stmts", []).append(str(stmt))
+        mock_res = MagicMock()
+        mock_res.rowcount = 0  # doesn't matter for this check
+        mock_res.one.return_value = 0
+        return mock_res
+
+    session = AsyncMock()
+    session.exec = AsyncMock(side_effect=fake_exec)
+    session.get = AsyncMock(return_value=None)
+
+    await confirm_and_dispatch_announcement(session, announcement_id=1, confirming_user_id=42)
+
+    first_stmt = captured["stmts"][0].lower()
+    assert "requester_id" in first_stmt

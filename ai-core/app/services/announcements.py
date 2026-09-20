@@ -1,28 +1,3 @@
-"""Announcement service: preview, confirmation/idempotency, rate limiting, dispatch.
-
-Four fixes in this version, all confirmed against real code already
-reviewed (authorisation.py, channels.py, announcement.py):
-
-1. resolve_announcement_channel previously accepted a `channel_id` directly
-   from the caller and only authorisation-checked it — this is exactly the
-   "arbitrary channel override" the task brief prohibits. It now takes
-   `cohort_id`, resolves the channel from the stored Sprint/cohort record
-   itself, and authorises against that resolved value. The caller has no way
-   to supply a channel id.
-2. create_announcement_preview built an `Announcement(...)` without
-   `cohort_id`, which is a required (non-optional) field on the model — this
-   raised a pydantic ValidationError on every single call. Fixed to accept
-   and pass cohort_id through.
-3. resolve_recipients_by_role was calling
-   channel_repo.list_channel_roles(session, channel_id=channel_id) against a
-   real signature of (channel_id, *, active_only=True, session=None) — the
-   session object was being passed positionally into the channel_id
-   parameter. Fixed to match the real signature.
-4. resolve_recipients_by_usernames had the same class of bug against
-   channel_repo.get_role_for_user_in_channel's real signature of
-   (user_id, channel_id, *, active_only=True, session=None).
-"""
-
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -33,21 +8,24 @@ from app.core.requester import RequesterContext
 from app.models.announcement import Announcement
 from app.models.enums import AnnouncementOutcome
 from app.services.authorisation import (
+    AuthorisationRefused,
     ValidationFailed,
     require_channel_authority,
 )
 from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.domain import sprints as sprint_repo
+from app.services.mattermost import mattermost_client
 
 RATE_LIMIT_MAX_REQUESTS = 3
 RATE_LIMIT_WINDOW_MINUTES = 60
 
 
 async def send_to_mattermost(channel_id: str, message: str) -> str:
-    if not channel_id or channel_id == "invalid_channel":
-        raise ValueError("Invalid target channel or network delivery failure.")
-    return f"mm_post_{int(datetime.now(timezone.utc).timestamp())}"
+    post = await mattermost_client.create_post(channel_id=channel_id, message=message)
+    if post is None or not post.get("id"):
+        raise RuntimeError(f"Mattermost post failed for channel {channel_id!r}")
+    return post["id"]
 
 
 async def is_rate_limited(
@@ -110,6 +88,7 @@ async def cancel_announcement(
 async def confirm_and_dispatch_announcement(
     session: AsyncSession,
     announcement_id: int,
+    confirming_user_id: int,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     if now is None:
@@ -120,6 +99,7 @@ async def confirm_and_dispatch_announcement(
         .where(
             Announcement.id == announcement_id,
             Announcement.confirmation_status == "pending",
+            Announcement.requester_id == confirming_user_id,
         )
         .values(confirmation_status="confirmed", status_changed_at=now)
     )
@@ -128,6 +108,13 @@ async def confirm_and_dispatch_announcement(
     await session.commit()
 
     if result.rowcount == 0:
+        existing = await session.get(Announcement, announcement_id)
+        if existing is not None and existing.requester_id != confirming_user_id:
+            return {
+                "status": "not_authorized",
+                "message": "Only the person who created this announcement may confirm it.",
+                "dispatched": False,
+            }
         return {
             "status": "already_processed",
             "message": "Announcement is already confirmed or processed.",
@@ -209,11 +196,6 @@ async def create_announcement_preview(
     resolved_audience: List[Dict[str, Any]],
     created_by_user_id: int,
 ) -> Dict[str, Any]:
-    """Build the preview and write the audit row — posts nothing.
-
-    cohort_id is required here (fixed): Announcement.cohort_id has no
-    default, so omitting it raised a ValidationError on every call.
-    """
     preview_data = {
         "final_text": raw_text,
         "cohort_id": cohort_id,
@@ -244,18 +226,86 @@ async def create_announcement_preview(
     }
 
 
+async def request_announcement(
+    session: AsyncSession,
+    requester: RequesterContext,
+    cohort_id: int,
+    raw_text: str,
+    delivery_mode: str,
+    created_by_user_id: int,
+    target_type: str,
+    target_value: Optional[str] = None,
+) -> Dict[str, Any]:
+    try:
+        channel_id = await resolve_announcement_channel(session, requester, cohort_id)
+
+        if target_type == "role" and target_value:
+            resolved_audience = await resolve_recipients_by_role(session, channel_id, target_value)
+        elif target_type == "usernames" and target_value:
+            usernames = [u.strip() for u in target_value.split(",")]
+            resolved_audience = await resolve_recipients_by_usernames(session, channel_id, usernames)
+        else:
+            resolved_audience = []
+
+        return await create_announcement_preview(
+            session=session,
+            cohort_id=cohort_id,
+            raw_text=raw_text,
+            delivery_mode=delivery_mode,
+            resolved_channel=channel_id,
+            resolved_audience=resolved_audience,
+            created_by_user_id=created_by_user_id,
+        )
+
+    except AuthorisationRefused:
+        await _write_refusal_audit_row(
+            session,
+            cohort_id=cohort_id,
+            requester_id=created_by_user_id,
+            raw_text=raw_text,
+            delivery_mode=delivery_mode,
+            outcome=AnnouncementOutcome.UNAUTHORIZED,
+        )
+        raise
+    except ValidationFailed:
+        await _write_refusal_audit_row(
+            session,
+            cohort_id=cohort_id,
+            requester_id=created_by_user_id,
+            raw_text=raw_text,
+            delivery_mode=delivery_mode,
+            outcome=AnnouncementOutcome.FAILED,
+        )
+        raise
+
+
+async def _write_refusal_audit_row(
+    session: AsyncSession,
+    *,
+    cohort_id: int,
+    requester_id: int,
+    raw_text: str,
+    delivery_mode: str,
+    outcome: AnnouncementOutcome,
+) -> None:
+    audit_entry = Announcement(
+        cohort_id=cohort_id,
+        requester_id=requester_id,
+        exact_text=raw_text,
+        delivery_mode=delivery_mode,
+        resolved_channel_id="",
+        confirmation_status="refused",
+        outcome=outcome,
+    )
+    session.add(audit_entry)
+    await session.commit()
+
+
 async def resolve_announcement_channel(
     session: AsyncSession,
     requester: RequesterContext,
     cohort_id: int,
 ) -> str:
-    """Resolve the channel strictly from the stored cohort record.
-
-    The caller supplies cohort_id — never a channel_id — so there is no
-    parameter through which an arbitrary channel could be substituted. The
-    channel used for both authorisation and dispatch is always
-    sprint.channel_id, read fresh from the database.
-    """
     sprint = await sprint_repo.get_sprint(cohort_id, session)
     if not sprint:
         raise ValidationFailed(f"Cohort {cohort_id} not found.")
@@ -271,7 +321,6 @@ async def resolve_recipients_by_role(
     channel_id: str,
     role: str,
 ) -> List[Dict[str, Any]]:
-    """Resolve every active member of a channel holding the given role."""
     members = await channel_repo.list_channel_roles(channel_id, session=session)
     matching = [m for m in members if str(m.role.key).lower() == role.lower()]
 
