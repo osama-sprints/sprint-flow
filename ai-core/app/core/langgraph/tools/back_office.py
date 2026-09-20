@@ -34,6 +34,7 @@ from app.services.announcements import (
     create_announcement_preview,
     confirm_and_dispatch_announcement,
     cancel_announcement,
+    request_announcement,
 )
 
 @tool
