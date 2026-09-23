@@ -81,7 +81,11 @@ async def make_user(prefix: str, index: int = 0):
 
 async def cleanup(prefix: str, channel_ids: list[str]) -> None:
     async with session_scope() as s:
+<<<<<<< HEAD
         params = {"p": f"{prefix}%", "channels": channel_ids or ["__none__"]}
+=======
+        params = {"p": f"{prefix}%", "channels": channel_ids or ["__fake__"]}
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         await s.exec(
             text(
                 "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
@@ -91,13 +95,25 @@ async def cleanup(prefix: str, channel_ids: list[str]) -> None:
         await s.exec(text("DELETE FROM escalation_tickets WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
         await s.exec(
             text(
-                "DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE channel_id = ANY(:channels))"
+                "DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE organizer_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p))"
             ),
             params=params,
         )  # type: ignore[call-overload]
-        await s.exec(text("DELETE FROM ceremonies WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
+        await s.exec(
+            text(
+                "DELETE FROM ceremonies WHERE organizer_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
+            ),
+            params=params,
+        )  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM sprints WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
+<<<<<<< HEAD
         await s.exec(text("DELETE FROM channel_roles WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
+=======
+        await s.exec(
+            text("DELETE FROM channel_roles WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"),
+            params=params,
+        )  # type: ignore[call-overload]
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         await s.exec(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), params=params)  # type: ignore[call-overload]
 
 
@@ -149,7 +165,7 @@ def test_two_workers_claim_disjoint_steps_with_skip_locked():
     prefix = f"it-claim-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_ids: list[str] = []
         try:
             channel_id = f"Claim-{prefix}"
             channel_ids.append(channel_id)
@@ -201,7 +217,11 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
                 *(
                     channel_repo.upsert_channel_role(
                         user_id=user.id,
+<<<<<<< HEAD
                         team_id=team_id,
+=======
+                        team_id="team1",
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
                         channel_id=channel_id,
                         role_id=learner.id,
                         assigned_by_id=None,
@@ -212,21 +232,31 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
             assert len({c.role_assignment.id for c in changes}) == 1
             assert sum(1 for c in changes if c.created) == 1
             change = await channel_repo.upsert_channel_role(
+<<<<<<< HEAD
                 user_id=user.id,
                 team_id=team_id,
                 channel_id=channel_id,
                 role_id=lead.id,
                 assigned_by_id=None,
+=======
+                user_id=user.id, team_id="team1", channel_id=channel_id, role_id=lead.id, assigned_by_id=None
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
             )
             assert change.previous_role_id == learner.id and not change.created
             with pytest.raises(IntegrityError):
                 async with session_scope() as s:
                     await s.exec(  # type: ignore[call-overload]
                         text(
+<<<<<<< HEAD
                             "INSERT INTO channel_roles (channel_id, user_id, role_id, team_id) "
                             "VALUES (:c, :u, :r, :t)"
                         ),
                         params={"c": channel_id, "u": user.id, "r": learner.id, "t": team_id},
+=======
+                            "INSERT INTO channel_roles (team_id, channel_id, user_id, role_id) VALUES ('team1', :c, :u, :r)"
+                        ),
+                        params={"c": channel_id, "u": user.id, "r": learner.id},
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
                     )
         finally:
             await cleanup(prefix, channel_ids)
@@ -247,7 +277,11 @@ def test_ceremony_overlap_boundaries_and_amendment_trail():
             channel_ids.append(channel_id)
             start = datetime(2030, 6, 1, 10, 0, tzinfo=UTC)
             ceremony = await ceremony_repo.create_ceremony(
+<<<<<<< HEAD
                 team_id="team-schema",
+=======
+                team_id="team1",
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
                 channel_id=channel_id,
                 ceremony_type_id=ctype.id,
                 organizer_id=user.id,

@@ -46,7 +46,6 @@ from app.services.authorisation import (
     require_channel_authority,
     require_channel_membership,
     require_requester,
-    require_requester_user,
 )
 from app.services.domain import ceremonies as ceremony_repo
 from app.services.domain import identity as identity_repo
@@ -490,8 +489,12 @@ async def prepare_schedule(
     if not team_id or not channel_id:
         raise ValidationFailed("I don't know which channel or team this is.")
 
-    user = await require_requester_user(context, action="schedule_ceremony")
-    assert user.id is not None
+    # Backend authorisation boundary: only a tech lead or scrum master of this
+    # channel (or a superadmin) may schedule. Decided from stored data, before
+    # any validation that could disclose configuration details.
+    decision = await require_channel_authority(context, channel_id, action="schedule_ceremony")
+    user = decision.user
+    assert user is not None and user.id is not None
 
     await require_channel_authority(context, channel_id, action="schedule_ceremony")
 
@@ -574,8 +577,11 @@ async def commit_schedule(
         AuthorisationRefused: When the requester may no longer administer the channel.
     """
     context = requester or require_requester()
-    user = await require_requester_user(context, action="schedule_ceremony")
-    assert user.id is not None
+    # Commit-time re-check: authority may have changed (or the proposal may have
+    # been replayed in a different context) while the person was confirming.
+    decision = await require_channel_authority(context, context.channel_id, action="schedule_ceremony")
+    user = decision.user
+    assert user is not None and user.id is not None
 
     await require_channel_authority(context, proposal.channel_id, action="schedule_ceremony")
 
@@ -688,12 +694,16 @@ async def prepare_amendment(
     """
     context = requester or require_requester()
     reference = now or utcnow()
-    user = await require_requester_user(context, action="amend_ceremony")
-    assert user.id is not None
 
     ceremony = await ceremony_repo.get_ceremony(ceremony_id)
     if ceremony is None or ceremony.id is None:
         raise ValidationFailed(f"There is no ceremony #{ceremony_id}.")
+
+    # Backend authorisation boundary, checked against the ceremony's own channel
+    # before anything about it is disclosed. A learner, a non-member, or an
+    # unsynced identity is refused with the fixed sentence.
+    decision = await require_channel_authority(context, ceremony.channel_id, action="amend_ceremony")
+    assert decision.user is not None and decision.user.id is not None
 
     if ceremony.channel_id != context.channel_id:
         raise ValidationFailed(f"Ceremony #{ceremony_id} is not in this channel.")
@@ -757,7 +767,7 @@ async def prepare_amendment(
         team_id=ceremony.team_id,
         channel_id=ceremony.channel_id,
         ceremony_type_label=labels.get(ceremony.ceremony_type_id, "ceremony"),
-        amended_by_id=user.id,
+        amended_by_id=decision.user.id,
         changes=changes,
         reason=reason.strip() if reason and reason.strip() else None,
         cancel=cancel,
@@ -789,8 +799,10 @@ async def commit_amendment(
         ValidationFailed: When the ceremony vanished meanwhile.
     """
     context = requester or require_requester()
-    user = await require_requester_user(context, action="amend_ceremony")
-    assert user.id is not None
+    # Commit-time re-check on the ceremony's own channel.
+    decision = await require_channel_authority(context, proposal.channel_id, action="amend_ceremony")
+    user = decision.user
+    assert user is not None and user.id is not None
 
     await require_channel_authority(context, proposal.channel_id, action="amend_ceremony")
 
@@ -853,7 +865,14 @@ async def list_calendar(
     if not context.channel_id or not context.team_id:
         raise ValidationFailed("I don't know which channel or team this is.")
 
+<<<<<<< HEAD
     await require_channel_membership(context, context.channel_id, action="read_calendar")
+=======
+    # Reading the calendar is a member privilege, not an admin one — but it is
+    # still scoped: a non-member (and an unsynced identity) learns nothing.
+    await require_channel_membership(context, context.channel_id, action="list_ceremonies")
+
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     rows = await ceremony_repo.list_ceremonies(
         context.channel_id, include_past=include_past, include_cancelled=include_cancelled, now=now or utcnow()
     )

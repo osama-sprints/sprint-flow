@@ -12,8 +12,7 @@ from app.models.enums import AnnouncementOutcome
 
 
 class Announcement(DomainBase, table=True):
-
-    __tablename__ = "announcements"  
+    __tablename__ = "announcements"  # pyright: ignore[reportAssignmentType]
 
     id: Optional[int] = Field(default=None, primary_key=True)
     requester_id: int = Field(foreign_key="users.id", index=True)
@@ -25,4 +24,3 @@ class Announcement(DomainBase, table=True):
     mattermost_post_id: Optional[str] = Field(default=None, description="Set only on successful post")
     outcome: AnnouncementOutcome = Field(default=AnnouncementOutcome.PENDING)
     status_changed_at: datetime = Field(default_factory=utcnow, sa_type=TZ_DATETIME)
-

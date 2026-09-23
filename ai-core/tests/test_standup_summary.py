@@ -48,6 +48,7 @@ def test_non_member_is_rejected_before_summary_reads(monkeypatch):
     with pytest.raises(authorisation.AuthorisationRefused):
         asyncio.run(standups.get_standup_summary_for_channel("channel-1", date(2026, 9, 15)))
 
+
 def test_summary_reports_submitted_and_missing_active_members(monkeypatch):
     async def allow(*args, **kwargs):
         return SimpleNamespace(allowed=True)

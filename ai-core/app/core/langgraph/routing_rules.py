@@ -149,8 +149,8 @@ ROUTING_RULES: List[Rule] = [
         name="back_office_schedule",
         route=CapabilityRoute.BACK_OFFICE,
         patterns=_compile(
-            rf"\b(?:meeting|metting|ceremon(?:y|ies)|schedul(?:e|ing)|stand-?ups?|sprint\s+plannings?|"
-            rf"reviews?|retros?(?:pectives?)?|open\s+q\s*&?\s*a|books?)\b",
+            r"\b(?:meeting|metting|ceremon(?:y|ies)|schedul(?:e|ing)|stand-?ups?|sprint\s+plannings?|"
+            r"reviews?|retros?(?:pectives?)?|open\s+q\s*&?\s*a|books?)\b",
             r"\b(?:create|schedule|book|arrange|set\s*up|manage|organize|reorganize)\b.{0,50}\b(?:meeting|metting|ceremon(?:y|ies)|q\s*&?\s*a|session)\b",
             rf"{_NOT_AFTER_DETERMINER}\b(?:schedul(?:e|ing)|book|set\s*up|plan|arrange|organi[sz]e|put|add|"
             rf"create|hold|host|fix)\b.{{0,80}}\b{_CEREMONY}\b",
@@ -366,15 +366,19 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     policy_matched = _matches(policy_rule, normalised)
     document_or_technical_rule = next(rule for rule in ROUTING_RULES if rule.name == "learner_document_or_technical")
     document_or_technical_matched = _matches(document_or_technical_rule, normalised)
-    ingestion_context = bool(re.search(r"\bingested\b.*(?:document|file|pdf|docx|txt)|\b(?:uploaded|attached)\s+(?:document|file)\b", normalised, re.IGNORECASE))
+    ingestion_context = bool(
+        re.search(
+            r"\bingested\b.*(?:document|file|pdf|docx|txt)|\b(?:uploaded|attached)\s+(?:document|file)\b",
+            normalised,
+            re.IGNORECASE,
+        )
+    )
     generic_live_session_question = question and _is_generic_live_session_question(normalised)
 
     for rule in ROUTING_RULES:
         if rule.mutation and question:
-         continue
-        if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
-          if not generic_live_session_question:
             continue
+<<<<<<< HEAD
     # was: if rule.name == "policy_support" and document_or_technical_matched:
         if rule.name == "policy_support" and document_or_technical_matched and not (question and policy_matched):
           continue
@@ -382,6 +386,16 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
         if rule.name == "policy_support" and ingestion_context and not (question and policy_matched):
            continue
         if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"} and not generic_live_session_question:
+=======
+        if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
+            if not generic_live_session_question:
+                continue
+        if rule.name == "policy_support" and document_or_technical_matched:
+            continue
+        if rule.name == "policy_support" and ingestion_context:
+            continue
+        if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"}:
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
             continue
         if rule.name == "learner_calendar" and generic_live_session_question:
             continue

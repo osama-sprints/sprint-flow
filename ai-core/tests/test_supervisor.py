@@ -49,14 +49,16 @@ def histogram_count(metric: Histogram) -> float:
     strict=False,
 )
 def test_multi_intent_decision_shape_and_metrics():
+    # "open sprint 2 ... and tell me when the retro is" is one back-office turn
+    # since ceremony keywords always use the back-office pipeline (they are
+    # deduped into a single route); the corpus's real multi-intent sentence
+    # pairs a read with a mutation instead.
     token = current_requester.set(REQUESTERS["authority"])
     decisions_before = counter_total(routing_decisions_total)
     model_calls_before = counter_total(routing_model_calls_total)
     latency_before = histogram_count(routing_latency_seconds)
     try:
-        state = GraphState(
-            messages=[HumanMessage(content="open sprint 2 for Backend-01 and tell me when the retro is")]
-        )
+        state = GraphState(messages=[HumanMessage(content="what's on this week and open sprint 2 for Backend-01")])
         update = supervisor_node(state, CONFIG)
     finally:
         current_requester.reset(token)

@@ -1,4 +1,6 @@
-"""List real cohorts (sprints) and their channel members, to find real IDs
+"""List real cohorts (sprints) and their channel members.
+
+Finds real IDs
 for scripts/verify_announcement_bot_flow.py.
 
 Usage: uv run python scripts/list_cohorts_and_members.py
@@ -53,7 +55,7 @@ async def main():
             print(f"\nCohort id={sprint.id} ({sprint.name!r}), channel_id={sprint.channel_id}:")
             if not rows:
                 print("  (no active members)")
-            for membership, user, role in rows:
+            for membership, user, role in rows:  # noqa: B007
                 print(f"  user_id={user.id}  mattermost_user_id={user.mattermost_user_id}  role={role.key}")
 
 

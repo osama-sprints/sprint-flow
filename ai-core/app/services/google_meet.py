@@ -47,21 +47,17 @@ from datetime import (
 )
 from typing import Any
 
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
 from app.core.config import settings
 from app.core.logging import logger
 
 # These are optional dependencies — only imported when Google Meet is enabled.
 # The try/except prevents ImportError at startup when the packages are not
 # installed (the feature is gated behind GOOGLE_MEET_ENABLED anyway).
-try:
-    from google.oauth2 import service_account  # type: ignore[import-untyped]
-    from googleapiclient.discovery import build  # type: ignore[import-untyped]
-
-    _GOOGLE_LIBS_AVAILABLE = True
-except ImportError:
-    _GOOGLE_LIBS_AVAILABLE = False
-    service_account = None
-    build = None
+from google.oauth2 import service_account  # type: ignore[import-untyped]
+from googleapiclient.discovery import build  # type: ignore[import-untyped]
+from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 _SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -76,13 +72,6 @@ def _build_service() -> Any | None:
     Returns:
         googleapiclient Resource | None: The service, or None on any error.
     """
-    if not _GOOGLE_LIBS_AVAILABLE:
-        logger.warning(
-            "google_meet_libs_missing",
-            hint="Install google-api-python-client google-auth to enable Meet integration",
-        )
-        return None
-
     raw = settings.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS.strip()
     if not raw:
         logger.warning("google_meet_no_credentials", hint="Set GOOGLE_SERVICE_ACCOUNT_CREDENTIALS in .env")
@@ -124,101 +113,6 @@ def _format_rfc3339(dt: datetime) -> str:
     utc = dt.astimezone(timezone.utc)
     return utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-
-# async def create_meet_event(
-#     title: str,
-#     start: datetime,
-#     duration_minutes: int,
-#     description: str | None = None,
-#     organizer_email: str | None = None,
-# ) -> str | None:
-#     """Create a Google Calendar event with Meet conferencing and return the join URL.
-
-#     The event is created on the shared calendar identified by
-#     ``settings.GOOGLE_CALENDAR_ID``.  Google Meet conferencing is attached via
-#     a ``conferenceData.createRequest``; the API populates the join link
-#     synchronously on successful insertion.
-
-#     The function is **async** to match the rest of the codebase but the
-#     ``googleapiclient`` library is synchronous. For the volume of calls
-#     expected (one per ceremony scheduling, not per request), this is
-#     acceptable; a future improvement could wrap the call in
-#     ``asyncio.to_thread``.
-
-#     Args:
-#         title: Event title, e.g. ``"Sprint Planning"``.
-#         start: The ceremony start time (timezone-aware, any zone).
-#         duration_minutes: Length of the event.
-#         description: Optional event description / agenda text.
-#         organizer_email: The organiser's email, added as an attendee when provided.
-
-#     Returns:
-#         str | None: The ``meet.google.com/xxx-xxxx-xxx`` join URL, or ``None``
-#         on any configuration or API error.
-#     """
-#     if not settings.GOOGLE_MEET_ENABLED:
-#         return None
-
-#     service = _build_service()
-#     if service is None:
-#         return None
-
-#     from datetime import timedelta
-
-#     end = start + timedelta(minutes=duration_minutes)
-
-#     event_body: dict[str, Any] = {
-#         "summary": title,
-#         "description": description or "",
-#         "start": {"dateTime": _format_rfc3339(start), "timeZone": "UTC"},
-#         "end": {"dateTime": _format_rfc3339(end), "timeZone": "UTC"},
-#         "conferenceData": {
-#             "createRequest": {
-#                 # requestId must be unique per request; using the start ISO string
-#                 # is deterministic and idempotent — re-scheduling the same
-#                 # ceremony at the same time won't create a second Meet.
-#                 "requestId": f"sprintflow-{start.strftime('%Y%m%dT%H%M%SZ')}",
-#                 "conferenceSolutionKey": {"type": "hangoutsMeet"},
-#             }
-#         },
-#     }
-
-#     if organizer_email:
-#         event_body["attendees"] = [{"email": organizer_email}]
-
-#     try:
-#         # conferenceDataVersion=1 tells the API to fulfil the createRequest.
-#         created = (
-#             service.events()
-#             .insert(
-#                 calendarId=settings.GOOGLE_CALENDAR_ID,
-#                 body=event_body,
-#                 conferenceDataVersion=1,
-#                 sendUpdates="none",
-#             )
-#             .execute()
-#         )
-#         entry_points = created.get("conferenceData", {}).get("entryPoints", [])
-#         for ep in entry_points:
-#             if ep.get("entryPointType") == "video":
-#                 link = ep.get("uri", "")
-#                 if link:
-#                     logger.info(
-#                         "google_meet_created",
-#                         title=title,
-#                         scheduled_at=_format_rfc3339(start),
-#                         meet_link=link,
-#                     )
-#                     return link
-#         logger.warning("google_meet_no_video_entrypoint", created=created)
-#         return None
-#     except Exception as e:
-#         logger.exception("google_meet_create_failed", title=title, error=str(e))
-#         return None
-
-
-from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 # Statuses worth retrying: rate limit + transient server errors. A 4xx other
 # than 429 means the request itself is wrong (bad event id, bad auth, bad

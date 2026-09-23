@@ -16,7 +16,11 @@ Properties this module guarantees:
 Callers raise before any mutation; the exceptions carry a machine-readable
 ``reason`` for logs and a user-facing message for the tool boundary.
 """
+<<<<<<< HEAD
 from __future__ import annotations
+=======
+
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
 from typing import (
     Iterable,
     NamedTuple,

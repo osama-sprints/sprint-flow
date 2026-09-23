@@ -34,7 +34,6 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import pytest
 
 from app.core.langgraph.tools.results import ResultCode
 from app.core.requester import RequesterContext
@@ -64,11 +63,12 @@ def test_grounded_question_never_touches_escalation():
     }
 
     mock_store = SimpleNamespace(similarity_search=AsyncMock(return_value=[matching_doc]))
-    with patch.object(policy_retrieval, "PolicyVectorStore", return_value=mock_store):
+    with (
+        patch.object(policy_retrieval, "generate_embeddings", AsyncMock(return_value=[0.1] * 8)),
+        patch.object(policy_retrieval, "PolicyVectorStore", return_value=mock_store),
+    ):
         status, docs = asyncio.run(
-            policy_retrieval.get_grounded_answer_or_refusal(
-                "How many leave days do I get?", audience="learner"
-            )
+            policy_retrieval.get_grounded_answer_or_refusal("How many leave days do I get?", audience="learner")
         )
 
     assert status == "grounded"
@@ -98,7 +98,10 @@ def test_refusal_opens_an_escalation_that_closure_then_resolves():
 
     # ---- Task 3/4: the retrieval genuinely finds nothing ----
     empty_store = SimpleNamespace(similarity_search=AsyncMock(return_value=[]))
-    with patch.object(policy_retrieval, "PolicyVectorStore", return_value=empty_store):
+    with (
+        patch.object(policy_retrieval, "generate_embeddings", AsyncMock(return_value=[0.1] * 8)),
+        patch.object(policy_retrieval, "PolicyVectorStore", return_value=empty_store),
+    ):
         status, docs = asyncio.run(
             policy_retrieval.get_grounded_answer_or_refusal(
                 "Can I get reimbursed for a personal laptop?", audience="learner"
@@ -116,8 +119,10 @@ def test_refusal_opens_an_escalation_that_closure_then_resolves():
     # used directly as a string, no separate resolution/active-check step, and
     # channel_repo.list_channel_roles replaces the old cohort_repo.list_cohort_members.
     learner = SimpleNamespace(id=99, display_name="New Learner", username="newlearner")
-    tech_lead_holder = SimpleNamespace(
-        role=SimpleNamespace(key="tech_lead"),
+    # open_escalation's default ticket type is OPS, which routes to the
+    # channel's ops_support holder (see ROLE_FOR_TICKET_TYPE).
+    ops_support_holder = SimpleNamespace(
+        role=SimpleNamespace(key="ops_support"),
         user=SimpleNamespace(id=7, mattermost_user_id="mm-techlead-1"),
     )
 
@@ -136,7 +141,7 @@ def test_refusal_opens_an_escalation_that_closure_then_resolves():
     )
 
     identity_repo = SimpleNamespace(get_user_by_mattermost_id=AsyncMock(return_value=learner))
-    channel_repo = SimpleNamespace(list_channel_roles=AsyncMock(return_value=[tech_lead_holder]))
+    channel_repo = SimpleNamespace(list_channel_roles=AsyncMock(return_value=[ops_support_holder]))
     escalation_repo_task1 = SimpleNamespace(
         get_open_escalation_ticket_for_learner_thread=AsyncMock(return_value=None),
         create_escalation_ticket=AsyncMock(return_value=created_ticket),
@@ -175,6 +180,7 @@ def test_refusal_opens_an_escalation_that_closure_then_resolves():
     # ---- Task 2 (this task): the reviewer replies, closure resolves it ----
     reviewer = SimpleNamespace(id=7)
     identity_repo_task2 = SimpleNamespace(get_user_by_mattermost_id=AsyncMock(return_value=reviewer))
+    reviewer_mm_id = "mm-techlead-1"
     escalation_repo_task2 = SimpleNamespace(
         get_escalation_ticket_by_human_thread=AsyncMock(return_value=ticket),
         set_escalation_status=AsyncMock(return_value=ticket),
@@ -200,7 +206,7 @@ def test_refusal_opens_an_escalation_that_closure_then_resolves():
     ):
         closure_result = asyncio.run(
             escalation_closure.handle_reviewer_reply(
-                mattermost_user_id="mm-techlead-1",
+                mattermost_user_id=reviewer_mm_id,
                 channel_id="reviewer-dm-channel-1",
                 channel_type="D",
                 root_id="reviewer-dm-root-1",
@@ -219,5 +225,5 @@ def test_refusal_opens_an_escalation_that_closure_then_resolves():
 
     delivered_text = learner_post_call.args[1]
     assert "ESC-" not in delivered_text
-    assert "tech lead" not in delivered_text.lower()
+    assert "ops support" not in delivered_text.lower()
     assert "equipment programme" in delivered_text

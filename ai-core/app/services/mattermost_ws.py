@@ -526,7 +526,7 @@ class MattermostWebSocketListener:
         # DMs (rule 1) and would otherwise let the reply through untouched.
         # Never raised past here: a bug in closure must not take the
         # listener down, same principle as onboarding's arrival handling.
-                # 1. Check Knowledge Candidate commands FIRST (approve KC-X, reject KC-X, list KC)
+        # 1. Check Knowledge Candidate commands FIRST (approve KC-X, reject KC-X, list KC)
         if await knowledge_review.handle_reviewer_reply(
             mattermost_user_id=user_id, channel_id=channel_id, channel_type=channel_type, text=raw_message
         ):

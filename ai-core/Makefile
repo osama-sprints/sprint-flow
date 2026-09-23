@@ -89,6 +89,20 @@ format:
 typecheck:
 	uv run pyright
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+# Unit tests: no database, no network. Integration tests: real PostgreSQL
+# (migrations are applied by the suite), every external service faked.
+test:
+	uv run python -m pytest -q tests/
+
+test-integration:
+	SPRINTFLOW_INTEGRATION_DB=1 uv run python -m pytest -q tests/integration/
+
+test-all: test test-integration
+	@echo "All tests passed"
+
 check: lint typecheck
 	@echo "All checks passed"
 
@@ -206,6 +220,11 @@ help:
 	@echo "  pre-commit           Run all pre-commit hooks"
 	@echo "  pre-commit-update    Update pre-commit hook versions"
 	@echo ""
+	@echo "Tests:"
+	@echo "  test                 Run unit + integration tests (integration needs SPRINTFLOW_INTEGRATION_DB=1)"
+	@echo "  test-integration     Run the real-PostgreSQL integration tests"
+	@echo "  test-all             Run unit tests, then integration tests"
+	@echo ""
 	@echo "Docker (API + DB):"
 	@echo "  docker-build         Build Docker image"
 	@echo "  docker-up            Start API + DB containers"
@@ -227,7 +246,11 @@ help:
         migrate migration migrate-downgrade migrate-history \
         eval eval-quick eval-no-report \
         lint format typecheck check pre-commit pre-commit-update \
+<<<<<<< HEAD
         test test-integration \
+=======
+        test test-integration test-all \
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         docker-build docker-up docker-down docker-logs docker-migrate \
         docker-migrate-downgrade docker-migrate-history \
         stack-up stack-down stack-logs \

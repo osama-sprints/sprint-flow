@@ -29,7 +29,8 @@ def is_ingestion_request(text: str, file_ids: list[str]) -> bool:
 def extract_file_ids(post: dict[str, object] | None, fallback: list[str] | None = None) -> list[str]:
     """Extract attachment ids from Mattermost post fields and attachment props."""
     post = post or {}
-    values: list[object] = list(post.get("file_ids") or []) if isinstance(post.get("file_ids"), list) else []
+    raw_file_ids = post.get("file_ids")
+    values: list[object] = list(raw_file_ids) if isinstance(raw_file_ids, list) else []
     props = post.get("props")
     if isinstance(props, dict):
         attachments = props.get("attachments") or []
@@ -40,7 +41,8 @@ def extract_file_ids(post: dict[str, object] | None, fallback: list[str] | None 
         prop_file_ids = props.get("file_ids") or []
         values.extend(prop_file_ids if isinstance(prop_file_ids, list) else [prop_file_ids])
     values.extend(fallback or [])
-    return list(dict.fromkeys(str(value) for value in values if value))
+    strings = [str(value) for value in values if value]
+    return list(dict.fromkeys(strings))
 
 
 def _is_authorized_admin(user: dict[str, object]) -> bool:
@@ -88,7 +90,9 @@ async def ingest_attached_documents(message: IncomingMessage) -> str | None:
     logger.info("mattermost_documents_ingested", user_id=message.user_id, filenames=completed)
     if len(completed) == 1:
         return f"✅ Ingested '{completed[0]}'. You can now ask questions about this document."
-    return f"✅ Ingested {', '.join(repr(name) for name in completed)}. You can now ask questions about these documents."
+    return (
+        f"✅ Ingested {', '.join(repr(name) for name in completed)}. You can now ask questions about these documents."
+    )
 
 
 async def run_ingestion_pipeline(

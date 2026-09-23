@@ -386,3 +386,78 @@ def test_delivery_failure_keeps_the_ticket_open():
 
     assert result.outcome == escalation_closure.ClosureOutcome.DELIVERY_FAILED
     escalation_repo.set_escalation_status.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Knowledge discovery trigger (Capability 11 -> Capability 12 boundary)
+# ---------------------------------------------------------------------------
+
+
+def test_resolved_ticket_triggers_knowledge_discovery():
+    """Closing a ticket must fire knowledge discovery for that escalation id.
+
+    The trigger is fire-and-forget: the test awaits the same coroutine the
+    task would run, so the assertion is deterministic (no sleep, no real LLM).
+    """
+    ticket = _ticket()
+    reviewer = _reviewer()
+
+    identity_repo = SimpleNamespace(get_user_by_mattermost_id=AsyncMock(return_value=reviewer))
+    escalation_repo = SimpleNamespace(
+        get_escalation_ticket_by_human_thread=AsyncMock(return_value=ticket),
+        set_escalation_status=AsyncMock(return_value=ticket),
+    )
+    llm_service = SimpleNamespace(call=AsyncMock(return_value=_llm_response("Approved.")))
+    mattermost_client = SimpleNamespace(
+        create_post=AsyncMock(side_effect=[{"id": "learner-post-1"}, {"id": "confirm-1"}])
+    )
+    extract = AsyncMock()
+
+    with _patched(
+        identity_repo=identity_repo,
+        escalation_repo=escalation_repo,
+        llm_service=llm_service,
+        mattermost_client=mattermost_client,
+        knowledge_extraction=SimpleNamespace(extract_candidate_for_ticket=extract),
+    ):
+        result = asyncio.run(
+            escalation_closure.handle_reviewer_reply(
+                mattermost_user_id="mm-reviewer-1",
+                channel_id="reviewer-dm-channel-1",
+                channel_type="D",
+                root_id="reviewer-dm-root-1",
+                text="approved, one week",
+            )
+        )
+
+    assert result.outcome == escalation_closure.ClosureOutcome.RESOLVED
+    extract.assert_awaited_once_with(ticket.id)
+
+
+def test_knowledge_discovery_failure_never_fails_the_closure():
+    """The learner already has their answer; a discovery crash must stay silent."""
+    ticket = _ticket()
+    reviewer = _reviewer()
+
+    identity_repo = SimpleNamespace(get_user_by_mattermost_id=AsyncMock(return_value=reviewer))
+    escalation_repo = SimpleNamespace(
+        get_escalation_ticket_by_human_thread=AsyncMock(return_value=ticket),
+        set_escalation_status=AsyncMock(return_value=ticket),
+    )
+    llm_service = SimpleNamespace(call=AsyncMock(return_value=_llm_response("Approved.")))
+    mattermost_client = SimpleNamespace(
+        create_post=AsyncMock(side_effect=[{"id": "learner-post-1"}, {"id": "confirm-1"}])
+    )
+    extract = AsyncMock(side_effect=RuntimeError("LLM exploded"))
+
+    with _patched(
+        identity_repo=identity_repo,
+        escalation_repo=escalation_repo,
+        llm_service=llm_service,
+        mattermost_client=mattermost_client,
+        knowledge_extraction=SimpleNamespace(extract_candidate_for_ticket=extract),
+    ):
+        result = asyncio.run(escalation_closure._trigger_knowledge_discovery(ticket.ticket_ref, ticket.id))
+
+    assert result is None  # swallowed; closure outcome unaffected
+    extract.assert_awaited_once_with(ticket.id)
