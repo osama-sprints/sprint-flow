@@ -62,8 +62,7 @@ def make_ceremony(
         agenda=agenda,
     )
 
-
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------
 # due_ceremonies
 # ---------------------------------------------------------------------------
 
@@ -113,8 +112,23 @@ def test_downtime_catchup_included():
     assert catchup_ceremony in result
 
 
+def test_bands_are_disjoint():
+    """Multi-interval bands are disjoint: a ceremony 25h out is caught only by the 24h band, never the 1h band."""
+    far = make_ceremony(ceremony_id=4, scheduled_at=NOW + timedelta(hours=24))
 
-# ---------------------------------------------------------------------------
+    with patch(
+        "app.services.ceremony_reminders.ceremony_repo.list_upcoming_ceremonies",
+        new_callable=AsyncMock,
+        return_value=[far],
+    ):
+        short_result = asyncio.run(due_ceremonies(1, now=NOW))
+        long_result = asyncio.run(due_ceremonies(24, now=NOW))
+
+    assert far in long_result
+    assert far not in short_result
+
+
+# ----------------------------------------------------------------------
 # test_cancelled_ceremony_skipped
 # ---------------------------------------------------------------------------
 
@@ -135,8 +149,7 @@ def test_cancelled_ceremony_skipped():
     assert cancelled not in result
     assert result == []
 
-
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------
 # test_already_sent_skipped
 # ---------------------------------------------------------------------------
 
@@ -159,8 +172,7 @@ def test_already_sent_skipped():
     mock_mm.create_direct_channel.assert_not_called()
     mock_mm.create_post.assert_not_called()
 
-
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------
 # test_idempotent_on_restart
 # ---------------------------------------------------------------------------
 
@@ -202,8 +214,7 @@ def test_idempotent_on_restart():
     assert result2 is False  # Second call skipped — row already in sent_set.
     assert post_count == 1
 
-
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------
 # test_timezone_formatting
 # ---------------------------------------------------------------------------
 
@@ -228,8 +239,7 @@ def test_timezone_formatting_utc():
     assert "14:30" in formatted
     assert tz_name == "UTC"
 
-
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------
 # test_fallback_to_utc
 # ---------------------------------------------------------------------------
 
