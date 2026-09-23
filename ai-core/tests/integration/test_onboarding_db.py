@@ -87,7 +87,7 @@ async def cleanup() -> None:
                 text(
                     "DELETE FROM onboarding_steps "
                     "WHERE user_id::text IN (SELECT id::text FROM users WHERE mattermost_user_id LIKE :p) "
-                    "OR channel_id::text IN (SELECT id::text FROM channels WHERE name LIKE :p)"
+                    "OR channel_id LIKE :p"
                 ),
                 {"p": f"{PREFIX}%"},
             )
@@ -95,13 +95,8 @@ async def cleanup() -> None:
                 text(
                     "DELETE FROM channel_roles "
                     "WHERE user_id::text IN (SELECT id::text FROM users WHERE mattermost_user_id LIKE :p) "
-                    "OR channel_id::text IN (SELECT id::text FROM channels WHERE name LIKE :p) "
                     "OR channel_id LIKE :p"
                 ),
-                {"p": f"{PREFIX}%"},
-            )
-            await s.execute(
-                text("DELETE FROM channels WHERE name LIKE :p"),
                 {"p": f"{PREFIX}%"},
             )
             await s.execute(

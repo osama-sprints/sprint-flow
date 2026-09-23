@@ -381,9 +381,8 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     # was: if rule.name == "policy_support" and ingestion_context:
         if rule.name == "policy_support" and ingestion_context and not (question and policy_matched):
            continue
-    # was: if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"}:
-        if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"} and not (question and policy_matched):
-           continue
+        if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"} and not generic_live_session_question:
+            continue
         if rule.name == "learner_calendar" and generic_live_session_question:
             continue
         if rule.name == "learner_support" and question and policy_matched:

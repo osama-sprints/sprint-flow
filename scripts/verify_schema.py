@@ -15,17 +15,17 @@ What it proves, one PASS/FAIL line per assertion, exit 1 on any failure:
      run is a no-op (exit 0, no upgrade executed).
   3. The reference-data seed runs twice through the documented command with no
      manual PYTHONPATH; role and ceremony-type counts do not change.
-  4. The in-container probe ``ai-core/scripts/verify_schema.py`` is piped over
-     stdin (never ``docker compose cp``) and its PASS/FAIL lines are folded in:
-     columns, named constraints, timestamptz everywhere, NULLS NOT DISTINCT,
-     one person with two roles in two cohorts, idempotent upserts, overlap
-     boundaries, ticket references, the onboarding outbox.
-  5. Populated cycle: rows are inserted with psql (user, two cohorts, two
-     memberships with different roles, sprint, ceremony), a second role in the
-     same cohort is rejected by the database, ``alembic downgrade base`` exits 0
-     and removes ONLY the domain tables (the fake ``checkpoints`` row survives),
-     ``alembic upgrade head`` exits 0 again, the population is re-applied on
-     the fresh head and ``alembic check`` reports no drift.
+4. The in-container probe ``ai-core/scripts/verify_schema.py`` is piped over
+      stdin (never ``docker compose cp``) and its PASS/FAIL lines are folded in:
+      columns, named constraints, timestamptz everywhere, NULLS NOT DISTINCT,
+      one person with two roles in two channels, idempotent upserts, overlap
+      boundaries, ticket references, the onboarding outbox.
+   5. Populated cycle: rows are inserted with psql (user, two channel roles,
+      sprint, ceremony), a second role in the same channel is rejected by the
+      database, ``alembic downgrade base`` exits 0 and removes ONLY the domain
+      tables (the fake ``checkpoints`` row survives), ``alembic upgrade head``
+      exits 0 again, the population is re-applied on the fresh head and
+      ``alembic check`` reports no drift.
   6. Live database: ``alembic check`` reports no drift, ``alembic current`` is
      at head, all four checkpointer tables and all domain tables exist, and
      ``/health`` reports the domain schema healthy.
@@ -48,19 +48,24 @@ from typing import Sequence
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROBE = os.path.join(ROOT, "ai-core", "scripts", "verify_schema.py")
-HEAD_REVISION = "e40272b244ca"
+HEAD_REVISION = "f00000000002"
 DOMAIN_TABLES = (
     "users",
     "roles",
     "ceremony_types",
-    "cohorts",
-    "cohort_memberships",
+    "channel_roles",
     "sprints",
     "ceremonies",
     "ceremony_amendments",
+    "ceremony_reminders",
+    "daily_standup_prompts",
     "daily_standups",
     "escalation_tickets",
+    "knowledge_candidates",
     "onboarding_steps",
+    "policy_document_chunks",
+    "announcements",
+    "standup_replies",
 )
 CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations")
 EXPECTED_ROLES = 4
@@ -165,21 +170,22 @@ def table_exists(database: str, table: str) -> bool:
 
 
 def population_sql(suffix: str) -> str:
-    """Rows a real deployment would hold: a person with two different roles in two cohorts, a sprint, a ceremony."""
+    """Rows a real deployment would hold: a person with two different roles in two channels, a sprint, a ceremony."""
     return f"""
-    INSERT INTO users (mattermost_user_id, username, email, is_superadmin)
-        VALUES ('verify-mm-{suffix}', 'verify{suffix}', 'verify{suffix}@example.test', false);
-    INSERT INTO cohorts (name) VALUES ('Verify-A-{suffix}'), ('Verify-B-{suffix}');
-    INSERT INTO cohort_memberships (cohort_id, user_id, role_id)
-        SELECT c.id, u.id, r.id FROM cohorts c, users u, roles r
-        WHERE c.name = 'Verify-A-{suffix}' AND u.mattermost_user_id = 'verify-mm-{suffix}' AND r.key = 'scrum_master';
-    INSERT INTO cohort_memberships (cohort_id, user_id, role_id)
-        SELECT c.id, u.id, r.id FROM cohorts c, users u, roles r
-        WHERE c.name = 'Verify-B-{suffix}' AND u.mattermost_user_id = 'verify-mm-{suffix}' AND r.key = 'learner';
-    INSERT INTO sprints (cohort_id, name, start_date, end_date)
-        SELECT id, 'Sprint 1', DATE '2030-01-06', DATE '2030-01-17' FROM cohorts WHERE name = 'Verify-A-{suffix}';
-    INSERT INTO ceremonies (team_id, channel_id, ceremony_type_id, organizer_id, scheduled_at, duration_minutes, agenda)
-        SELECT 'verify-team', 'verify-channel', t.id, u.id, TIMESTAMPTZ '2030-01-06 10:00:00+00', 90, 'Kick-off'
+    INSERT INTO users (mattermost_user_id, username, email, is_superadmin, created_at, updated_at)
+        VALUES ('verify-mm-{suffix}', 'verify{suffix}', 'verify{suffix}@example.test', false, now(), now());
+    INSERT INTO channel_roles (team_id, channel_id, user_id, role_id, status, joined_at, created_at, updated_at)
+        SELECT 'sprints-community', 'verify-chan-a-{suffix}', u.id, r.id, 'active', now(), now(), now()
+        FROM users u, roles r
+        WHERE u.mattermost_user_id = 'verify-mm-{suffix}' AND r.key = 'scrum_master';
+    INSERT INTO channel_roles (team_id, channel_id, user_id, role_id, status, joined_at, created_at, updated_at)
+        SELECT 'sprints-community', 'verify-chan-b-{suffix}', u.id, r.id, 'active', now(), now(), now()
+        FROM users u, roles r
+        WHERE u.mattermost_user_id = 'verify-mm-{suffix}' AND r.key = 'learner';
+    INSERT INTO sprints (team_id, channel_id, name, start_date, end_date, created_at, updated_at)
+        SELECT 'sprints-community', 'verify-chan-a-{suffix}', 'Sprint 1', DATE '2030-01-06', DATE '2030-01-17', now(), now();
+    INSERT INTO ceremonies (team_id, channel_id, ceremony_type_id, organizer_id, scheduled_at, duration_minutes, agenda, created_at, updated_at)
+        SELECT 'sprints-community', 'verify-chan-a-{suffix}', t.id, u.id, TIMESTAMPTZ '2030-01-06 10:00:00+00', 90, 'Kick-off', now(), now()
         FROM ceremony_types t, users u
         WHERE t.key = 'sprint_planning' AND u.mattermost_user_id = 'verify-mm-{suffix}';
     """
@@ -189,17 +195,17 @@ def populate(database: str, suffix: str, label: str) -> None:
     """Insert representative rows into ``database`` so downgrade and re-upgrade run on real data."""
     proc = psql(database, population_sql(suffix))
     check(
-        f"{label}: user, 2 cohorts, 2 memberships, sprint, ceremony inserted with psql",
+        f"{label}: user, 2 channel roles, sprint, ceremony inserted with psql",
         proc.returncode == 0,
         proc.stderr,
     )
     distinct_roles = scalar(
         database,
-        f"SELECT count(DISTINCT role_id) FROM cohort_memberships m JOIN users u ON u.id = m.user_id "
+        f"SELECT count(DISTINCT role_id) FROM channel_roles cr JOIN users u ON u.id = cr.user_id "
         f"WHERE u.mattermost_user_id = 'verify-mm-{suffix}'",
     )
     check(
-        f"{label}: one person holds two different roles in two cohorts (real rows)",
+        f"{label}: one person holds two different roles in two channels (real rows)",
         distinct_roles == "2",
         distinct_roles,
     )
@@ -209,12 +215,13 @@ def populate(database: str, suffix: str, label: str) -> None:
     check(f"{label}: ceremony instant round-trips as timestamptz", ceremonies == "1", ceremonies)
     second_role = psql(
         database,
-        f"INSERT INTO cohort_memberships (cohort_id, user_id, role_id) SELECT c.id, u.id, r.id FROM cohorts c, users u, roles r "
-        f"WHERE c.name = 'Verify-A-{suffix}' AND u.mattermost_user_id = 'verify-mm-{suffix}' AND r.key = 'learner'",
+        f"INSERT INTO channel_roles (team_id, channel_id, user_id, role_id, status, joined_at, created_at, updated_at) "
+        f"SELECT 'sprints-community', 'verify-chan-a-{suffix}', u.id, r.id, 'active', now(), now(), now() FROM users u, roles r "
+        f"WHERE u.mattermost_user_id = 'verify-mm-{suffix}' AND r.key = 'learner'",
     )
     check(
-        f"{label}: a second role for the same person in the same cohort is rejected by the database",
-        second_role.returncode != 0 and "uq_cohort_memberships_user_cohort" in second_role.stderr,
+        f"{label}: a second role for the same person in the same channel is rejected by the database",
+        second_role.returncode != 0 and "uq_channel_roles_user_channel" in second_role.stderr,
         second_role.stderr or "insert succeeded",
     )
 

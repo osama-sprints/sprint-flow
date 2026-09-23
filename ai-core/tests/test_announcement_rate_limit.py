@@ -20,7 +20,7 @@ async def test_announcement_rate_limiting_workflow():
 
     # Mock fetching Announcement
     mock_announcement = MagicMock(spec=Announcement)
-    mock_announcement.cohort_id = 100
+    mock_announcement.channel_id = "chan-100"
     session.get = AsyncMock(return_value=mock_announcement)
 
     async def fake_exec(stmt):

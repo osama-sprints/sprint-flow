@@ -184,7 +184,7 @@ async def open_escalation(
     """Route an ungrounded learner question to the channel's designated human, privately.
 
     The human is resolved strictly from the stored channel-role mapping
-    (``channel_memberships`` joined to ``roles``) for the role ``ticket_type``
+    (``channel_roles`` joined to ``roles``) for the role ``ticket_type``
     maps to — never from ``question`` or any other message content. When the
     channel has nobody in that role, the ticket is still created (unassigned)
     and the learner is told honestly rather than the request failing; see
