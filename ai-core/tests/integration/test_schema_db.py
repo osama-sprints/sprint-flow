@@ -150,7 +150,7 @@ def test_two_workers_claim_disjoint_steps_with_skip_locked():
     prefix = f"it-claim-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_ids: list[str] = []
         try:
             channel_id = f"Claim-{prefix}"
             channel_ids.append(channel_id)
@@ -312,7 +312,7 @@ def test_sprint_overlap_boundaries():
     prefix = f"it-spr-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_ids: list[str] = []
         try:
             channel_id = f"Spr-{prefix}"
             channel_ids.append(channel_id)
@@ -333,7 +333,7 @@ def test_sprint_names_are_unique_case_insensitively():
     prefix = f"it-spr-ci-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_ids: list[str] = []
         try:
             channel_id = f"Spr-{prefix}"
             channel_ids.append(channel_id)

@@ -20,8 +20,8 @@ from app.services import escalation
 from app.services.authorisation import ValidationFailed
 
 
-def _ctx(**overrides) -> RequesterContext:
-    defaults = dict(mattermost_user_id="learner-1", channel_id="channel-a", learner_thread_id="thread-1")
+def _ctx(**overrides: object) -> RequesterContext:
+    defaults: dict[str, object] = dict(mattermost_user_id="learner-1", channel_id="channel-a", learner_thread_id="thread-1")
     defaults.update(overrides)
     return RequesterContext(**defaults)
 
@@ -90,6 +90,7 @@ def test_happy_path_routes_to_the_channels_tech_lead_and_hides_identity():
         )
 
     assert result.code == ResultCode.ESCALATION_OPENED
+    assert result.ticket is not None
     assert result.ticket.ticket_ref in result.message
     assert "lead" not in result.message.lower() and "nora" not in result.message.lower()
     mocks["mattermost_client"].create_direct_channel.assert_awaited_once_with("lead-mm")

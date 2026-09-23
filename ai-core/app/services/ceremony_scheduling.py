@@ -624,8 +624,7 @@ async def commit_schedule(
         link, event_id = await create_meeting_link(
             title=proposal.ceremony_type_label,
             start=proposal.scheduled_at,
-            duration_minutes=proposal.duration_minutes,
-            # description=proposal.agenda,
+            duration_minutes=proposal.duration_minutes, 
             description=_event_description(proposal.agenda, proposal.channel_id),
             organizer_email=org_email,
         )
@@ -810,7 +809,6 @@ async def commit_amendment(
                 updated.external_event_id,
                 start=updated.scheduled_at,
                 duration_minutes=updated.duration_minutes,
-                # description=updated.agenda,
                 description=_event_description(updated.agenda, updated.channel_id),
             )
 
