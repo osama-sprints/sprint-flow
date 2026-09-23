@@ -48,55 +48,6 @@ def _jitsi_link(title: str, start: datetime) -> str:
     return link
 
 
-# async def create_meeting_link(
-#     title: str,
-#     start: datetime,
-#     duration_minutes: int,
-#     description: str | None = None,
-#     organizer_email: str | None = None,
-# ) -> str | None:
-#     """Generate a video-meeting join URL for a ceremony.
-
-#     Delegates to the backend selected by ``settings.MEETING_LINK_PROVIDER``.
-
-#     Args:
-#         title: Ceremony title.
-#         start: The ceremony start time (timezone-aware, any zone).
-#         duration_minutes: Length of the event in minutes.
-#         description: Optional agenda / description text.
-#         organizer_email: The organiser's email, passed to Google Meet when used.
-
-#     Returns:
-#         str | None: The join URL, or ``None`` when generation fails or is disabled.
-#     """
-#     if not settings.GOOGLE_MEET_ENABLED:
-#         return None
-
-#     provider = getattr(settings, "MEETING_LINK_PROVIDER", "jitsi").lower().strip()
-
-#     if provider == "jitsi":
-#         try:
-#             return _jitsi_link(title, start)
-#         except Exception as e:
-#             logger.exception("jitsi_meet_link_failed", title=title, error=str(e))
-#             return None
-
-#     if provider == "google_meet":
-#         # Delegate to the existing Google Meet service.
-#         from app.services.google_meet import create_meet_event
-
-#         return await create_meet_event(
-#             title=title,
-#             start=start,
-#             duration_minutes=duration_minutes,
-#             description=description,
-#             organizer_email=organizer_email,
-#         )
-
-#     logger.warning("meeting_link_unknown_provider", provider=provider)
-#     return None
-
-
 async def create_meeting_link(
     title, start, duration_minutes, description=None, organizer_email=None,
 ) -> tuple[str | None, str | None]:

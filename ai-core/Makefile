@@ -92,6 +92,12 @@ typecheck:
 check: lint typecheck
 	@echo "All checks passed"
 
+test:
+	uv run pytest -q tests/
+
+test-integration:
+	SPRINTFLOW_INTEGRATION_DB=1 uv run pytest -q tests/integration/
+
 pre-commit:
 	uv run pre-commit run --all-files
 
