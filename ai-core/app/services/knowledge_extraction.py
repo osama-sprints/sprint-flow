@@ -20,13 +20,11 @@ from typing import Optional
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlmodel import Session
 
 from app.core.logging import logger
 from app.models import EscalationTicket
 from app.models.enums import EscalationStatus, KnowledgeCandidateStatus
 from app.models.knowledge_candidate import KnowledgeCandidate
-from app.services.database import database_service
 from app.services.llm.service import llm_service
 from app.models.enums import RoleKey
 from app.services.domain import channels as channel_repo

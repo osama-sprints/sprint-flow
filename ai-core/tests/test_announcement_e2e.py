@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import AsyncMock
 from app.services.authorisation import ValidationFailed
 
 @pytest.fixture

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 import re
 
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from app.core.logging import logger
 from app.core.requester import RequesterContext

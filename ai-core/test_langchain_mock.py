@@ -1,4 +1,3 @@
-import pytest
 from app.core.langgraph.tools.mattermost_admin import current_requester
 from app.core.langgraph.tools.ceremony_scheduler import schedule_ceremony, _get_requester
 
@@ -18,7 +17,7 @@ try:
         }
     )
     print("RES:", res)
-except Exception as e:
+except Exception:
     import traceback
 
     traceback.print_exc()

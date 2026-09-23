@@ -28,10 +28,6 @@ from app.services.database import session_scope
 from typing import Any, Dict, Optional
 
 from app.services.announcements import (
-    resolve_announcement_channel,
-    resolve_recipients_by_role,
-    resolve_recipients_by_usernames,
-    create_announcement_preview,
     confirm_and_dispatch_announcement,
     cancel_announcement,
     request_announcement,

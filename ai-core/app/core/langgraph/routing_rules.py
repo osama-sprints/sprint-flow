@@ -149,8 +149,8 @@ ROUTING_RULES: List[Rule] = [
         name="back_office_schedule",
         route=CapabilityRoute.BACK_OFFICE,
         patterns=_compile(
-            rf"\b(?:meeting|metting|ceremon(?:y|ies)|schedul(?:e|ing)|stand-?ups?|sprint\s+plannings?|"
-            rf"reviews?|retros?(?:pectives?)?|open\s+q\s*&?\s*a|books?)\b",
+            r"\b(?:meeting|metting|ceremon(?:y|ies)|schedul(?:e|ing)|stand-?ups?|sprint\s+plannings?|"
+            r"reviews?|retros?(?:pectives?)?|open\s+q\s*&?\s*a|books?)\b",
             r"\b(?:create|schedule|book|arrange|set\s*up|manage|organize|reorganize)\b.{0,50}\b(?:meeting|metting|ceremon(?:y|ies)|q\s*&?\s*a|session)\b",
             rf"{_NOT_AFTER_DETERMINER}\b(?:schedul(?:e|ing)|book|set\s*up|plan|arrange|organi[sz]e|put|add|"
             rf"create|hold|host|fix)\b.{{0,80}}\b{_CEREMONY}\b",

@@ -34,7 +34,6 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import pytest
 
 from app.core.langgraph.tools.results import ResultCode
 from app.core.requester import RequesterContext

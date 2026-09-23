@@ -52,7 +52,8 @@ async def create_meeting_link(
     title, start, duration_minutes, description=None, organizer_email=None,
 ) -> tuple[str | None, str | None]:
     """... Returns (join_url, external_event_id). external_event_id is always
-    None for jitsi — there is no real external event, just a URL formula."""
+    None for jitsi — there is no real external event, just a URL formula.
+    """
     if not settings.GOOGLE_MEET_ENABLED:
         return None, None
     provider = getattr(settings, "MEETING_LINK_PROVIDER", "jitsi").lower().strip()

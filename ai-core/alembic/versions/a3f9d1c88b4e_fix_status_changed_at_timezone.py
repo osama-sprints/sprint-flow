@@ -15,7 +15,6 @@ migration's upgrade() does not retroactively change existing columns.
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = 'a3f9d1c88b4e'
