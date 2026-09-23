@@ -62,7 +62,10 @@ def run(coro_factory: Callable[[], Awaitable[T]]) -> T:
         finally:
             await database_service.close()
 
-    return asyncio.run(wrapped())
+    return asyncio.run(
+        wrapped(),
+        loop_factory=asyncio.SelectorEventLoop,
+    )
 
 
 def tag() -> str:
@@ -83,19 +86,9 @@ async def make_user(prefix: str, index: int = 0):
 async def cleanup(prefix: str, channel_ids: list[str]) -> None:
     async with session_scope() as s:
         params = {"p": f"{prefix}%", "channels": channel_ids or ["__none__"]}
-        await s.exec(
-            text(
-                "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-            ),
-            params=params,
-        )  # type: ignore[call-overload]
+        await s.exec(text("DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"), params=params)  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM escalation_tickets WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
-        await s.exec(
-            text(
-                "DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE channel_id = ANY(:channels))"
-            ),
-            params=params,
-        )  # type: ignore[call-overload]
+        await s.exec(text("DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE channel_id = ANY(:channels))"), params=params)  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM ceremonies WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM sprints WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM channel_roles WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
@@ -199,11 +192,8 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
             changes = await asyncio.gather(
                 *(
                     channel_repo.upsert_channel_role(
-                        user_id=user.id,
-                        team_id="sprints-community",
-                        channel_id=channel_id,
-                        role_id=learner.id,
-                        assigned_by_id=None,
+                        user_id=user.id, team_id="sprints-community", channel_id=channel_id,
+                        role_id=learner.id, assigned_by_id=None,
                     )
                     for _ in range(10)
                 )
@@ -211,20 +201,12 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
             assert len({c.role_assignment.id for c in changes}) == 1
             assert sum(1 for c in changes if c.created) == 1
             change = await channel_repo.upsert_channel_role(
-                user_id=user.id,
-                team_id="sprints-community",
-                channel_id=channel_id,
-                role_id=lead.id,
-                assigned_by_id=None,
+                user_id=user.id, team_id="sprints-community", channel_id=channel_id, role_id=lead.id, assigned_by_id=None
             )
             assert change.previous_role_id == learner.id and not change.created
             with pytest.raises(IntegrityError):
                 async with session_scope() as s:
-                    s.add(
-                        ChannelRole(
-                            user_id=user.id, team_id="sprints-community", channel_id=channel_id, role_id=learner.id
-                        )
-                    )
+                    s.add(ChannelRole(user_id=user.id, team_id="sprints-community", channel_id=channel_id, role_id=learner.id))
                     await s.flush()
         finally:
             await cleanup(prefix, channel_ids)
@@ -245,6 +227,7 @@ def test_ceremony_overlap_boundaries_and_amendment_trail():
             start = datetime(2030, 6, 1, 10, 0, tzinfo=UTC)
             ceremony = await ceremony_repo.create_ceremony(
                 channel_id=channel_id,
+                team_id="sprints-community",
                 ceremony_type_id=ctype.id,
                 organizer_id=user.id,
                 scheduled_at=start,
@@ -257,7 +240,7 @@ def test_ceremony_overlap_boundaries_and_amendment_trail():
             assert [c.id for c in hits] == [ceremony.id]
             assert not await ceremony_repo.find_overlapping_ceremonies(channel_id, start, 30, exclude_id=ceremony.id)
             with pytest.raises(ValueError):
-                await ceremony_repo.update_ceremony(ceremony.id, amended_by_id=user.id, changes={"channel_id": 1})
+                await ceremony_repo.update_ceremony(ceremony.id, amended_by_id=user.id, changes={"team_id": "another-team"})
             with pytest.raises(ValueError):
                 await ceremony_repo.update_ceremony(
                     ceremony.id, amended_by_id=user.id, changes={"scheduled_at": datetime(2030, 6, 1, 11)}

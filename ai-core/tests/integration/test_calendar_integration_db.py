@@ -40,8 +40,10 @@ def run(coro_factory: Callable[[], Awaitable[T]]) -> T:
         finally:
             await database_service.close()
 
-    return asyncio.run(wrapped())
-
+    return asyncio.run(
+        wrapped(),
+        loop_factory=asyncio.SelectorEventLoop,
+    )
 
 def tag() -> str:
     return datetime.now(UTC).strftime("%H%M%S%f")

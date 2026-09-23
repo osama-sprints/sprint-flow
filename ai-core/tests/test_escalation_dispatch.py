@@ -20,10 +20,10 @@ from app.services import escalation
 from app.services.authorisation import ValidationFailed
 
 
-def _ctx(**overrides: object) -> RequesterContext:
-    defaults: dict[str, object] = dict(mattermost_user_id="learner-1", channel_id="channel-a", learner_thread_id="thread-1")
+def _ctx(**overrides) -> RequesterContext:
+    defaults = dict(mattermost_user_id="learner-1", channel_id="channel-a", learner_thread_id="thread-1")
     defaults.update(overrides)
-    return RequesterContext(**defaults)
+    return RequesterContext(**defaults)  # type: ignore[arg-type]
 
 
 def _learner(user_id: int = 1) -> SimpleNamespace:
