@@ -5,22 +5,24 @@ Two layers, both printing one PASS/FAIL line per assertion and exiting non-zero
 on any failure:
 
 1. In-container probe (always): ``scripts/_scheduling_probe.py`` is piped over
-   stdin into the ai-core container. It seeds identities and a cohort (prefix
-   ``verify-sched-``), binds ``current_requester`` and drives the tools inside a
-   tiny LangGraph graph so ``interrupt()`` / ``Command(resume=...)`` run for real
-   without a model: ambiguous time -> question and zero rows; unauthorised ->
-   refused and zero rows; "no" -> zero rows; "yes" -> one row at the intended UTC
-   instant; conflict -> refused; amend -> amendment trail; past ceremony frozen;
-   member reads, non-member refused. It cleans up after itself.
+   stdin into the ai-core container. It seeds identities and channel roles
+   (prefix ``verify-sched-``), binds ``current_requester`` and drives the tools
+   inside a tiny LangGraph graph so ``interrupt()`` / ``Command(resume=...)`` run
+   for real without a model: ambiguous time -> question and zero rows;
+   unauthorised (learner, non-member, scrum master of another channel) ->
+   refused and zero rows; "no" -> zero rows; "yes" -> one row at the intended
+   UTC instant; conflict -> refused; amend -> amendment trail; past ceremony
+   frozen; member reads, non-member refused. It cleans up after itself.
 
 2. Live conversation (when the stack is up and bootstrapped): the admin DMs the
-   bot a real scheduling sentence for a cohort the probe created (the admin is
-   given a scrum_master membership in it first; being on ADMIN_EMAILS they are a
-   superadmin anyway, so the membership documents the cohort-role path rather
-   than being required). The bot must answer with a confirmation naming an
-   absolute time in UTC; the admin replies ``yes``; the probe must then find
-   exactly one ceremony whose ``scheduled_at`` equals the confirmed instant. A
-   second DM with no am/pm must produce a clarifying question and no new row.
+   bot a real scheduling sentence. The DM is accepted because the admin is on
+   ADMIN_EMAILS (a superadmin); the conversation layer binds the DM channel id
+   as the requester's ``channel_id`` and the ceremony lands there. The bot must
+   answer with a confirmation naming an absolute time in UTC; the admin replies
+   ``yes``; the probe must then find exactly one ceremony under the DM channel
+   whose ``scheduled_at`` equals the confirmed instant. A second DM with no
+   am/pm must produce a clarifying question and no new row. Cleanup then prunes
+   the DM channel's ceremonies as well as the ``verify-sched-`` stamp rows.
 
 Run from the repository root with the stack up:  python3 scripts/verify_scheduling.py
 Skip the conversation layer:                      python3 scripts/verify_scheduling.py --probe-only
@@ -148,26 +150,79 @@ req(
 )
 
 setup = probe_json("setup", STAMP, admin_me["id"], admin_me["username"], admin_me["email"])
-COHORT = setup["cohort_name"]
-print(
-    f"==> Layer 2: cohort {COHORT} created; admin user_id={setup['user_id']} superadmin={setup['is_superadmin']} "
-    f"scrum_master membership added"
+print(f"==> Layer 2: admin user_id={setup['user_id']} superadmin={setup['is_superadmin']}")
+
+if not setup.get("is_superadmin"):
+    # The DM transports no team, so authority resolves against the DM channel id,
+    # which cannot hold a channel_role row. Only a superadmin can schedule there.
+    print("==> Layer 2 skipped: the Mattermost admin account is not on ADMIN_EMAILS")
+    print("=" * 84)
+    sys.exit(0 if all(v for _, v in checks) else 1)
+
+TEST_CHANNEL = ""
+TEAM_ID = ""
+ROOT_ID = ""
+
+
+def req_ok(method, path, body=None, token=None):
+    """Call the Mattermost REST API and return the parsed body, or None on HTTP error."""
+    data = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(API + path, data=data, method=method)
+    r.add_header("Content-Type", "application/json")
+    if token:
+        r.add_header("Authorization", "Bearer " + token)
+    try:
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            return json.loads(resp.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")[:200]
+        print(f"    ! {method} {path} -> {exc.code} {detail}")
+        return None
+
+
+team = req_ok("POST", "/teams", {"name": f"pocverify{STAMP}", "display_name": "SprintFlow Verify", "type": "O"}, token=ADMIN)
+if not team:
+    print("==> Layer 2 skipped: could not create the verification team")
+    print("=" * 84)
+    sys.exit(0 if all(v for _, v in checks) else 1)
+TEAM_ID = team["id"]
+channel = req_ok(
+    "POST",
+    "/channels",
+    {"team_id": TEAM_ID, "name": f"verify-sched-{STAMP}", "display_name": "Verify Scheduling", "type": "O"},
+    token=ADMIN,
 )
+if not channel:
+    print("==> Layer 2 skipped: could not create the verification channel in the team")
+    print("=" * 84)
+    sys.exit(0 if all(v for _, v in checks) else 1)
+TEST_CHANNEL = channel["id"]
+# The bot must be in the team (and the channel) to receive its events and post replies.
+req_ok("POST", f"/teams/{TEAM_ID}/members", {"team_id": TEAM_ID, "user_id": bot["id"]}, token=ADMIN)
+req_ok("POST", f"/channels/{TEST_CHANNEL}/members", {"user_id": bot["id"]}, token=ADMIN)
 
 
-def dm(text):
-    """Send the bot a direct message as the admin; return (channel id, post)."""
-    ch, _ = req("POST", "/channels/direct", [admin_me["id"], bot["id"]], token=ADMIN)
-    p, _ = req("POST", "/posts", {"channel_id": ch["id"], "message": text}, token=ADMIN)
-    return ch["id"], p
+def dm(text, root_id=""):
+    """Post a message to the verification channel as the admin; return (channel id, post).
+
+    Every turn mentions the bot and, from the second message on, stays inside the
+    same thread: in a public channel the bot replies as a thread rooted at the
+    triggering post, and the LangGraph session is that thread, so follow-up posts
+    must carry the same ``root_id`` to continue the same conversation.
+    """
+    body = {"channel_id": TEST_CHANNEL, "message": f"@{BOT} {text}"}
+    if root_id:
+        body["root_id"] = root_id
+    p, _ = req("POST", "/posts", body, token=ADMIN)
+    return TEST_CHANNEL, p
 
 
 def wait_reply(channel_id, after_ts, timeout=150):
-    """Poll the DM channel for the bot's next reply after a timestamp."""
+    """Poll the channel for the bot's next reply after a timestamp."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(3)
-        d, _ = req("GET", f"/channels/{channel_id}/posts?per_page=40", token=ADMIN)
+        d, _ = req("GET", f"/channels/{channel_id}/posts?per_page=60", token=ADMIN)
         hits = [
             p
             for p in d["posts"].values()
@@ -182,22 +237,24 @@ def wait_reply(channel_id, after_ts, timeout=150):
 
 
 def ceremonies():
-    """Every ceremony of the verification cohort, as the database holds them."""
-    return probe_json("inspect", COHORT)["ceremonies"]
+    """Every ceremony of the verification channel, as the database holds them."""
+    return probe_json("inspect", TEST_CHANNEL)["ceremonies"]
 
 
 try:
-    sentence = f"schedule sprint planning for tomorrow at 2 pm for cohort {COHORT}"
+    sentence = "schedule sprint planning for tomorrow at 2 pm"
     print(f"==> admin: {sentence!r}")
     ch, p = dm(sentence)
+    ROOT_ID = p["id"]
     reply = wait_reply(ch, p["create_at"])
     print(f"    bot: {reply[:300]!r}")
     if "timezone" in reply.lower() and "UTC" not in reply:
         # The profile zone had not reached the bot (cached profile). State the
         # zone in the sentence instead: the same interpreter path, explicit zone.
         print("==> bot asked for a timezone (profile cache); retrying with an explicit zone in the sentence")
-        sentence = f"schedule sprint planning for tomorrow at 2 pm {ZONE} for cohort {COHORT}"
+        sentence = f"schedule sprint planning for tomorrow at 2 pm {ZONE}"
         ch, p = dm(sentence)
+        ROOT_ID = p["id"]
         reply = wait_reply(ch, p["create_at"])
         print(f"    bot: {reply[:300]!r}")
     confirmed_utc = UTC_RE.search(reply)
@@ -206,7 +263,7 @@ try:
     check("nothing stored before the person confirms", len(ceremonies()) == 0, json.dumps(ceremonies()))
 
     print("==> admin: 'yes'")
-    ch, p2 = dm("yes")
+    ch, p2 = dm("yes", root_id=ROOT_ID)
     reply2 = wait_reply(ch, p2["create_at"])
     print(f"    bot: {reply2[:300]!r}")
     rows = ceremonies()
@@ -227,9 +284,15 @@ try:
         json.dumps(rows),
     )
 
+    # Amend/read/ambiguous steps below depend on the scheduling confirmation
+    # having landed. When it fell through they cannot run, so guard them.
+    ceremony_id = (rows or [{}])[0].get("id")
+    original_utc = (rows or [{}])[0].get("scheduled_at_utc", "")
+    if not confirmed_utc or not ceremony_id or not original_utc:
+        print("==> scheduling did not confirm above; skipping the amend/read/ambiguous conversation steps")
+        raise SystemExit(1)
+
     # --- amend the ceremony through conversation (s1e4 acceptance criterion) ---
-    ceremony_id = rows[0]["id"] if rows else None
-    original_utc = rows[0]["scheduled_at_utc"] if rows else ""
     # The stored instant is "YYYY-MM-DD HH:MM UTC"; the ceremony's local day in
     # the organiser's zone is what a person would name when moving it.
     local_day = (
@@ -243,7 +306,7 @@ try:
     # assume the ceremony's own date, and must change nothing.
     sentence = f"move ceremony #{ceremony_id} to 4 pm the same day"
     print(f"==> admin: {sentence!r}")
-    ch, pv = dm(sentence)
+    ch, pv = dm(sentence, root_id=ROOT_ID)
     reply_v = wait_reply(ch, pv["create_at"])
     print(f"    bot: {reply_v[:300]!r}")
     check(
@@ -260,7 +323,7 @@ try:
     # Then the same amendment with the day the bot asked for.
     sentence = f"move ceremony #{ceremony_id} to {local_day} 16:00 {ZONE}"
     print(f"==> admin: {sentence!r}")
-    ch, pa = dm(sentence)
+    ch, pa = dm(sentence, root_id=ROOT_ID)
     reply_a = wait_reply(ch, pa["create_at"])
     print(f"    bot: {reply_a[:300]!r}")
     # The amendment question names both instants ("move it from <old> to <new>"),
@@ -285,7 +348,7 @@ try:
     )
 
     print("==> admin: 'yes'")
-    ch, pa2 = dm("yes")
+    ch, pa2 = dm("yes", root_id=ROOT_ID)
     reply_a2 = wait_reply(ch, pa2["create_at"])
     print(f"    bot: {reply_a2[:300]!r}")
     amended = ceremonies()
@@ -302,10 +365,10 @@ try:
         json.dumps(amended),
     )
 
-    # --- read the calendar through conversation (open to any cohort member) ---
-    sentence = f"what's scheduled for cohort {COHORT}?"
+    # --- read the calendar through conversation (open to any channel member) ---
+    sentence = "what's scheduled for this channel?"
     print(f"==> admin: {sentence!r}")
-    ch, pr = dm(sentence)
+    ch, pr = dm(sentence, root_id=ROOT_ID)
     reply_r = wait_reply(ch, pr["create_at"])
     print(f"    bot: {reply_r[:300]!r}")
     check(
@@ -314,9 +377,9 @@ try:
         reply_r[:250],
     )
 
-    sentence = f"schedule the retro for tomorrow at 2 for cohort {COHORT}"
+    sentence = "schedule the retro for tomorrow at 2"
     print(f"==> admin: {sentence!r}")
-    ch, p3 = dm(sentence)
+    ch, p3 = dm(sentence, root_id=ROOT_ID)
     reply3 = wait_reply(ch, p3["create_at"])
     print(f"    bot: {reply3[:300]!r}")
     lowered = reply3.lower()
@@ -330,7 +393,11 @@ try:
     check("the ambiguous request did not ask for confirmation", "Please confirm" not in reply3, reply3[:200])
 finally:
     print("==> cleanup")
-    print(f"    {probe_json('cleanup', STAMP)}")
+    args = ("cleanup", STAMP) + ((TEST_CHANNEL,) if TEST_CHANNEL else ())
+    print(f"    {probe_json(*args)}")
+    if TEAM_ID:
+        req_ok("DELETE", f"/teams/{TEAM_ID}", token=ADMIN)
+        print(f"    archived verification team {TEAM_ID}")
 
 print()
 print("=" * 84)
