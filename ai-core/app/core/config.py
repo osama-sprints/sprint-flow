@@ -122,6 +122,11 @@ def parse_dict_of_lists_from_env(prefix, default_dict=None):
 class Settings:
     """Application settings without using pydantic."""
 
+    POLICY_CHUNK_SIZE: int
+    POLICY_CHUNK_OVERLAP: int
+    POLICY_EMBEDDING_MODEL: str
+    POLICY_EMBEDDING_DIM: int
+
     def __init__(self):
         """Initialize application settings from environment variables.
 
@@ -153,7 +158,14 @@ class Settings:
         )
         self.LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
         self.LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
-        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+        # Support both LANGFUSE_HOST and LANGFUSE_BASE_URL for backwards compatibility
+        self.LANGFUSE_HOST = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        self.LANGFUSE_DEBUG = os.getenv("LANGFUSE_DEBUG", "false").lower() in ("true", "1", "t", "yes")
+        # Sample rate for traces (1.0 = 100%, reduce for high-volume apps to lower costs)
+        try:
+            self.LANGFUSE_SAMPLE_RATE = float(os.getenv("LANGFUSE_SAMPLE_RATE", "1.0"))
+        except ValueError:
+            self.LANGFUSE_SAMPLE_RATE = 1.0
 
         # LLM Configuration — ALL traffic goes through the LiteLLM proxy.
         # There are no direct provider SDKs or provider keys in this stack:
@@ -275,6 +287,8 @@ class Settings:
         self.MATTERMOST_OUTGOING_WEBHOOK_TOKEN = os.getenv("MATTERMOST_OUTGOING_WEBHOOK_TOKEN", "")
         self.MATTERMOST_BOT_USERNAME = os.getenv("MATTERMOST_BOT_USERNAME", "sprintflow-assistant")
         self.MATTERMOST_HTTP_TIMEOUT = float(os.getenv("MATTERMOST_HTTP_TIMEOUT", "30"))
+        self.MATTERMOST_EVENT_DEDUP_TTL = int(os.getenv("MATTERMOST_EVENT_DEDUP_TTL", "60"))
+        self.MATTERMOST_INGESTION_DIR = os.getenv("MATTERMOST_INGESTION_DIR", "/app/data/sample_policies")
 
         # WebSocket listener — the only way to receive direct messages, since
         # Mattermost never fires outgoing webhooks outside public channels.
@@ -348,8 +362,30 @@ class Settings:
         # Nor further ahead than this.
         self.SCHEDULING_MAX_HORIZON_DAYS = int(os.getenv("SCHEDULING_MAX_HORIZON_DAYS", "365"))
         # What happens when a new ceremony overlaps an existing one for the same
-        # cohort: "refuse" (default, the scheduling report justifies it) or "warn".
+        # channel: "refuse" (default, the scheduling report justifies it) or "warn".
         self.SCHEDULING_CONFLICT_POLICY = os.getenv("SCHEDULING_CONFLICT_POLICY", "refuse").strip().lower()
+
+        # --- Google Meet integration (ceremony scheduling) -----------------------
+        # Set GOOGLE_MEET_ENABLED=true and supply credentials to attach a Google
+        # Meet link to ceremonies when the user asks.  Set to false (default) to
+        # disable entirely; all scheduling still works without it.
+        self.GOOGLE_MEET_ENABLED = os.getenv("GOOGLE_MEET_ENABLED", "false").lower() in ("true", "1", "t", "yes")
+        # Service account credentials as a JSON *string* (not a file path) —
+        # safe for container environments. Copy the contents of your
+        # service-account-key.json here.
+        self.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS = os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", "")
+        # The Google Calendar to create events on. Use "primary" for the service
+        # account's own calendar, or a shared calendar's id (found in Calendar
+        # settings → "Calendar ID").
+        self.GOOGLE_CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
+        # A real Google/Workspace account email for the service account to impersonate
+        # via domain-wide delegation. Required to create Meet links — service accounts
+        # cannot generate Meet conferencing without acting as a real user.
+        self.GOOGLE_IMPERSONATE_EMAIL = os.getenv("GOOGLE_IMPERSONATE_EMAIL", "").strip()
+        # Which video-meeting backend to use: "jitsi" (default, no credentials
+        # needed) or "google_meet" (requires Workspace + domain-wide delegation).
+        self.MEETING_LINK_PROVIDER = os.getenv("MEETING_LINK_PROVIDER", "jitsi").strip()
+        self.GOOGLE_CALENDAR_HTTP_TIMEOUT = float(os.getenv("GOOGLE_CALENDAR_HTTP_TIMEOUT", "15"))
 
         # --- Sprint 1 / proactive onboarding (s1e5) ------------------------------
         self.ONBOARDING_ENABLED = os.getenv("ONBOARDING_ENABLED", "true").lower() in ("true", "1", "t", "yes")
@@ -367,6 +403,22 @@ class Settings:
         # with exponential backoff over MATTERMOST_HTTP_TIMEOUT (~200 s at the
         # default 30 s timeout), so a slow-but-alive worker is never overtaken.
         self.ONBOARDING_CLAIM_LEASE_SECONDS = int(os.getenv("ONBOARDING_CLAIM_LEASE_SECONDS", "600"))
+
+        # --- Sprint 1 / proactive daily standups (s1e7) --------------------------
+        self.STANDUP_ENABLED = os.getenv("STANDUP_ENABLED", "true").lower() in ("true", "1", "t", "yes")
+        # The local hour each learner's prompt becomes due, in their own timezone.
+        self.STANDUP_PROMPT_LOCAL_HOUR = int(os.getenv("STANDUP_PROMPT_LOCAL_HOUR", "9"))
+        # How often the dispatcher scans active sprints for new or due prompts.
+        self.STANDUP_POLL_INTERVAL_SECONDS = int(os.getenv("STANDUP_POLL_INTERVAL_SECONDS", "30"))
+        # Dispatch attempts before a prompt is marked failed for an operator.
+        self.STANDUP_MAX_ATTEMPTS = int(os.getenv("STANDUP_MAX_ATTEMPTS", "3"))
+        # Base of the exponential retry backoff after a failed dispatch.
+        self.STANDUP_RETRY_BACKOFF_SECONDS = int(os.getenv("STANDUP_RETRY_BACKOFF_SECONDS", "60"))
+        # How long a claimed prompt stays exclusive to one worker before another
+        # may take it over (covers a worker that died mid-delivery). Exceeds the
+        # worst-case delivery: open DM + post, each retried with backoff over
+        # MATTERMOST_HTTP_TIMEOUT, and the role re-check.
+        self.STANDUP_CLAIM_LEASE_SECONDS = int(os.getenv("STANDUP_CLAIM_LEASE_SECONDS", "300"))
 
         # Apply environment-specific settings
         self.apply_environment_settings()

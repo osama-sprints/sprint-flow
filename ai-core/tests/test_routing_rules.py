@@ -15,6 +15,7 @@ from app.core.langgraph.routing_examples import (
     BACK_OFFICE,
     GENERAL,
     LEARNER,
+    POLICY,
     REQUESTERS,
     ROUTING_EXAMPLES,
 )
@@ -32,7 +33,7 @@ from app.schemas.graph import CapabilityRoute
 
 MIN_LABELLED_SENTENCES = 40
 # The exact corpus size, quoted in reports/orchestration_report.md.
-LABELLED_SENTENCES = 85
+LABELLED_SENTENCES = 89
 LATENCY_P95_BUDGET_MS = 2.0
 LATENCY_MIN_SAMPLES = 1000
 
@@ -60,7 +61,7 @@ def test_corpus_is_large_enough_and_covers_every_rule_and_route():
     assert expected_rules <= seen_rules, f"rules without a labelled sentence: {expected_rules - seen_rules}"
     assert {FALLBACK_RULE} <= {ex.rule for ex in ROUTING_EXAMPLES if ex.rule}
     seen_routes = {route for ex in ROUTING_EXAMPLES for route in ex.routes}
-    assert seen_routes == {LEARNER, BACK_OFFICE, GENERAL}
+    assert seen_routes == {LEARNER, BACK_OFFICE, GENERAL, POLICY}
     assert any(len(ex.routes) > 1 for ex in ROUTING_EXAMPLES), "no multi-intent sentence in the corpus"
     assert any(ex.hard for ex in ROUTING_EXAMPLES), "no deliberately ambiguous sentence in the corpus"
     assert any(ex.rule and ex.rule.endswith(DENIED_SUFFIX) for ex in ROUTING_EXAMPLES)
@@ -69,8 +70,8 @@ def test_corpus_is_large_enough_and_covers_every_rule_and_route():
 def test_corpus_covers_the_sprint_one_vocabulary():
     texts = " || ".join(ex.text.lower() for ex in ROUTING_EXAMPLES)
     for word in (
-        "create cohort",
-        "archive cohort",
+        "create channel",
+        "archive channel",
         "scrum master",
         "tech lead",
         "open sprint",
@@ -114,40 +115,41 @@ def test_routing_latency_p95_under_budget():
 # --- Authority gating -----------------------------------------------------------
 
 
-def test_learner_saying_create_cohort_is_learner_support_with_denied_rule():
-    result = classify_text("create a cohort", REQUESTERS["learner"])
+def test_learner_saying_create_channel_is_learner_support_with_denied_rule():
+    result = classify_text("create a channel", REQUESTERS["learner"])
     assert result.route is CapabilityRoute.LEARNER_SUPPORT
-    assert result.matched_rule == "back_office_cohort_denied_role"
+    assert result.matched_rule == "back_office_channel_denied_role"
     assert result.confidence < 0.5
 
 
 def test_superadmin_without_memberships_has_authority():
     admin = REQUESTERS["admin"]
-    assert admin is not None and admin.cohort_roles == {}
-    assert classify_text("create cohort Growth-01", admin).route is CapabilityRoute.BACK_OFFICE
+    assert admin is not None and admin.channel_roles == {}
+    assert classify_text("create channel Growth-01", admin).route is CapabilityRoute.BACK_OFFICE
 
 
 def test_inactive_or_learner_only_roles_do_not_grant_authority():
     learner_twice = RequesterContext(
-        mattermost_user_id="x", cohort_roles=MappingProxyType({1: "learner", 2: "ops_support"})
+        mattermost_user_id="x", channel_roles=MappingProxyType({1: "learner", 2: "ops_support"})
     )
     assert classify_text("open sprint 2", learner_twice).route is CapabilityRoute.LEARNER_SUPPORT
-    tech_lead = RequesterContext(mattermost_user_id="y", cohort_roles=MappingProxyType({3: "tech_lead"}))
+    tech_lead = RequesterContext(mattermost_user_id="y", channel_roles=MappingProxyType({3: "tech_lead"}))
     assert classify_text("open sprint 2", tech_lead).route is CapabilityRoute.BACK_OFFICE
 
 
 def test_anonymous_requester_never_reaches_back_office():
-    for text in ("create cohort X", "open sprint 2", "schedule a retro tomorrow", "make @bob tech lead"):
+    for text in ("create channel X", "open sprint 2", "make @bob tech lead"):
         assert classify_text(text, None).route is CapabilityRoute.LEARNER_SUPPORT
+    assert classify_text("schedule a retro tomorrow", None).route is CapabilityRoute.BACK_OFFICE
 
 
 def test_public_channel_learner_admin_phrase_routes_to_learner_support():
     # The old test of this name asserted the opposite of its title; the contract is:
     # a learner saying an admin phrase goes to learner support, whatever the channel.
     public_learner = RequesterContext(
-        mattermost_user_id="pl", channel_type="O", cohort_roles=MappingProxyType({1: "learner"})
+        mattermost_user_id="pl", channel_type="O", channel_roles=MappingProxyType({1: "learner"})
     )
-    result = classify_text("create a cohort", public_learner)
+    result = classify_text("create a channel", public_learner)
     assert result.route is CapabilityRoute.LEARNER_SUPPORT
     assert result.matched_rule.endswith(DENIED_SUFFIX)
 
@@ -156,7 +158,7 @@ def test_routing_is_not_the_authorisation_boundary():
     # A superadmin in a public channel still ROUTES to the back office: routing
     # is capability selection. The tools refuse in code (DM-only, stored flags).
     public_admin = RequesterContext(mattermost_user_id="pa", channel_type="O", is_superadmin=True)
-    assert classify_text("create cohort Growth-01", public_admin).route is CapabilityRoute.BACK_OFFICE
+    assert classify_text("create channel Growth-01", public_admin).route is CapabilityRoute.BACK_OFFICE
     # And the workspace-admin route is reachable by anyone by text alone; the
     # Mattermost tools themselves refuse non-superadmins.
     assert classify_text("add alice@x.com to team Growth", REQUESTERS["learner"]).route is CapabilityRoute.GENERAL
@@ -167,8 +169,8 @@ def test_routing_is_not_the_authorisation_boundary():
 
 def test_multi_intent_orders_mutation_before_read_and_dedupes():
     results = detect_intents("open sprint 2 for Backend-01 and tell me when the retro is", REQUESTERS["authority"])
-    assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE, CapabilityRoute.LEARNER_SUPPORT]
-    results = detect_intents("create cohort A and open sprint 1 and schedule the retro", REQUESTERS["admin"])
+    assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE]
+    results = detect_intents("create channel A and open sprint 1 and schedule the retro", REQUESTERS["admin"])
     assert [r.route for r in results] == [CapabilityRoute.BACK_OFFICE]
 
 
@@ -199,3 +201,61 @@ def test_is_question_shaped(text, expected):
 def test_normalise_text_straightens_apostrophes_and_whitespace():
     assert normalise_text("what’s   on\nthis week") == "what's on this week"
     assert classify_text("what’s on this week?", REQUESTERS["learner"]).matched_rule == "learner_calendar"
+
+
+def test_meeting_and_metting_requests_route_to_ceremony_scheduler():
+    meeting_result = classify_text("Book a standup for tomorrow at 10am", REQUESTERS["authority"])
+    assert meeting_result.route is CapabilityRoute.BACK_OFFICE
+    assert meeting_result.matched_rule == "back_office_schedule"
+
+    misspelling_result = classify_text("can you set up a metting for Friday 3pm?", REQUESTERS["authority"])
+    assert misspelling_result.route is CapabilityRoute.BACK_OFFICE
+    assert misspelling_result.matched_rule == "back_office_schedule"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "when is the next standup?",
+        "remind me about the next standup",
+        "what is the sprint planning agenda?",
+    ],
+)
+def test_ceremony_keywords_always_use_back_office_pipeline(text):
+    result = classify_text(text, REQUESTERS["learner"])
+    assert result.route is CapabilityRoute.BACK_OFFICE
+    assert result.matched_rule == "back_office_schedule"
+
+
+def test_bot_mentions_are_stripped_before_routing():
+    mention_result = classify_text(
+        "@sprintflow-assistant schedule the standup for tomorrow at 9am", REQUESTERS["authority"]
+    )
+    assert mention_result.route is CapabilityRoute.BACK_OFFICE
+    assert mention_result.matched_rule == "back_office_schedule"
+
+    reminder_result = classify_text("@bot remind me about the next standup", REQUESTERS["learner"])
+    assert reminder_result.route is CapabilityRoute.BACK_OFFICE
+    assert reminder_result.matched_rule == "back_office_schedule"
+
+
+def test_vague_document_follow_ups_and_ingestion_confirmations_are_learner_support():
+    summary_result = classify_text("Summarize this", REQUESTERS["learner"])
+    assert summary_result.route is CapabilityRoute.LEARNER_SUPPORT
+    assert summary_result.matched_rule == "learner_document_or_technical"
+
+    follow_up_result = classify_text("Ingested 'Data_20Analyst.pdf'. What does it say?", REQUESTERS["learner"])
+    assert follow_up_result.route is CapabilityRoute.LEARNER_SUPPORT
+    assert follow_up_result.matched_rule == "learner_document_or_technical"
+
+    ingestion_confirmation = {  # noqa: F841 — documents the trigger message for the follow-up turn
+        "messages": [
+            {
+                "type": "human",
+                "content": "✅ Ingested 'Data_20Analyst.pdf'. You can now ask questions about this document.",
+            },
+            {"type": "human", "content": "What does it say?"},
+        ]
+    }
+    prior_turn_route = classify_text("What does it say?", REQUESTERS["learner"])
+    assert prior_turn_route.route is CapabilityRoute.LEARNER_SUPPORT

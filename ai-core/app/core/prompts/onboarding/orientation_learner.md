@@ -1,4 +1,4 @@
-{first_name}, your role in **{cohort_name}** is set: you're a **{role_label}**. Here's your orientation — the things that actually change day to day.
+{first_name}, your role in **{channel_id}** is set: you're a **{role_label}**. Here's your orientation — the things that actually change day to day.
 
 **Questions go to me first.** DM me or mention {bot_handle} in the cohort channel. Policy, process, technical blockers — I answer from the documented policies and say plainly when something isn't covered.
 
@@ -6,6 +6,6 @@
 
 **Daily standup.** I'll DM you each working day for three lines: done, next, blocked. Your lead reads the blockers.
 
-**Ceremonies.** Ask me "what's scheduled this week?" for {cohort_name}'s planning, standups, reviews, retros and open Q&A.
+**Ceremonies.** Ask me "what's scheduled this week?" for {channel_id}'s planning, standups, reviews, retros and open Q&A.
 
 Your leads: {lead_handles}. Reply here whenever you need something.

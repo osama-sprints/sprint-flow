@@ -13,12 +13,14 @@ What it proves, in order:
   1. /metrics before and after N mixed-intent DMs as the admin: routing counter
      deltas per route, and sprintflow_routing_model_calls_total unchanged
      (escalation rate 0/N); per-turn end-to-end latency printed
-  2. one multi-intent DM ("open sprint ... and tell me what's scheduled") -> exactly
-     ONE bot reply that mentions the sprint AND the calendar; the sprint exists
+  2. one multi-intent message in a fresh team channel (@bot "open sprint ... and tell
+     me what's scheduled") -> exactly ONE bot reply that mentions the sprint AND the
+     calendar; the sprint exists
   3. "hello there" -> exactly one reply (fallback still answers)
   4. existing suites scripts/verify_routing.py, verify_threading.py, verify_isolation.py
-  5. in-flight: "schedule the standup ..." asks to confirm, "yes" resumes the paused
-     specialist, the ceremony exists afterwards
+  5. in-flight, in a fresh team channel: "@bot schedule the standup ..." asks to
+     confirm, "yes" (same thread) resumes the paused specialist, the ceremony exists
+     afterwards
 
 Run with the stack up and bootstrapped, from the repository root:
 
@@ -53,18 +55,18 @@ METRIC_MODEL_CALLS = "sprintflow_routing_model_calls_total"
 REPLY_TIMEOUT = 150
 SETTLE_SECONDS = 20
 STAMP = str(int(time.time()))
-COHORT = f"Verify-Orch-{STAMP}"
 SPRINT = f"Verify-{STAMP}"
 
-# Mixed intents, all reads or greetings so the batch has no side effects, every
-# cohort reference explicit so the model has nothing to ask back.
+# Mixed intents, all reads or greetings so the batch has no side effects. The
+# channel is whatever conversation the person is in (handed to tools by the
+# conversation layer, not typed), so none of these mention one.
 MIXED_DMS: List[Tuple[str, str]] = [
-    ("learner_support", f"when is the next standup for cohort {COHORT}?"),
-    ("learner_support", "list cohorts"),
-    ("back_office", f"assign @{os.environ.get('MM_ADMIN_USERNAME', 'admin')} as scrum master of cohort {COHORT}"),
+    ("learner_support", "when is the next standup?"),
+    ("learner_support", "list channels"),
+    ("back_office", f"assign @{os.environ.get('MM_ADMIN_USERNAME', 'admin')} as the scrum master of this channel"),
     ("learner_support", "what's the leave policy?"),
     ("general", "thanks!"),
-    ("learner_support", f"what's on this week for cohort {COHORT}?"),
+    ("learner_support", "what's on this week?"),
     ("learner_support", "I'm blocked on the docker setup, who do I ask?"),
 ]
 
@@ -186,15 +188,18 @@ dm, _ = req("POST", "/channels/direct", [admin["id"], bot["id"]], token=TOKEN)
 DM = dm["id"]
 
 
-def send(text: str) -> Dict[str, Any]:
-    """DM the bot as the admin."""
-    post, _ = req("POST", "/posts", {"channel_id": DM, "message": text}, token=TOKEN)
+def send(text: str, channel_id: str = DM, root_id: str = "") -> Dict[str, Any]:
+    """Post the message as the admin to a channel (the DM by default)."""
+    body: Dict[str, Any] = {"channel_id": channel_id, "message": text}
+    if root_id:
+        body["root_id"] = root_id
+    post, _ = req("POST", "/posts", body, token=TOKEN)
     return post
 
 
-def bot_replies_since(after_ts: int) -> List[Dict[str, Any]]:
-    """Bot posts in the DM created after ``after_ts``, oldest first."""
-    data, _ = req("GET", f"/channels/{DM}/posts?per_page=60", token=TOKEN)
+def bot_replies_since(after_ts: int, channel_id: str = DM) -> List[Dict[str, Any]]:
+    """Bot posts in a channel created after ``after_ts``, oldest first."""
+    data, _ = req("GET", f"/channels/{channel_id}/posts?per_page=60", token=TOKEN)
     posts = [
         p
         for p in data["posts"].values()
@@ -206,25 +211,52 @@ def bot_replies_since(after_ts: int) -> List[Dict[str, Any]]:
     return posts
 
 
-def ask(text: str, label: str, settle: int = 0) -> Tuple[List[Dict[str, Any]], float]:
-    """Send a DM, wait for the first reply, optionally settle, return (replies, seconds to first reply)."""
-    post = send(text)
+def ask(
+    text: str,
+    label: str,
+    settle: int = 0,
+    channel_id: str = DM,
+    root_id: str = "",
+) -> Tuple[List[Dict[str, Any]], float]:
+    """Send a message, wait for the first reply, optionally settle, return (replies, seconds to first reply)."""
+    post = send(text, channel_id, root_id)
     started = time.time()
     deadline = started + REPLY_TIMEOUT
     first: Optional[float] = None
     while time.time() < deadline:
         time.sleep(2)
-        if bot_replies_since(post["create_at"]):
+        if bot_replies_since(post["create_at"], channel_id):
             first = time.time() - started
             break
     if settle:
         time.sleep(settle)
-    replies = bot_replies_since(post["create_at"])
+    replies = bot_replies_since(post["create_at"], channel_id)
     elapsed = first if first is not None else float("nan")
     latencies.append((label, elapsed))
     preview = replies[0]["message"][:110].replace("\n", " ") if replies else "<none>"
     print(f"        {label:28} {elapsed:6.1f}s  replies={len(replies)}  {preview!r}")
     return replies, elapsed
+
+
+def new_channel(name: str) -> str:
+    """Create a public team channel as the admin, invite the bot, return the channel id."""
+    team_id, _ = req("GET", f"/teams/name/{os.environ['MM_TEAM_NAME']}", token=TOKEN)
+    channel, _ = req(
+        "POST",
+        "/channels",
+        {"team_id": team_id["id"], "name": name, "display_name": f"Verify {name}", "type": "O"},
+        token=TOKEN,
+    )
+    req("POST", f"/channels/{channel['id']}/members", {"user_id": bot["id"]}, token=TOKEN)
+    return channel["id"]
+
+
+def archive_channel(channel_id: str) -> None:
+    """Archive a channel the verifier created; best-effort."""
+    try:
+        req("DELETE", f"/channels/{channel_id}", token=TOKEN)
+    except urllib.error.HTTPError:
+        pass
 
 
 # --- 0. warm-up ---------------------------------------------------------------------
@@ -242,11 +274,11 @@ for line in probe_out.splitlines():
     print("   " + line)
 check("in-container probe passed", probe_code == 0, f"exit {probe_code}")
 
-print(f"==> P. cohort {COHORT} with the admin as scrum master")
+print(f"==> P. DM channel {DM} with the admin as scrum master")
 setup = probe_json(
-    "setup-cohort", COHORT, admin["id"], admin["username"], os.environ.get("MM_ADMIN_EMAIL", admin["email"])
+    "setup-channel", DM, admin["id"], admin["username"], os.environ.get("MM_ADMIN_EMAIL", admin["email"])
 )
-check("probe created the cohort and the scrum-master membership", bool(setup.get("cohort_id")), json.dumps(setup))
+check("probe synced the admin and made them the channel's scrum master", bool(setup.get("user_id")), json.dumps(setup))
 
 # --- 1. metrics around N mixed DMs ------------------------------------------------------
 
@@ -282,9 +314,11 @@ check("at least two different routes were used across the batch", sum(1 for v in
 
 # --- 2. multi-intent -----------------------------------------------------------------
 
-print("==> 2. multi-intent DM: one coherent reply, sprint opened, calendar mentioned")
-multi_text = f"open sprint {SPRINT} for cohort {COHORT} and tell me what's scheduled"
-replies, _ = ask(multi_text, "multi-intent", settle=SETTLE_SECONDS)
+print("==> 2. multi-intent: one coherent reply, sprint opened, calendar mentioned")
+SPRINT_CHANNEL = new_channel(f"verify-sprint-{STAMP}")
+print(f"        opening a sprint in team channel {SPRINT_CHANNEL}")
+multi_text = f"@{BOT} open sprint {SPRINT} and tell me what's scheduled"
+replies, _ = ask(multi_text, "multi-intent", settle=SETTLE_SECONDS, channel_id=SPRINT_CHANNEL)
 if (
     len(replies) == 1
     and replies[0]["message"].rstrip().endswith("?")
@@ -292,9 +326,10 @@ if (
 ):
     # The model asked for confirmation first (allowed for privileged actions); answer and re-check.
     print("        bot asked a question first; answering 'yes'")
-    replies, _ = ask("yes", "multi-intent (confirm)", settle=SETTLE_SECONDS)
+    confirm_root = replies[0].get("root_id") or replies[0].get("id") or ""
+    replies, _ = ask("yes", "multi-intent (confirm)", settle=SETTLE_SECONDS, channel_id=SPRINT_CHANNEL, root_id=confirm_root)
 reply_text = " ".join(r["message"] for r in replies).lower()
-check("exactly ONE bot reply to the multi-intent DM (20 s settle)", len(replies) == 1, f"got {len(replies)}")
+check("exactly ONE bot reply to the multi-intent message (20 s settle)", len(replies) == 1, f"got {len(replies)}")
 check("the reply mentions the sprint", "sprint" in reply_text and SPRINT.lower() in reply_text)
 check(
     "the reply mentions the calendar",
@@ -303,8 +338,9 @@ check(
         for w in ("schedul", "calendar", "ceremon", "upcoming", "standup", "retro", "planning", "nothing")
     ),
 )
-sprint_row = probe_json("check-sprint", COHORT, SPRINT)
+sprint_row = probe_json("check-sprint", SPRINT_CHANNEL, SPRINT)
 check("the sprint exists in the database", bool(sprint_row.get("exists")), json.dumps(sprint_row))
+archive_channel(SPRINT_CHANNEL)
 
 # --- 3. fallback ----------------------------------------------------------------------
 
@@ -316,15 +352,23 @@ check("'hello there' gets exactly one reply", len(replies) == 1, f"got {len(repl
 # (runs before the slow suites so a transport problem there does not hide this result)
 
 print("==> 5. in-flight: schedule -> confirmation question -> 'yes' -> ceremony exists")
-replies, _ = ask(f"schedule the standup for tomorrow at 9am UTC for cohort {COHORT}", "schedule (asks)", settle=8)
+SCHED_CHANNEL = new_channel(f"verify-sched-{STAMP}")
+print(f"        scheduling in team channel {SCHED_CHANNEL}")
+replies, _ = ask(
+    f"@{BOT} schedule the standup for tomorrow at 9am UTC",
+    "schedule (asks)",
+    settle=8,
+    channel_id=SCHED_CHANNEL,
+)
 asked = len(replies) == 1 and ("?" in replies[0]["message"] or "confirm" in replies[0]["message"].lower())
 check("the scheduling turn asks the person to confirm (one reply, a question)", asked, f"got {len(replies)} replies")
-replies, _ = ask("yes", "confirm (resumes)", settle=8)
+confirm_root = replies[0].get("root_id") or replies[0].get("id") if replies else ""
+replies, _ = ask("yes", "confirm (resumes)", settle=8, channel_id=SCHED_CHANNEL, root_id=confirm_root)
 check("'yes' gets exactly one reply", len(replies) == 1, f"got {len(replies)}")
-calendar = probe_json("check-ceremonies", COHORT)
+calendar = probe_json("check-ceremonies", SCHED_CHANNEL)
 standups = [c for c in calendar.get("ceremonies", []) if c.get("type") == calendar.get("standup_key")]
 check(
-    "a daily_standup ceremony now exists for the cohort (paused turn resumed in place)",
+    "a daily_standup ceremony now exists for the team channel (paused turn resumed in place)",
     bool(standups),
     json.dumps(calendar),
 )
@@ -334,6 +378,7 @@ if replies:
         "the confirmation reply reports the scheduling outcome",
         any(w in replies[0]["message"].lower() for w in ("scheduled", "standup", "booked", "confirmed")),
     )
+archive_channel(SCHED_CHANNEL)
 
 # --- 4. existing suites ---------------------------------------------------------------
 

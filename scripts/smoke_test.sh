@@ -5,13 +5,33 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-set -a; source .env; set +a
+
+# Load .env file if available
+if [[ -f .env ]]; then
+  set -a; source .env; set +a
+fi
+
+# Dynamically find working Python binary across environments
+PYTHON_BIN=""
+for cmd in py python3 python; do
+  if command -v "$cmd" >/dev/null 2>&1; then
+    if "$cmd" -c "import sys" >/dev/null 2>&1; then
+      PYTHON_BIN="$cmd"
+      break
+    fi
+  fi
+done
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "ERROR: No working Python executable found."
+  exit 1
+fi
 
 MM_API="http://localhost:${MATTERMOST_HOST_PORT:-8065}/api/v4"
 BOT_USERNAME="${MATTERMOST_BOT_USERNAME:-sprintflow-assistant}"
-PROMPT="${1:-@${MATTERMOST_BOT_USERNAME:-sprintflow-assistant} In one short sentence, what is SprintFlow?}"
+PROMPT="${1:-@${BOT_USERNAME} In one short sentence, what is SprintFlow?}"
 
-jget() { python3 -c "
+jget() { "$PYTHON_BIN" -c "
 import json,sys
 try: d=json.loads(sys.argv[1])
 except Exception: print(''); sys.exit()
@@ -22,7 +42,7 @@ except Exception: print('')
 echo "==> Logging in as ${MM_ADMIN_USERNAME}"
 H=$(mktemp)
 curl -sS -D "$H" -o /dev/null -H 'Content-Type: application/json' \
-  -d "$(python3 -c 'import json,os;print(json.dumps({"login_id":os.environ["MM_ADMIN_USERNAME"],"password":os.environ["MM_ADMIN_PASSWORD"]}))')" \
+  -d "$("$PYTHON_BIN" -c 'import json,os;print(json.dumps({"login_id":os.environ["MM_ADMIN_USERNAME"],"password":os.environ["MM_ADMIN_PASSWORD"]}))')" \
   "$MM_API/users/login"
 TOKEN=$(grep -i '^token:' "$H" | tail -1 | tr -d '\r' | awk '{print $2}'); rm -f "$H"
 [[ -n "$TOKEN" ]] || { echo "login failed"; exit 1; }
@@ -35,7 +55,7 @@ echo "    channel=$CHANNEL_ID bot=$BOT_ID"
 
 echo "==> Posting: ${PROMPT}"
 POST=$(curl -sS -X POST "${AUTH[@]}" "$MM_API/posts" \
-  -d "$(PROMPT="$PROMPT" CHANNEL_ID="$CHANNEL_ID" python3 -c 'import json,os;print(json.dumps({"channel_id":os.environ["CHANNEL_ID"],"message":os.environ["PROMPT"]}))')")
+  -d "$(PROMPT="$PROMPT" CHANNEL_ID="$CHANNEL_ID" "$PYTHON_BIN" -c 'import json,os;print(json.dumps({"channel_id":os.environ["CHANNEL_ID"],"message":os.environ["PROMPT"]}))')")
 POST_ID=$(jget "$POST" "d['id']")
 [[ -n "$POST_ID" ]] || { echo "post failed: $POST"; exit 1; }
 echo "    post_id=$POST_ID"
@@ -43,15 +63,13 @@ echo "    post_id=$POST_ID"
 echo "==> Waiting up to 120s for the assistant to reply"
 for i in $(seq 1 40); do
   sleep 3
-  REPLY=$(curl -sS "${AUTH[@]}" "$MM_API/channels/$CHANNEL_ID/posts?per_page=30" | BOT_ID="$BOT_ID" POST_ID="$POST_ID" python3 -c '
+  REPLY=$(curl -sS "${AUTH[@]}" "$MM_API/channels/$CHANNEL_ID/posts?per_page=30" | BOT_ID="$BOT_ID" POST_ID="$POST_ID" "$PYTHON_BIN" -c '
 import json,os,sys
 d=json.load(sys.stdin)
 posts=d.get("posts",{})
 bot, trigger = os.environ["BOT_ID"], os.environ["POST_ID"]
 after=posts.get(trigger,{}).get("create_at",0)
-# Only real posts from the bot created AFTER the trigger. Without the type and
-# timestamp filters this matches the "sprintflow-assistant joined the team."
-# system message and reports a false pass.
+
 hits=[p for p in posts.values()
       if p.get("user_id")==bot and not (p.get("type") or "").startswith("system_")
       and p.get("create_at",0) > after]

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  tests:
+    name: pytest (Sprint 4 offline suite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-core
+    env:
+      APP_ENV: test
+      JWT_SECRET_KEY: ci-only-not-a-real-secret-0123456789abcdef
+      OPENAI_API_KEY: ci-dummy-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --all-groups
+      - run: >-
+          uv run pytest -q -rs
+          tests/test_schema.py
+          tests/test_escalation_dispatch.py
+          tests/integration/test_schema_db.py
+          tests/integration/test_calendar_integration_db.py
+
+  checks:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: sprintflow
+          POSTGRES_PASSWORD: sprintflow
+          POSTGRES_DB: sprintflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sprintflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      APP_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: sprintflow_test
+      POSTGRES_USER: sprintflow
+      POSTGRES_PASSWORD: sprintflow
+      SPRINTFLOW_INTEGRATION_DB: "1"
+      OPENAI_API_KEY: ""
+      MATTERMOST_URL: http://localhost:8065
+      MATTERMOST_BOT_TOKEN: test-token
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+        working-directory: ai-core
+      - name: Ruff lint
+        run: uv run ruff check .
+        working-directory: ai-core
+      - name: Ruff format check
+        run: uv run ruff format --check .
+        working-directory: ai-core
+      - name: Pyright typecheck
+        run: uv run pyright
+        working-directory: ai-core
+      - name: Run pytest (unit + real-PostgreSQL integration)
+        run: uv run python -m pytest -q tests/
+        working-directory: ai-core
