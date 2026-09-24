@@ -9,6 +9,8 @@ from app.models.ceremony import Ceremony
 from app.core.langgraph.tools.ceremonies import schedule_ceremony
 from app.services.ceremony_reminders import send_reminder
 from app.services.ceremony_scheduling import ScheduleProposal
+import httplib2
+from googleapiclient.errors import HttpError
 
 
 @pytest.fixture
@@ -178,3 +180,96 @@ async def test_reminder_message_includes_meet_link(mock_record_sent, mock_org, m
     message = call_args[1]
     assert "https://meet.google.com/abc" in message
     assert "🔗 Join:" in message
+
+
+@pytest.fixture
+def mock_google_api_patch(monkeypatch):
+    mock_build = MagicMock()
+    mock_execute = MagicMock()
+    mock_build.return_value.events.return_value.patch.return_value.execute = mock_execute
+    monkeypatch.setattr("app.services.google_meet.build", mock_build)
+    monkeypatch.setattr("app.services.google_meet.service_account.Credentials.from_service_account_info", MagicMock())
+    return mock_execute
+
+
+@pytest.fixture
+def mock_google_api_delete(monkeypatch):
+    mock_build = MagicMock()
+    mock_execute = MagicMock()
+    mock_build.return_value.events.return_value.delete.return_value.execute = mock_execute
+    monkeypatch.setattr("app.services.google_meet.build", mock_build)
+    monkeypatch.setattr("app.services.google_meet.service_account.Credentials.from_service_account_info", MagicMock())
+    return mock_execute
+
+
+def _http_error(status: int) -> HttpError:
+    resp = httplib2.Response({"status": status})
+    resp.status = status
+    return HttpError(resp, f'{{"error":"simulated {status}"}}'.encode())
+
+
+@pytest.mark.anyio
+async def test_update_meet_event_success(mock_google_settings, mock_google_api_patch):
+    from app.services.google_meet import update_meet_event
+
+    mock_google_api_patch.return_value = {"id": "evt-1"}
+    ok = await update_meet_event(
+        "evt-1", start=datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc), duration_minutes=30, title="Retro"
+    )
+    assert ok is True
+
+
+@pytest.mark.anyio
+async def test_update_meet_event_missing_target_returns_false_not_raise(mock_google_settings, mock_google_api_patch):
+    from app.services.google_meet import update_meet_event
+
+    mock_google_api_patch.side_effect = _http_error(404)
+    ok = await update_meet_event(
+        "evt-missing", start=datetime(2026, 9, 10, 10, 0, tzinfo=timezone.utc), duration_minutes=30
+    )
+    assert ok is False
+
+
+@pytest.mark.anyio
+async def test_cancel_meet_event_treats_404_as_success(mock_google_settings, mock_google_api_delete):
+    from app.services.google_meet import cancel_meet_event
+
+    mock_google_api_delete.side_effect = _http_error(404)
+    assert await cancel_meet_event("evt-already-gone") is True
+
+
+@pytest.mark.anyio
+async def test_create_meet_event_retries_transient_503_then_succeeds(mock_google_settings, mock_google_api):
+    error = _http_error(503)
+    success = {
+        "id": "evt-2",
+        "conferenceData": {"entryPoints": [{"entryPointType": "video", "uri": "https://meet.google.com/x"}]},
+    }
+    mock_google_api.side_effect = [error, error, success]
+    link, event_id = await create_meet_event(
+        title="Standup", start=datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc), duration_minutes=15
+    )
+    assert link == "https://meet.google.com/x"
+    assert mock_google_api.call_count == 3
+
+
+@pytest.mark.anyio
+async def test_create_meet_event_stops_after_bounded_retries_on_persistent_outage(
+    mock_google_settings, mock_google_api
+):
+    mock_google_api.side_effect = _http_error(503)
+    link, event_id = await create_meet_event(
+        title="Standup", start=datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc), duration_minutes=15
+    )
+    assert link is None and event_id is None
+    assert mock_google_api.call_count == 3  # bounded, not indefinite
+
+
+@pytest.mark.anyio
+async def test_create_meet_event_does_not_retry_a_fatal_auth_error(mock_google_settings, mock_google_api):
+    mock_google_api.side_effect = _http_error(401)
+    link, event_id = await create_meet_event(
+        title="Standup", start=datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc), duration_minutes=15
+    )
+    assert link is None and event_id is None
+    assert mock_google_api.call_count == 1  # fails fast, no wasted retries

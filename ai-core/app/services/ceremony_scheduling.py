@@ -554,6 +554,12 @@ async def prepare_schedule(
     )
 
 
+def _event_description(agenda: str | None, channel_id: str) -> str:
+    """Calendar event description: agenda plus which SprintFlow channel it belongs to."""
+    tag = f"SprintFlow channel: {channel_id}"
+    return f"{agenda}\n\n{tag}" if agenda else tag
+
+
 async def commit_schedule(
     proposal: ScheduleProposal,
     *,
@@ -630,8 +636,8 @@ async def commit_schedule(
         link, event_id = await create_meeting_link(
             title=proposal.ceremony_type_label,
             start=proposal.scheduled_at,
-            duration_minutes=proposal.duration_minutes,
-            description=proposal.agenda,
+            duration_minutes=proposal.duration_minutes, 
+            description=_event_description(proposal.agenda, proposal.channel_id),
             organizer_email=org_email,
         )
         if link or event_id:
@@ -825,7 +831,7 @@ async def commit_amendment(
                 updated.external_event_id,
                 start=updated.scheduled_at,
                 duration_minutes=updated.duration_minutes,
-                description=updated.agenda,
+                description=_event_description(updated.agenda, updated.channel_id),
             )
 
     trail = await ceremony_repo.list_amendments(proposal.ceremony_id)
@@ -864,15 +870,9 @@ async def list_calendar(
     context = requester or require_requester()
     if not context.channel_id or not context.team_id:
         raise ValidationFailed("I don't know which channel or team this is.")
-
-<<<<<<< HEAD
-    await require_channel_membership(context, context.channel_id, action="read_calendar")
-=======
     # Reading the calendar is a member privilege, not an admin one — but it is
     # still scoped: a non-member (and an unsynced identity) learns nothing.
     await require_channel_membership(context, context.channel_id, action="list_ceremonies")
-
->>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     rows = await ceremony_repo.list_ceremonies(
         context.channel_id, include_past=include_past, include_cancelled=include_cancelled, now=now or utcnow()
     )

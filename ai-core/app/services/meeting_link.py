@@ -55,8 +55,7 @@ async def create_meeting_link(
     description=None,
     organizer_email=None,
 ) -> tuple[str | None, str | None]:
-    """Generate a video-meeting link for a ceremony.
-
+    """Generate a video-meeting join URL for a ceremony.
     Returns (join_url, external_event_id). external_event_id is always
     None for jitsi — there is no real external event, just a URL formula.
     """

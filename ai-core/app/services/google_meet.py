@@ -31,15 +31,16 @@ Setup instructions:
 6. Create a JSON key for the service account:
    Service Accounts → your account → Keys → Add Key → JSON.
 7. In your ``.env`` set:
-   ```
-   GOOGLE_MEET_ENABLED=true
-   GOOGLE_IMPERSONATE_EMAIL=you@yourdomain.com   # a real Google user to impersonate
-   GOOGLE_CALENDAR_ID=primary                    # or a shared calendar ID
-   GOOGLE_SERVICE_ACCOUNT_CREDENTIALS=<paste the entire JSON key file here>
-   ```
+
+GOOGLE_MEET_ENABLED=true
+GOOGLE_IMPERSONATE_EMAIL=you@yourdomain.com # a real Google user to impersonate
+GOOGLE_CALENDAR_ID=primary # or a shared calendar ID
+GOOGLE_SERVICE_ACCOUNT_CREDENTIALS=<paste the entire JSON key file here>
+
 --------------------------------------------------------------------------
 """
 
+import asyncio
 import json
 from datetime import (
     datetime,
@@ -51,6 +52,8 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from app.core.config import settings
 from app.core.logging import logger
+from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 # These are optional dependencies — only imported when Google Meet is enabled.
 # The try/except prevents ImportError at startup when the packages are not
@@ -204,11 +207,13 @@ async def create_meet_event(
 
 @_retry_calendar_call
 async def _create_with_retry(service: Any, event_body: dict[str, Any]) -> dict[str, Any]:
-    return (
-        service.events()
-        .insert(calendarId=settings.GOOGLE_CALENDAR_ID, body=event_body, conferenceDataVersion=1, sendUpdates="none")
-        .execute()
-    )
+    def _call() -> dict[str, Any]:
+        return (
+            service.events()
+            .insert(calendarId=settings.GOOGLE_CALENDAR_ID, body=event_body, conferenceDataVersion=1, sendUpdates="none")
+            .execute()
+        )
+    return await asyncio.wait_for(asyncio.to_thread(_call), timeout=settings.GOOGLE_CALENDAR_HTTP_TIMEOUT)
 
 
 async def update_meet_event(
@@ -265,11 +270,13 @@ async def update_meet_event(
 
 @_retry_calendar_call
 async def _patch_with_retry(service: Any, event_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    return (
-        service.events()
-        .patch(calendarId=settings.GOOGLE_CALENDAR_ID, eventId=event_id, body=body, sendUpdates="none")
-        .execute()
-    )
+    def _call() -> dict[str, Any]:
+        return (
+            service.events()
+            .patch(calendarId=settings.GOOGLE_CALENDAR_ID, eventId=event_id, body=body, sendUpdates="none")
+            .execute()
+        )
+    return await asyncio.wait_for(asyncio.to_thread(_call), timeout=settings.GOOGLE_CALENDAR_HTTP_TIMEOUT)
 
 
 async def cancel_meet_event(event_id: str) -> bool:
@@ -306,4 +313,6 @@ async def cancel_meet_event(event_id: str) -> bool:
 
 @_retry_calendar_call
 async def _delete_with_retry(service: Any, event_id: str) -> None:
-    service.events().delete(calendarId=settings.GOOGLE_CALENDAR_ID, eventId=event_id, sendUpdates="none").execute()
+    def _call() -> None:
+        service.events().delete(calendarId=settings.GOOGLE_CALENDAR_ID, eventId=event_id, sendUpdates="none").execute()
+    await asyncio.wait_for(asyncio.to_thread(_call), timeout=settings.GOOGLE_CALENDAR_HTTP_TIMEOUT)

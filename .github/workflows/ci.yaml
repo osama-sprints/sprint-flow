@@ -3,38 +3,36 @@ name: CI
 on:
   pull_request:
   push:
-<<<<<<< HEAD
-    branches: [main]
-
-jobs:
-  ai-core:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Start Postgres + ai-core containers
-        run: docker compose up -d --wait postgres ai-core
-      - name: Apply migrations
-        run: docker compose exec -T -w /app ai-core /app/.venv/bin/python -m alembic upgrade head
-      - name: Unit tests
-        run: docker compose exec -T -w /app ai-core /app/.venv/bin/python -m pytest -q tests/
-      - name: Integration tests (PostgreSQL)
-        run: docker compose exec -T -w /app -e SPRINTFLOW_INTEGRATION_DB=1 ai-core /app/.venv/bin/python -m pytest -q tests/integration/
-      - name: Lint
-        run: docker compose exec -T -w /app ai-core /app/.venv/bin/ruff check app/ alembic/ scripts/ tests/
-      - name: Format check
-        run: docker compose exec -T -w /app ai-core /app/.venv/bin/ruff format --check app/ alembic/ scripts/ tests/
-      - name: Type check
-        run: docker compose exec -T -w /app ai-core /app/.venv/bin/pyright
-=======
     branches: [main, master]
 
 jobs:
+  tests:
+    name: pytest (Sprint 4 offline suite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ai-core
+    env:
+      APP_ENV: test
+      JWT_SECRET_KEY: ci-only-not-a-real-secret-0123456789abcdef
+      OPENAI_API_KEY: ci-dummy-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --all-groups
+      - run: >-
+          uv run pytest -q -rs
+          tests/test_schema.py
+          tests/test_escalation_dispatch.py
+          tests/integration/test_schema_db.py
+          tests/integration/test_calendar_integration_db.py
+
   checks:
     runs-on: ubuntu-latest
 
     services:
-      # Real PostgreSQL for the integration tests (SPRINTFLOW_INTEGRATION_DB=1).
-      # pgvector is required: the policy search tables use the vector type.
       postgres:
         image: pgvector/pgvector:pg16
         env:
@@ -50,7 +48,6 @@ jobs:
           --health-retries 10
 
     env:
-      # Offline test environment: no real OpenAI, no real Mattermost, no internet.
       APP_ENV: test
       POSTGRES_HOST: localhost
       POSTGRES_PORT: "5432"
@@ -79,10 +76,6 @@ jobs:
       - name: Pyright typecheck
         run: uv run pyright
         working-directory: ai-core
-      # Integration tests live beside the unit tests; the suite applies the
-      # Alembic migrations itself (see tests/integration helpers) and every
-      # external service is faked, so no other infrastructure is needed.
       - name: Run pytest (unit + real-PostgreSQL integration)
         run: uv run python -m pytest -q tests/
         working-directory: ai-core
->>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)

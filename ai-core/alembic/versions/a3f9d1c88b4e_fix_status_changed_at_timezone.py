@@ -27,7 +27,6 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-
 revision: str = "a3f9d1c88b4e"
 down_revision: Union[str, Sequence[str], None] = "d32cf4519a86"
 branch_labels: Union[str, Sequence[str], None] = None

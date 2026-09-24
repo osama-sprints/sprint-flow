@@ -5,7 +5,6 @@ from enum import StrEnum
 import re
 
 from sqlmodel import col, select
-
 from app.core.logging import logger
 from app.core.requester import RequesterContext
 from app.models import EscalationTicket

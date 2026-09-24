@@ -217,11 +217,15 @@ def _format_local(dt: datetime, iana_tz: str) -> tuple[str, str]:
     try:
         zone = ZoneInfo(iana_tz)
         local = dt.astimezone(zone)
-        formatted = local.strftime("%A %-d %B %Y, %H:%M")
+        formatted = local.strftime("%A %d %B %Y, %H:%M").replace(
+            f"{local.day:02d}", str(local.day), 1
+        )        
         return formatted, iana_tz
     except (ZoneInfoNotFoundError, Exception):
         utc_dt = dt.astimezone(timezone.utc)
-        formatted = utc_dt.strftime("%A %-d %B %Y, %H:%M")
+        formatted = utc_dt.strftime("%A %d %B %Y, %H:%M").replace(
+            f"{utc_dt.day:02d}", str(utc_dt.day), 1
+        )
         return formatted, "UTC"
 
 

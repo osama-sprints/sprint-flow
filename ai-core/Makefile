@@ -125,6 +125,8 @@ test-integration:
 	fi
 	uv run pytest tests/integration/
 
+
+
 pre-commit:
 	uv run pre-commit run --all-files
 
@@ -246,11 +248,7 @@ help:
         migrate migration migrate-downgrade migrate-history \
         eval eval-quick eval-no-report \
         lint format typecheck check pre-commit pre-commit-update \
-<<<<<<< HEAD
-        test test-integration \
-=======
         test test-integration test-all \
->>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         docker-build docker-up docker-down docker-logs docker-migrate \
         docker-migrate-downgrade docker-migrate-history \
         stack-up stack-down stack-logs \
