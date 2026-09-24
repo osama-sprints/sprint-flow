@@ -60,6 +60,42 @@ It verifies:
 
 **Result: 5 PostgreSQL integration tests passed.**
 
+## Single command (full offline suite)
+
+cd ai-core && uv run pytest -q -rs tests/test_schema.py tests/test_escalation_dispatch.py tests/integration/test_schema_db.py tests/integration/test_calendar_integration_db.py
+
+Offline result: 42 passed, 13 skipped. The 13 are PostgreSQL integration tests and
+run with SPRINTFLOW_INTEGRATION_DB=1 against a migrated throwaway database (55 passed total).
+CI runs the offline command on every PR. A Postgres-backed CI job is deferred: `alembic upgrade head`
+currently fails on a fresh database (empty announcements migration, reported separately).
+
+## Invariants and edge cases
+
+Escalation
+- Routing is channel-scoped: only the requesting channel's tech lead is contacted.
+- The learner-facing reply never reveals the human's identity.
+- No human in the role: the ticket is still opened and no DM is sent.
+- DM failure: the ticket stays open and assigned, never lost.
+- Idempotent per thread: a replay does not reopen the ticket or re-DM.
+- Concurrency: a concurrent trigger loses the insert race and reports the winner.
+- Invalid input (empty question, missing channel, unsynced learner) fails before any side effect.
+
+Calendar integration (PostgreSQL is the source of truth)
+- Create stores the meet link and external event id.
+- Reschedule and cancel reuse the stored event id (no new external event).
+- Provider outage never blocks local persistence; retries are bounded.
+- Disabled mode: fields stay null and no external call is made.
+
+Data model and migrations
+- Tables match model metadata, in dependency order; downgrade drops exactly the domain tables.
+- Every datetime column is timezone-aware; constraints are named.
+- One role per person per channel is enforced by the database.
+- Outbox key treats a null channel as a value; checkpointer tables are never touched.
+- Concurrency: identity upserts, step enqueue and first-role assignment each converge on one row.
+- SKIP LOCKED gives concurrent workers disjoint claims; escalation references stay unique.
+- Ceremony/sprint overlap boundaries and case-insensitive sprint names are enforced.
+
+
 ## Exact Commands
 
 Sprint 4 capability tests:
