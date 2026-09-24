@@ -92,6 +92,25 @@ typecheck:
 check: lint typecheck
 	@echo "All checks passed"
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+# Unit suite runs fully offline (no DB, no Mattermost, no LLM). Integration
+# tests are skipped automatically unless SPRINTFLOW_INTEGRATION_DB=1.
+test:
+	uv run pytest tests/
+
+# Run integrations against a throwaway database. Requires APP_ENV=test,
+# POSTGRES_* / DATABASE_URL pointing at a writable Postgres, and the schema
+# applied ahead of time:  uv run alembic upgrade head
+test-integration:
+	@if [ -z "$$SPRINTFLOW_INTEGRATION_DB" ]; then \
+		echo "Set SPRINTFLOW_INTEGRATION_DB=1 and point POSTGRES_*/DATABASE_URL at a throwaway Postgres."; \
+		echo "Then run: uv run alembic upgrade head && make test-integration"; \
+		exit 1; \
+	fi
+	uv run pytest tests/integration/
+
 pre-commit:
 	uv run pre-commit run --all-files
 
@@ -208,6 +227,7 @@ help:
         migrate migration migrate-downgrade migrate-history \
         eval eval-quick eval-no-report \
         lint format typecheck check pre-commit pre-commit-update \
+        test test-integration \
         docker-build docker-up docker-down docker-logs docker-migrate \
         docker-migrate-downgrade docker-migrate-history \
         stack-up stack-down stack-logs \

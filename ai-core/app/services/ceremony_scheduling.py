@@ -43,6 +43,8 @@ from app.models.enums import (
 )
 from app.services.authorisation import (
     ValidationFailed,
+    require_channel_authority,
+    require_channel_membership,
     require_requester,
     require_requester_user,
 )
@@ -491,6 +493,8 @@ async def prepare_schedule(
     user = await require_requester_user(context, action="schedule_ceremony")
     assert user.id is not None
 
+    await require_channel_authority(context, channel_id, action="schedule_ceremony")
+
     key = normalise_ceremony_type_key(ceremony_type)
     if key is None:
         raise ValidationFailed(
@@ -572,6 +576,8 @@ async def commit_schedule(
     context = requester or require_requester()
     user = await require_requester_user(context, action="schedule_ceremony")
     assert user.id is not None
+
+    await require_channel_authority(context, proposal.channel_id, action="schedule_ceremony")
 
     clashes = await ceremony_repo.find_overlapping_ceremonies(
         proposal.channel_id, proposal.scheduled_at, proposal.duration_minutes
@@ -692,6 +698,8 @@ async def prepare_amendment(
     if ceremony.channel_id != context.channel_id:
         raise ValidationFailed(f"Ceremony #{ceremony_id} is not in this channel.")
 
+    await require_channel_authority(context, ceremony.channel_id, action="amend_ceremony")
+
     wants_time = bool(new_time_expression and new_time_expression.strip())
     wants_agenda = new_agenda is not None
     if cancel and ceremony.status == CeremonyStatus.CANCELLED.value:
@@ -784,6 +792,8 @@ async def commit_amendment(
     user = await require_requester_user(context, action="amend_ceremony")
     assert user.id is not None
 
+    await require_channel_authority(context, proposal.channel_id, action="amend_ceremony")
+
     updated = await ceremony_repo.update_ceremony(
         proposal.ceremony_id,
         amended_by_id=user.id,
@@ -843,6 +853,7 @@ async def list_calendar(
     if not context.channel_id or not context.team_id:
         raise ValidationFailed("I don't know which channel or team this is.")
 
+    await require_channel_membership(context, context.channel_id, action="read_calendar")
     rows = await ceremony_repo.list_ceremonies(
         context.channel_id, include_past=include_past, include_cancelled=include_cancelled, now=now or utcnow()
     )

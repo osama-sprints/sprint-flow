@@ -18,7 +18,7 @@ async def test_dispatch_success_stores_post_id():
     session = AsyncMock()
 
     mock_announcement = MagicMock(spec=Announcement)
-    mock_announcement.cohort_id = 1
+    mock_announcement.channel_id = "chan-1"
     mock_announcement.resolved_channel_id = "valid_channel"
     mock_announcement.exact_text = "Hello team!"
     session.get = AsyncMock(return_value=mock_announcement)
@@ -48,7 +48,7 @@ async def test_dispatch_failure_logs_failed_outcome():
     session = AsyncMock()
 
     mock_announcement = MagicMock(spec=Announcement)
-    mock_announcement.cohort_id = 1
+    mock_announcement.channel_id = "chan-1"
     mock_announcement.resolved_channel_id = "invalid_channel"
     mock_announcement.exact_text = "Hello team!"
     session.get = AsyncMock(return_value=mock_announcement)

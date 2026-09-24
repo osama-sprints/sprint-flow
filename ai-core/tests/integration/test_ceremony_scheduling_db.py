@@ -5,6 +5,12 @@ service and the tools, inspects the rows, and deletes what it made. The tools
 are driven inside a minimal LangGraph ``StateGraph`` with a ``MemorySaver`` so
 ``interrupt()`` and ``Command(resume=...)`` behave as they do in production,
 without a model.
+
+After the channels refactor a channel is simply its Mattermost id (a string);
+the requester context carries ``channel_id``/``team_id`` and no tool or service
+accepts a channel as an argument. Authorisation re-reads ``channel_roles`` from
+the database at decision time, so tests seed a role row with
+``upsert_channel_role`` exactly as the conversation layer does.
 """
 
 import asyncio
@@ -57,6 +63,7 @@ from app.models.enums import (
 from app.services import ceremony_scheduling as scheduling
 from app.services.authorisation import (
     REFUSAL_MESSAGE,
+    MEETING_REFUSAL_MESSAGE,
     AuthorisationRefused,
     ValidationFailed,
 )
@@ -107,8 +114,9 @@ class Fixture:
     def __init__(self) -> None:
         self.stamp = f"{int(time_module.time() * 1000)}"
         self.prefix = f"it-sched-{self.stamp}"
+        self.team_id = f"team-{self.stamp}"
         self.user_ids: list[int] = []
-        self.channel_ids: list[int] = []
+        self.channel_ids: list[str] = []
 
     async def person(self, handle: str, *, superadmin: bool = False, zone: str | None = "Europe/Berlin"):
         user = await identity_repo.upsert_mattermost_user(
@@ -123,57 +131,66 @@ class Fixture:
         self.user_ids.append(user.id)
         return user
 
-    async def channel(self, suffix: str):
-        channel = await channel_repo.create_channel(f"{self.prefix}-{suffix}")
-        assert channel.id is not None
-        self.channel_ids.append(channel.id)
-        return channel
+    def channel(self, suffix: str) -> str:
+        channel_id = f"{self.prefix}-{suffix}"
+        self.channel_ids.append(channel_id)
+        return channel_id
 
-    async def member(self, user_id: int, channel_id: int, role: RoleKey) -> None:
+    async def member(self, user_id: int, channel_id: str, role: RoleKey) -> None:
         role_row = await channel_repo.get_role_by_key(role)
         assert role_row is not None and role_row.id is not None
-        await channel_repo.upsert_membership(
-            user_id=user_id, channel_id=channel_id, role_id=role_row.id, assigned_by_id=None
+        await channel_repo.upsert_channel_role(
+            user_id=user_id, team_id=self.team_id, channel_id=channel_id, role_id=role_row.id, assigned_by_id=None
         )
 
-    @staticmethod
-    def requester(user, *, roles: dict[int, str] | None = None) -> RequesterContext:
+    def requester(
+        self,
+        user,
+        *,
+        channel_id: str,
+        role: str | None = None,
+        team_id: str | None = None,
+    ) -> RequesterContext:
+        roles = MappingProxyType({channel_id: role}) if role else MappingProxyType({})
         return RequesterContext(
             mattermost_user_id=user.mattermost_user_id,
             username=user.username,
             email=user.email,
-            channel_id="dm",
-            channel_type="D",
+            channel_id=channel_id,
+            team_id=team_id if team_id is not None else self.team_id,
+            channel_type="O",
             user_id=user.id,
             is_superadmin=user.is_superadmin,
             timezone=user.timezone,
-            channel_roles=MappingProxyType(roles or {}),
+            channel_roles=roles,
         )
 
-    async def ceremony_count(self, channel_id: int) -> int:
+    async def ceremony_count(self, channel_id: str) -> int:
         async with database_service.session() as s:
-            result = await s.exec(
-                text("SELECT count(*) FROM ceremonies WHERE channel_id = :c"), params={"c": channel_id}
-            )
+            result = await s.exec(text("SELECT count(*) FROM ceremonies WHERE channel_id = :c"), params={"c": channel_id})
             return int(result.scalar_one())
 
     async def cleanup(self) -> None:
         async with database_service.session() as s:
-            if self.channel_ids:
-                params = {"ids": list(self.channel_ids)}
-                await s.exec(
-                    text(
-                        "DELETE FROM ceremony_amendments WHERE ceremony_id IN "
-                        "(SELECT id FROM ceremonies WHERE channel_id = ANY(:ids))"
-                    ),
-                    params=params,
-                )
-                await s.exec(text("DELETE FROM ceremonies WHERE channel_id = ANY(:ids)"), params=params)
-                await s.exec(text("DELETE FROM sprints WHERE channel_id = ANY(:ids)"), params=params)
-                await s.exec(text("DELETE FROM channel_memberships WHERE channel_id = ANY(:ids)"), params=params)
-                await s.exec(text("DELETE FROM channels WHERE id = ANY(:ids)"), params=params)
-            if self.user_ids:
-                await s.exec(text("DELETE FROM users WHERE id = ANY(:ids)"), params={"ids": list(self.user_ids)})
+            params = {"p": f"{self.prefix}-%"}
+            await s.exec(
+                text(
+                    "DELETE FROM ceremony_amendments WHERE ceremony_id IN "
+                    "(SELECT id FROM ceremonies WHERE channel_id LIKE :p)"
+                ),
+                params=params,
+            )
+            await s.exec(
+                text(
+                    "DELETE FROM ceremony_reminders WHERE ceremony_id IN "
+                    "(SELECT id FROM ceremonies WHERE channel_id LIKE :p)"
+                ),
+                params=params,
+            )
+            await s.exec(text("DELETE FROM ceremonies WHERE channel_id LIKE :p"), params=params)
+            await s.exec(text("DELETE FROM sprints WHERE channel_id LIKE :p"), params=params)
+            await s.exec(text("DELETE FROM channel_roles WHERE channel_id LIKE :p"), params=params)
+            await s.exec(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), params=params)
             await s.commit()
 
 
@@ -213,51 +230,56 @@ async def answer(harness, config, paused, text):
 
 def test_unauthorised_requesters_are_refused_and_nothing_is_created():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         learner = await fx.person("learner")
         outsider = await fx.person("outsider")
-        unsynced = RequesterContext(mattermost_user_id=f"{fx.prefix}-ghost", timezone="Europe/Berlin")
-        assert channel.id and learner.id
-        await fx.member(learner.id, channel.id, RoleKey.LEARNER)
+        assert learner.id
+        await fx.member(learner.id, channel, RoleKey.LEARNER)
+        unsynced = RequesterContext(
+            mattermost_user_id=f"{fx.prefix}-ghost", channel_id=channel, team_id=fx.team_id, channel_type="O"
+        )
 
-        for who in (fx.requester(learner, roles={channel.id: "learner"}), fx.requester(outsider), unsynced):
+        for who in (
+            fx.requester(learner, channel_id=channel, role="learner"),
+            fx.requester(outsider, channel_id=channel),
+            unsynced,
+        ):
             with pytest.raises(AuthorisationRefused) as excinfo:
                 await scheduling.prepare_schedule(
-                    channel=channel.name, ceremony_type="planning", time_expression="tomorrow at 2pm", requester=who
+                    ceremony_type="planning", time_expression="tomorrow at 2pm", requester=who
                 )
-            assert str(excinfo.value) == REFUSAL_MESSAGE
-        assert await fx.ceremony_count(channel.id) == 0
+            assert str(excinfo.value) == MEETING_REFUSAL_MESSAGE
+        assert await fx.ceremony_count(channel) == 0
 
         # Through the tool, with the ContextVar bound: same refusal, same silence.
-        current_requester.set(fx.requester(learner, roles={channel.id: "learner"}))
-        result = await schedule_ceremony.ainvoke(
-            {"channel": channel.name, "ceremony_type": "planning", "time_expression": "tomorrow at 2pm"}
-        )
-        assert result == f"[AUTHORISATION_REFUSED] {REFUSAL_MESSAGE}"
-        assert await fx.ceremony_count(channel.id) == 0
+        current_requester.set(fx.requester(learner, channel_id=channel, role="learner"))
+        result = await schedule_ceremony.ainvoke({"ceremony_type": "planning", "time_expression": "tomorrow at 2pm"})
+        assert result == f"[AUTHORISATION_REFUSED] {MEETING_REFUSAL_MESSAGE}"
+        assert await fx.ceremony_count(channel) == 0
 
     run(scenario)
 
 
 def test_authority_is_channel_scoped():
     async def scenario(fx: Fixture) -> None:
-        channel_a = await fx.channel("A")
-        channel_b = await fx.channel("B")
+        channel_a = fx.channel("A")
+        channel_b = fx.channel("B")
         lead = await fx.person("lead")
-        assert channel_a.id and channel_b.id and lead.id
-        await fx.member(lead.id, channel_a.id, RoleKey.SCRUM_MASTER)
-        who = fx.requester(lead, roles={channel_a.id: "scrum_master"})
+        assert lead.id
+        await fx.member(lead.id, channel_a, RoleKey.SCRUM_MASTER)
+        who_a = fx.requester(lead, channel_id=channel_a, role="scrum_master")
+        who_b = fx.requester(lead, channel_id=channel_b)
 
         with pytest.raises(AuthorisationRefused):
             await scheduling.prepare_schedule(
-                channel=channel_b.name, ceremony_type="retro", time_expression="tomorrow at 2pm", requester=who
+                ceremony_type="retro", time_expression="tomorrow at 2pm", requester=who_b
             )
         proposal = await scheduling.prepare_schedule(
-            channel=channel_a.name, ceremony_type="retro", time_expression="tomorrow at 2pm", requester=who
+            ceremony_type="retro", time_expression="tomorrow at 2pm", requester=who_a
         )
         assert isinstance(proposal, ScheduleProposal)
         assert proposal.organizer_id == lead.id
-        assert await fx.ceremony_count(channel_a.id) == 0  # preparing writes nothing
+        assert await fx.ceremony_count(channel_a) == 0  # preparing writes nothing
 
     run(scenario)
 
@@ -267,52 +289,51 @@ def test_authority_is_channel_scoped():
 
 def test_ambiguous_time_is_a_question_and_creates_nothing():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         lead = await fx.person("lead")
-        assert channel.id and lead.id
-        await fx.member(lead.id, channel.id, RoleKey.TECH_LEAD)
-        who = fx.requester(lead, roles={channel.id: "tech_lead"})
+        assert lead.id
+        await fx.member(lead.id, channel, RoleKey.TECH_LEAD)
+        who = fx.requester(lead, channel_id=channel, role="tech_lead")
 
         outcome = await scheduling.prepare_schedule(
-            channel=channel.name, ceremony_type="retro", time_expression="tomorrow at 2", requester=who
+            ceremony_type="retro", time_expression="tomorrow at 2", requester=who
         )
         assert isinstance(outcome, SchedulingProblem) and outcome.kind == "clarification"
         assert "2 in the afternoon or 2 in the morning" in outcome.message
 
         current_requester.set(who)
-        result = await schedule_ceremony.ainvoke(
-            {"channel": channel.name, "ceremony_type": "retro", "time_expression": "tomorrow at 2"}
-        )
+        result = await schedule_ceremony.ainvoke({"ceremony_type": "retro", "time_expression": "tomorrow at 2"})
         assert result.startswith("[TIME_CLARIFICATION_REQUIRED] Did you mean 2 in the afternoon")
-        assert await fx.ceremony_count(channel.id) == 0
+        assert await fx.ceremony_count(channel) == 0
 
-        no_zone = fx.requester(await fx.person("nozone", zone=None))
-        await fx.member(no_zone.user_id or 0, channel.id, RoleKey.SCRUM_MASTER)
+        no_zone = fx.requester(await fx.person("nozone", zone=None), channel_id=channel, role="scrum_master")
+        assert no_zone.user_id
+        await fx.member(no_zone.user_id, channel, RoleKey.SCRUM_MASTER)
         previous_default = settings.SCHEDULING_DEFAULT_TIMEZONE
         settings.SCHEDULING_DEFAULT_TIMEZONE = ""
         try:
             outcome = await scheduling.prepare_schedule(
-                channel=channel.name, ceremony_type="retro", time_expression="tomorrow at 2pm", requester=no_zone
+                ceremony_type="retro", time_expression="tomorrow at 2pm", requester=no_zone
             )
         finally:
             settings.SCHEDULING_DEFAULT_TIMEZONE = previous_default
         assert isinstance(outcome, SchedulingProblem) and outcome.status == "no_timezone"
-        assert await fx.ceremony_count(channel.id) == 0
+        assert await fx.ceremony_count(channel) == 0
 
     run(scenario)
 
 
 def test_confirmation_gates_persistence_and_stores_the_exact_instant():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         lead = await fx.person("lead")
-        assert channel.id and lead.id
-        await fx.member(lead.id, channel.id, RoleKey.SCRUM_MASTER)
-        current_requester.set(fx.requester(lead, roles={channel.id: "scrum_master"}))
+        assert lead.id
+        await fx.member(lead.id, channel, RoleKey.SCRUM_MASTER)
+        who = fx.requester(lead, channel_id=channel, role="scrum_master")
+        current_requester.set(who)
         harness = build_harness()
         expected = tomorrow_at_14_berlin_in_utc()
         args = {
-            "channel": channel.name,
             "ceremony_type": "sprint planning",
             "time_expression": "tomorrow at 2pm",
             "agenda": "Plan the sprint",
@@ -323,27 +344,27 @@ def test_confirmation_gates_persistence_and_stores_the_exact_instant():
         paused = await harness.ainvoke({"tool": "schedule_ceremony", "args": args}, config)
         question = interrupt_question(pending_value(paused))
         assert expected.strftime("%Y-%m-%d %H:%M UTC") in question
-        assert "(Europe/Berlin)" in question and "Sprint Planning" in question and channel.name in question
-        assert await fx.ceremony_count(channel.id) == 0
+        assert "(Europe/Berlin)" in question and "Sprint Planning" in question
+        assert await fx.ceremony_count(channel) == 0
         declined = await answer(harness, config, paused, "no")
         assert declined["result"] == "[CONFIRMATION_DECLINED] Nothing was scheduled."
-        assert await fx.ceremony_count(channel.id) == 0
+        assert await fx.ceremony_count(channel) == 0
 
         # Unclear reply: also treated as no.
         config = {"configurable": {"thread_id": f"{fx.prefix}-unclear"}}
         await harness.ainvoke({"tool": "schedule_ceremony", "args": args}, config)
         unclear = await answer(harness, config, paused, "maybe later")
         assert unclear["result"].startswith("[CONFIRMATION_DECLINED] Your reply was not a clear yes")
-        assert await fx.ceremony_count(channel.id) == 0
+        assert await fx.ceremony_count(channel) == 0
 
         # Confirmed: exactly one row, at exactly the confirmed instant, reading back equal.
         config = {"configurable": {"thread_id": f"{fx.prefix}-yes"}}
         await harness.ainvoke({"tool": "schedule_ceremony", "args": args}, config)
-        assert await fx.ceremony_count(channel.id) == 0
+        assert await fx.ceremony_count(channel) == 0
         confirmed = await answer(harness, config, paused, "yes")
         assert confirmed["result"].startswith("[CEREMONY_SCHEDULED] Scheduled ceremony #")
-        assert await fx.ceremony_count(channel.id) == 1
-        rows = await ceremony_repo.list_ceremonies(channel.id)
+        assert await fx.ceremony_count(channel) == 1
+        rows = await ceremony_repo.list_ceremonies(channel)
         stored = rows[0]
         assert stored.scheduled_at == expected
         assert stored.scheduled_at.utcoffset() == timedelta(0)
@@ -356,10 +377,10 @@ def test_confirmation_gates_persistence_and_stores_the_exact_instant():
 
         # Repeating the same request does not create a second identical ceremony.
         repeat = await scheduling.prepare_schedule(
-            channel=channel.name, ceremony_type="planning", time_expression="tomorrow at 2pm", conflict_policy="warn"
+            ceremony_type="planning", time_expression="tomorrow at 2pm", conflict_policy="warn"
         )
         assert isinstance(repeat, SchedulingProblem) and "already exists" in repeat.message
-        assert await fx.ceremony_count(channel.id) == 1
+        assert await fx.ceremony_count(channel) == 1
 
     run(scenario)
 
@@ -369,23 +390,22 @@ def test_confirmation_gates_persistence_and_stores_the_exact_instant():
 
 def test_conflict_policy_refuses_by_default_and_warns_when_configured():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         lead = await fx.person("lead")
-        assert channel.id and lead.id
-        await fx.member(lead.id, channel.id, RoleKey.SCRUM_MASTER)
-        who = fx.requester(lead, roles={channel.id: "scrum_master"})
+        assert lead.id
+        await fx.member(lead.id, channel, RoleKey.SCRUM_MASTER)
+        who = fx.requester(lead, channel_id=channel, role="scrum_master")
 
         first = await scheduling.prepare_schedule(
-            channel=channel.name, ceremony_type="planning", time_expression="tomorrow at 2pm", requester=who
+            ceremony_type="planning", time_expression="tomorrow at 2pm", requester=who
         )
         assert isinstance(first, ScheduleProposal)
         stored = await scheduling.commit_schedule(first, requester=who)
         assert not isinstance(stored, SchedulingProblem)
-        assert await fx.ceremony_count(channel.id) == 1
+        assert await fx.ceremony_count(channel) == 1
 
         # Planning lasts 90 minutes: a standup at 15:00 overlaps it; one at 15:30 does not.
         clash = await scheduling.prepare_schedule(
-            channel=channel.name,
             ceremony_type="standup",
             time_expression="tomorrow at 3pm",
             requester=who,
@@ -393,10 +413,9 @@ def test_conflict_policy_refuses_by_default_and_warns_when_configured():
         )
         assert isinstance(clash, SchedulingProblem) and clash.kind == "conflict"
         assert f"#{stored.id} Sprint Planning" in clash.message
-        assert await fx.ceremony_count(channel.id) == 1
+        assert await fx.ceremony_count(channel) == 1
 
         clear = await scheduling.prepare_schedule(
-            channel=channel.name,
             ceremony_type="standup",
             time_expression="tomorrow at 15:30",
             requester=who,
@@ -405,7 +424,6 @@ def test_conflict_policy_refuses_by_default_and_warns_when_configured():
         assert isinstance(clear, ScheduleProposal) and clear.conflict_warning is None
 
         warned = await scheduling.prepare_schedule(
-            channel=channel.name,
             ceremony_type="standup",
             time_expression="tomorrow at 3pm",
             requester=who,
@@ -416,11 +434,10 @@ def test_conflict_policy_refuses_by_default_and_warns_when_configured():
         assert warned.confirmation_question().startswith("Warning:")
         committed = await scheduling.commit_schedule(warned, requester=who, conflict_policy="warn")
         assert not isinstance(committed, SchedulingProblem)
-        assert await fx.ceremony_count(channel.id) == 2
+        assert await fx.ceremony_count(channel) == 2
 
         # Commit re-checks: a proposal prepared under "warn" cannot be committed under "refuse".
         again = await scheduling.prepare_schedule(
-            channel=channel.name,
             ceremony_type="review",
             time_expression="tomorrow at 3pm",
             requester=who,
@@ -429,7 +446,7 @@ def test_conflict_policy_refuses_by_default_and_warns_when_configured():
         assert isinstance(again, ScheduleProposal)
         blocked = await scheduling.commit_schedule(again, requester=who, conflict_policy="refuse")
         assert isinstance(blocked, SchedulingProblem)
-        assert await fx.ceremony_count(channel.id) == 2
+        assert await fx.ceremony_count(channel) == 2
 
     run(scenario)
 
@@ -439,14 +456,14 @@ def test_conflict_policy_refuses_by_default_and_warns_when_configured():
 
 def test_amendments_are_confirmed_and_traced():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         lead = await fx.person("lead")
-        assert channel.id and lead.id
-        await fx.member(lead.id, channel.id, RoleKey.TECH_LEAD)
-        who = fx.requester(lead, roles={channel.id: "tech_lead"})
+        assert lead.id
+        await fx.member(lead.id, channel, RoleKey.TECH_LEAD)
+        who = fx.requester(lead, channel_id=channel, role="tech_lead")
         current_requester.set(who)
         proposal = await scheduling.prepare_schedule(
-            channel=channel.name, ceremony_type="retro", time_expression="tomorrow at 2pm", requester=who
+            ceremony_type="retro", time_expression="tomorrow at 2pm", requester=who
         )
         assert isinstance(proposal, ScheduleProposal)
         ceremony = await scheduling.commit_schedule(proposal, requester=who)
@@ -509,10 +526,10 @@ def test_amendments_are_confirmed_and_traced():
         # A learner may not amend.
         learner = await fx.person("learner")
         assert learner.id
-        await fx.member(learner.id, channel.id, RoleKey.LEARNER)
+        await fx.member(learner.id, channel, RoleKey.LEARNER)
         with pytest.raises(AuthorisationRefused):
             await scheduling.prepare_amendment(
-                ceremony_id=ceremony.id, new_agenda="hijack", requester=fx.requester(learner)
+                ceremony_id=ceremony.id, new_agenda="hijack", requester=fx.requester(learner, channel_id=channel)
             )
 
     run(scenario)
@@ -520,14 +537,15 @@ def test_amendments_are_confirmed_and_traced():
 
 def test_past_ceremony_policy():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         lead = await fx.person("lead")
         planning = await ceremony_repo.get_ceremony_type_by_key(CeremonyTypeKey.SPRINT_PLANNING)
-        assert channel.id and lead.id and planning and planning.id
-        await fx.member(lead.id, channel.id, RoleKey.SCRUM_MASTER)
-        who = fx.requester(lead, roles={channel.id: "scrum_master"})
+        assert lead.id and planning and planning.id
+        await fx.member(lead.id, channel, RoleKey.SCRUM_MASTER)
+        who = fx.requester(lead, channel_id=channel, role="scrum_master")
         past = await ceremony_repo.create_ceremony(
-            channel_id=channel.id,
+            team_id=fx.team_id,
+            channel_id=channel,
             ceremony_type_id=planning.id,
             organizer_id=lead.id,
             scheduled_at=datetime.now(UTC) - timedelta(days=1),
@@ -560,17 +578,16 @@ def test_past_ceremony_policy():
 
 def test_any_member_can_read_and_non_members_cannot():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         lead = await fx.person("lead")
         learner = await fx.person("learner", zone="Africa/Cairo")
         outsider = await fx.person("outsider")
         admin = await fx.person("admin", superadmin=True, zone=None)
-        assert channel.id and lead.id and learner.id
-        await fx.member(lead.id, channel.id, RoleKey.SCRUM_MASTER)
-        await fx.member(learner.id, channel.id, RoleKey.LEARNER)
-        lead_ctx = fx.requester(lead, roles={channel.id: "scrum_master"})
+        assert lead.id and learner.id
+        await fx.member(lead.id, channel, RoleKey.SCRUM_MASTER)
+        await fx.member(learner.id, channel, RoleKey.LEARNER)
+        lead_ctx = fx.requester(lead, channel_id=channel, role="scrum_master")
         proposal = await scheduling.prepare_schedule(
-            channel=channel.name,
             ceremony_type="q&a",
             time_expression="tomorrow at 2pm",
             agenda="Ask anything",
@@ -581,33 +598,35 @@ def test_any_member_can_read_and_non_members_cannot():
         assert not isinstance(stored, SchedulingProblem)
 
         # Learner reads, in their own zone (Cairo, UTC+3 in summer) and in UTC.
-        current_requester.set(fx.requester(learner, roles={channel.id: "learner"}))
-        result = await list_ceremonies.ainvoke({"channel": channel.name})
+        current_requester.set(fx.requester(learner, channel_id=channel, role="learner"))
+        result = await list_ceremonies.ainvoke({})
         assert result.startswith("[OK]")
         assert f"#{stored.id} Open Q&A" in result
         assert "(Africa/Cairo)" in result and proposal.utc_display in result
         assert f"organiser @{lead.username}" in result and "agenda: Ask anything" in result
 
         # Outsider: refused. Unsynced: refused.
-        current_requester.set(fx.requester(outsider))
-        result = await list_ceremonies.ainvoke({"channel": channel.name})
+        current_requester.set(fx.requester(outsider, channel_id=channel))
+        result = await list_ceremonies.ainvoke({})
         assert result == f"[AUTHORISATION_REFUSED] {REFUSAL_MESSAGE}"
         with pytest.raises(AuthorisationRefused):
             await scheduling.list_calendar(
-                channel=channel.name, requester=RequesterContext(mattermost_user_id=f"{fx.prefix}-ghost")
+                requester=RequesterContext(
+                    mattermost_user_id=f"{fx.prefix}-ghost", channel_id=channel, team_id=fx.team_id
+                )
             )
 
         # Superadmin without membership and without a zone: allowed, UTC only.
-        view = await scheduling.list_calendar(channel=channel.name, requester=fx.requester(admin))
+        view = await scheduling.list_calendar(requester=fx.requester(admin, channel_id=channel))
         assert len(view.entries) == 1 and view.zone in (None, settings.SCHEDULING_DEFAULT_TIMEZONE or None)
 
         # Cancelled and past rows are hidden unless asked for.
         cancel = await scheduling.prepare_amendment(ceremony_id=stored.id or 0, cancel=True, requester=lead_ctx)
         assert not isinstance(cancel, SchedulingProblem)
         await scheduling.commit_amendment(cancel, requester=lead_ctx)
-        hidden = await scheduling.list_calendar(channel=channel.name, requester=lead_ctx)
+        hidden = await scheduling.list_calendar(requester=lead_ctx)
         assert hidden.entries == ()
-        shown = await scheduling.list_calendar(channel=channel.name, include_cancelled=True, requester=lead_ctx)
+        shown = await scheduling.list_calendar(include_cancelled=True, requester=lead_ctx)
         assert len(shown.entries) == 1 and shown.entries[0].ceremony.status == "cancelled"
 
     run(scenario)
@@ -615,39 +634,40 @@ def test_any_member_can_read_and_non_members_cannot():
 
 def test_validation_failures_are_not_refusals():
     async def scenario(fx: Fixture) -> None:
-        channel = await fx.channel("A")
+        channel = fx.channel("A")
         lead = await fx.person("lead")
-        assert channel.id and lead.id
-        await fx.member(lead.id, channel.id, RoleKey.SCRUM_MASTER)
-        who = fx.requester(lead, roles={channel.id: "scrum_master"})
+        assert lead.id
+        await fx.member(lead.id, channel, RoleKey.SCRUM_MASTER)
+        who = fx.requester(lead, channel_id=channel, role="scrum_master")
         current_requester.set(who)
 
-        result = await schedule_ceremony.ainvoke(
-            {"channel": channel.name, "ceremony_type": "town hall", "time_expression": "tomorrow at 2pm"}
-        )
+        result = await schedule_ceremony.ainvoke({"ceremony_type": "town hall", "time_expression": "tomorrow at 2pm"})
         assert result.startswith("[VALIDATION_ERROR] 'town hall' is not a ceremony type I know")
         assert "Daily Standup, Sprint Planning, Sprint Review, Retrospective, Open Q&A" in result
 
-        result = await schedule_ceremony.ainvoke(
-            {
-                "channel": channel.name,
-                "ceremony_type": "retro",
-                "time_expression": "tomorrow at 2pm",
-                "sprint_name": "Sprint 99",
-            }
-        )
-        assert result.startswith("[VALIDATION_ERROR]") and "Sprint 99" in result
+        # A requester without a team/channel in context is a validation failure, not a refusal.
+        contextless = fx.requester(lead, channel_id=channel, team_id="")
+        with pytest.raises(ValidationFailed) as excinfo:
+            await scheduling.prepare_schedule(
+                ceremony_type="retro", time_expression="tomorrow at 2pm", requester=contextless
+            )
+        assert "which channel or team" in str(excinfo.value)
 
-        result = await schedule_ceremony.ainvoke(
-            {"channel": f"{fx.prefix}-nowhere", "ceremony_type": "retro", "time_expression": "tomorrow at 2pm"}
+        # Amending a ceremony that lives in another channel is still a validation failure.
+        other = fx.channel("B")
+        ceremony = await ceremony_repo.get_ceremony_type_by_key(CeremonyTypeKey.DAILY_STANDUP)
+        assert ceremony and ceremony.id
+        elsewhere = await ceremony_repo.create_ceremony(
+            team_id=fx.team_id,
+            channel_id=other,
+            ceremony_type_id=ceremony.id,
+            organizer_id=lead.id,
+            scheduled_at=datetime.now(UTC) + timedelta(days=1),
+            duration_minutes=15,
         )
-        assert result.startswith("[VALIDATION_ERROR] I do not know a channel")
-
-        await channel_repo.set_channel_active(channel.id, False)
-        result = await schedule_ceremony.ainvoke(
-            {"channel": channel.name, "ceremony_type": "retro", "time_expression": "tomorrow at 2pm"}
-        )
-        assert result.startswith("[VALIDATION_ERROR]") and "inactive" in result
-        assert await fx.ceremony_count(channel.id) == 0
+        assert elsewhere.id
+        result = await amend_ceremony.ainvoke({"ceremony_id": elsewhere.id, "new_agenda": "wrong channel"})
+        assert result == f"[VALIDATION_ERROR] Ceremony #{elsewhere.id} is not in this channel."
+        assert await fx.ceremony_count(channel) == 0
 
     run(scenario)

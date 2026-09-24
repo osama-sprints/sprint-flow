@@ -23,6 +23,7 @@ Architectural note — channel_id is gone from Ceremony:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import (
     datetime,
     timedelta,
@@ -31,6 +32,7 @@ from datetime import (
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -136,6 +138,21 @@ async def _record_sent(
         return False
 
 
+@asynccontextmanager
+async def _reminder_lock(ceremony_id: int, recipient_mm_id: str, window: str):
+    """Hold a database lock for the check, send, and idempotency write.
+
+    The transaction stays open while Mattermost is called so a second worker
+    cannot pass the idempotency check and post the same reminder concurrently.
+    """
+    async with session_scope() as session:
+        await session.exec(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            params={"lock_key": f"ceremony-reminder:{ceremony_id}:{recipient_mm_id}:{window}"},
+        )
+        yield session
+
+
 # ---------------------------------------------------------------------------
 # Public query helpers (tested directly in unit tests)
 # ---------------------------------------------------------------------------
@@ -172,7 +189,6 @@ async def due_ceremonies(
         now=reference,
     )
     return [c for c in all_upcoming if reference < c.scheduled_at <= upper]
-
 
 
 async def get_channel_members(channel_id: str) -> list[str]:
@@ -268,66 +284,67 @@ async def send_reminder(
     assert ceremony.id is not None
 
     try:
-        if await _already_sent(ceremony.id, member_mm_id, window):
-            logger.debug(
-                "ceremony_reminder_already_sent",
+        async with _reminder_lock(ceremony.id, member_mm_id, window) as session:
+            if await _already_sent(ceremony.id, member_mm_id, window, session=session):
+                logger.debug(
+                    "ceremony_reminder_already_sent",
+                    ceremony_id=ceremony.id,
+                    recipient_mm_id=member_mm_id,
+                    window=window,
+                )
+                return False
+
+            # Fetch user's timezone — falls back to "UTC" on any failure.
+            tz_name = await mattermost_client.get_user_timezone(member_mm_id)
+
+            local_time_str, resolved_tz = _format_local(ceremony.scheduled_at, tz_name)
+            time_label = _TIME_LABELS.get(window, window)
+            organizer = await _organizer_display(ceremony.organizer_id)
+
+            agenda_line = f"\n📋 Agenda: {ceremony.agenda}" if ceremony.agenda else ""
+            meet_line = f"\n🔗 Join: {ceremony.meet_link}" if ceremony.meet_link else ""
+
+            message = (
+                f"📅 Reminder: **{ceremony_type_label}** in {time_label}\n"
+                f"🕐 {local_time_str} ({resolved_tz})\n"
+                f"👤 Organised by: {organizer}"
+                f"{agenda_line}"
+                f"{meet_line}\n\n"
+                f"This is an automated reminder from SprintFlow."
+            )
+
+            channel = await mattermost_client.create_direct_channel(member_mm_id)
+            if not channel or not channel.get("id"):
+                logger.warning(
+                    "ceremony_reminder_dm_channel_failed",
+                    ceremony_id=ceremony.id,
+                    recipient_mm_id=member_mm_id,
+                    window=window,
+                )
+                return False
+
+            post = await mattermost_client.create_post(str(channel["id"]), message)
+            if not post or not post.get("id"):
+                logger.warning(
+                    "ceremony_reminder_post_failed",
+                    ceremony_id=ceremony.id,
+                    recipient_mm_id=member_mm_id,
+                    window=window,
+                )
+                return False
+
+            sent_at = utcnow()
+            inserted = await _record_sent(ceremony.id, member_mm_id, window, sent_at, session=session)
+
+            logger.info(
+                "ceremony_reminder_sent",
                 ceremony_id=ceremony.id,
                 recipient_mm_id=member_mm_id,
                 window=window,
+                timezone=resolved_tz,
+                inserted_row=inserted,
             )
-            return False
-
-        # Fetch user's timezone — falls back to "UTC" on any failure.
-        tz_name = await mattermost_client.get_user_timezone(member_mm_id)
-
-        local_time_str, resolved_tz = _format_local(ceremony.scheduled_at, tz_name)
-        time_label = _TIME_LABELS.get(window, window)
-        organizer = await _organizer_display(ceremony.organizer_id)
-
-        agenda_line = f"\n📋 Agenda: {ceremony.agenda}" if ceremony.agenda else ""
-        meet_line = f"\n🔗 Join: {ceremony.meet_link}" if ceremony.meet_link else ""
-
-        message = (
-            f"📅 Reminder: **{ceremony_type_label}** in {time_label}\n"
-            f"🕐 {local_time_str} ({resolved_tz})\n"
-            f"👤 Organised by: {organizer}"
-            f"{agenda_line}"
-            f"{meet_line}\n\n"
-            f"This is an automated reminder from SprintFlow."
-        )
-
-        channel = await mattermost_client.create_direct_channel(member_mm_id)
-        if not channel or not channel.get("id"):
-            logger.warning(
-                "ceremony_reminder_dm_channel_failed",
-                ceremony_id=ceremony.id,
-                recipient_mm_id=member_mm_id,
-                window=window,
-            )
-            return False
-
-        post = await mattermost_client.create_post(str(channel["id"]), message)
-        if not post or not post.get("id"):
-            logger.warning(
-                "ceremony_reminder_post_failed",
-                ceremony_id=ceremony.id,
-                recipient_mm_id=member_mm_id,
-                window=window,
-            )
-            return False
-
-        sent_at = utcnow()
-        inserted = await _record_sent(ceremony.id, member_mm_id, window, sent_at)
-
-        logger.info(
-            "ceremony_reminder_sent",
-            ceremony_id=ceremony.id,
-            recipient_mm_id=member_mm_id,
-            window=window,
-            timezone=resolved_tz,
-            inserted_row=inserted,
-        )
-        return True
+            return True
 
     except Exception as e:
         logger.exception(

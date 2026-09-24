@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ai-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start Postgres + ai-core containers
+        run: docker compose up -d --wait postgres ai-core
+      - name: Apply migrations
+        run: docker compose exec -T -w /app ai-core /app/.venv/bin/python -m alembic upgrade head
+      - name: Unit tests
+        run: docker compose exec -T -w /app ai-core /app/.venv/bin/python -m pytest -q tests/
+      - name: Integration tests (PostgreSQL)
+        run: docker compose exec -T -w /app -e SPRINTFLOW_INTEGRATION_DB=1 ai-core /app/.venv/bin/python -m pytest -q tests/integration/
+      - name: Lint
+        run: docker compose exec -T -w /app ai-core /app/.venv/bin/ruff check app/ alembic/ scripts/ tests/
+      - name: Format check
+        run: docker compose exec -T -w /app ai-core /app/.venv/bin/ruff format --check app/ alembic/ scripts/ tests/
+      - name: Type check
+        run: docker compose exec -T -w /app ai-core /app/.venv/bin/pyright
