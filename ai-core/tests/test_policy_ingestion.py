@@ -29,7 +29,6 @@ from app.services.document_ingestion.pipeline import IngestionPipeline
 def fake_embedding(text: str, dim: int = 1536) -> list[float]:
     """Hash-based deterministic embedding: same text -> same vector, always."""
     digest = hashlib.sha256(text.encode("utf-8")).digest()
-    # Repeat the digest to fill the dimension; values in [-1, 1).
     raw = (digest * ((dim // len(digest)) + 1))[:dim]
     return [(b / 127.5) - 1.0 for b in raw]
 
@@ -62,8 +61,6 @@ def test_markdown_loader_treated_as_text(tmp_path: Path):
 
 
 def test_pdf_loader_extracts_pages_as_sections(tmp_path: Path):
-    """A two-page PDF (pypdf cannot draw text, so pages are blank) — the loader
-    must still map one section per page with 1-based page numbers."""
     file = tmp_path / "policy.pdf"
     writer = PdfWriter()
     writer.add_blank_page(width=612, height=792)
@@ -125,7 +122,7 @@ def test_malformed_pdf_raises_a_clear_error(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Chunker: determinism, stable ids, metadata
+# Chunker tests
 # ---------------------------------------------------------------------------
 
 
@@ -158,16 +155,12 @@ def test_chunk_ids_differ_for_different_documents_or_content():
 
 
 def test_zero_chunk_overlap_is_honoured_not_replaced_by_default():
-    """Regression: ``chunk_overlap=0`` used to hit a falsy-``or`` fallback that
-    replaced it with the settings default (50). With chunk_size=50 the chunking
-    stride became 50-50=0 and ``chunk_document`` looped forever."""
     chunker = PolicyChunker(chunk_size=50, chunk_overlap=0)
     assert chunker.chunk_overlap == 0
     assert chunker.chunk_size == 50
 
     doc = _doc([{"title": "T", "text": "x" * 120, "page": 1}])
     chunks = chunker.chunk_document(doc, "DOC-1", "learner")
-    # Deterministic coverage of the whole text: 50/0 stride gives 3 chunks.
     assert [len(c["content"]) for c in chunks] == [50, 50, 20]
 
 
@@ -216,7 +209,7 @@ def test_chunk_content_hash_matches_sha256_of_content():
 
 
 # ---------------------------------------------------------------------------
-# Pipeline: re-ingestion is idempotent, embeddings are the only external call
+# Pipeline & Folder Ingestion Tests
 # ---------------------------------------------------------------------------
 
 
@@ -224,7 +217,6 @@ def test_pipeline_reingestion_replaces_the_document_deterministically(tmp_path: 
     file = tmp_path / "policy.txt"
     file.write_text("Stable policy text for idempotency checking." * 5, "utf-8")
 
-    IngestionPipeline()
     captured: list[tuple[list, list]] = []
 
     async def fake_upsert(chunks, embeddings):
@@ -237,7 +229,6 @@ def test_pipeline_reingestion_replaces_the_document_deterministically(tmp_path: 
     store = SimpleNamespace(
         upsert_chunks=AsyncMock(side_effect=fake_upsert), delete_document=AsyncMock(side_effect=fake_delete)
     )
-    first_ids: list[str] = []
 
     async def run_once() -> list[str]:
         doc_data = DocumentLoader.load(str(file))
@@ -252,14 +243,11 @@ def test_pipeline_reingestion_replaces_the_document_deterministically(tmp_path: 
     second_ids = asyncio.run(run_once())
 
     assert first_ids == second_ids
-    assert first_ids, "a non-empty document must produce chunks"
-    # remove-before-upsert ran exactly once per ingestion, before the upsert.
+    assert first_ids
     assert store.delete_document.await_count == 2
 
 
 def test_pipeline_uses_remove_before_upsert_for_reingestion(tmp_path: Path):
-    """The real pipeline deletes the old rows before inserting, so stale chunks
-    from a changed document never linger under the same document_id."""
     file = tmp_path / "policy.txt"
     file.write_text("content", "utf-8")
 
@@ -276,7 +264,6 @@ def test_pipeline_uses_remove_before_upsert_for_reingestion(tmp_path: Path):
 
 
 def test_pipeline_honours_audience_parameter(tmp_path: Path):
-    """Audience flows into every chunk — the field search filters on."""
     file = tmp_path / "internal.txt"
     file.write_text("Operator-only runbook content." * 10, "utf-8")
 
@@ -296,3 +283,37 @@ def test_pipeline_honours_audience_parameter(tmp_path: Path):
 
     assert captured["chunks"]
     assert all(c["audience"] == "internal_operator" for c in captured["chunks"])
+
+
+def test_ingest_folder_processes_directory(tmp_path: Path):
+    docs_dir = tmp_path / "policies"
+    docs_dir.mkdir()
+
+    (docs_dir / "general_leave.txt").write_text("Learners receive 21 days of annual leave.", encoding="utf-8")
+    (docs_dir / "ops_runbook.md").write_text("# Ops\nInternal operator instructions.", encoding="utf-8")
+    (docs_dir / "ignored.exe").write_bytes(b"MZ fake binary")
+
+    pipeline = IngestionPipeline()
+    pipeline.chunker = PolicyChunker(chunk_size=100, chunk_overlap=0)
+    pipeline.embedder = SimpleNamespace(
+        get_embeddings=AsyncMock(side_effect=lambda texts: [fake_embedding(t) for t in texts])
+    )
+    pipeline.vector_store = SimpleNamespace(
+        upsert_chunks=AsyncMock(return_value=None),
+        delete_document=AsyncMock(return_value=None),
+    )
+
+    result = asyncio.run(pipeline.ingest_folder(str(docs_dir), default_audience="learner"))
+
+    assert result["status"] == "success"
+    assert result["processed_files"] == 2
+    assert result["total_chunks"] >= 2
+
+    ops_detail = next(d for d in result["details"] if d["file"] == "ops_runbook.md")
+    assert ops_detail["audience"] == "internal_operator"
+
+
+def test_ingest_folder_raises_on_missing_dir():
+    pipeline = IngestionPipeline()
+    with pytest.raises(ValueError, match="Directory not found"):
+        asyncio.run(pipeline.ingest_folder("/non/existent/path/for/sure"))

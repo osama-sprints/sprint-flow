@@ -91,7 +91,8 @@ async def ingest_attached_documents(message: IncomingMessage) -> str | None:
     if len(completed) == 1:
         return f"✅ Ingested '{completed[0]}'. You can now ask questions about this document."
     return (
-        f"✅ Ingested {', '.join(repr(name) for name in completed)}. You can now ask questions about these documents."
+        f"✅ Ingested {', '.join(repr(name) for name in completed)}. "
+        f"You can now ask questions about these documents."
     )
 
 
