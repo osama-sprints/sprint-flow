@@ -870,15 +870,9 @@ async def list_calendar(
     context = requester or require_requester()
     if not context.channel_id or not context.team_id:
         raise ValidationFailed("I don't know which channel or team this is.")
-
-<<<<<<< HEAD
-    await require_channel_membership(context, context.channel_id, action="read_calendar")
-=======
     # Reading the calendar is a member privilege, not an admin one — but it is
     # still scoped: a non-member (and an unsynced identity) learns nothing.
     await require_channel_membership(context, context.channel_id, action="list_ceremonies")
-
->>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     rows = await ceremony_repo.list_ceremonies(
         context.channel_id, include_past=include_past, include_cancelled=include_cancelled, now=now or utcnow()
     )
