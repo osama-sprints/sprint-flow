@@ -378,7 +378,6 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     for rule in ROUTING_RULES:
         if rule.mutation and question:
             continue
-<<<<<<< HEAD
     # was: if rule.name == "policy_support" and document_or_technical_matched:
         if rule.name == "policy_support" and document_or_technical_matched and not (question and policy_matched):
           continue
@@ -386,7 +385,10 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
         if rule.name == "policy_support" and ingestion_context and not (question and policy_matched):
            continue
         if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"} and not generic_live_session_question:
-=======
+            continue
+        if rule.name == "learner_calendar" and generic_live_session_question:
+            continue
+
         if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
             if not generic_live_session_question:
                 continue
@@ -395,7 +397,6 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
         if rule.name == "policy_support" and ingestion_context:
             continue
         if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"}:
->>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
             continue
         if rule.name == "learner_calendar" and generic_live_session_question:
             continue
