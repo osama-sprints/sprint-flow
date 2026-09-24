@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,6 +16,15 @@ from googleapiclient.errors import HttpError
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def no_database_reminder_lock(monkeypatch):
+    @asynccontextmanager
+    async def fake_lock(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr("app.services.ceremony_reminders._reminder_lock", fake_lock)
 
 
 @pytest.fixture

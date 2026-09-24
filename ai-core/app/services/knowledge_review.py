@@ -4,8 +4,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 import re
 
-from sqlmodel import select
-
+from sqlmodel import col, select
 from app.core.logging import logger
 from app.core.requester import RequesterContext
 from app.models import EscalationTicket
@@ -52,16 +51,16 @@ async def list_pending_for_review() -> list[CandidateForReview]:
     async with session_scope() as session:
         stmt = (
             select(KnowledgeCandidate, EscalationTicket)
-            .join(EscalationTicket, EscalationTicket.id == KnowledgeCandidate.escalation_id)
-            .where(KnowledgeCandidate.status == KnowledgeCandidateStatus.PENDING.value)
-            .order_by(KnowledgeCandidate.created_at)
+            .join(EscalationTicket, col(EscalationTicket.id) == col(KnowledgeCandidate.escalation_id))
+            .where(col(KnowledgeCandidate.status) == KnowledgeCandidateStatus.PENDING.value)
+            .order_by(col(KnowledgeCandidate.created_at))
         )
         result = await session.exec(stmt)
         rows = result.all()
 
     return [
         CandidateForReview(
-            candidate_id=candidate.id,
+            candidate_id=candidate.id or 0,
             statement=candidate.statement,
             audience=candidate.audience,
             escalation_ref=ticket.ticket_ref,
@@ -76,6 +75,7 @@ async def approve_candidate(
     candidate_id: int, *, requester: RequesterContext | None = None, audience_override: str | None = None
 ) -> ReviewResult:
     reviewer = await require_requester_user(requester, action="approve knowledge candidate")
+    assert reviewer.id is not None  # narrowed for pyright: require_requester_user returns a persisted user
 
     async with session_scope() as session:
         candidate = await session.get(KnowledgeCandidate, candidate_id)
@@ -117,6 +117,7 @@ async def reject_candidate(
             return ReviewResult(ReviewOutcome.ALREADY_DECIDED, candidate=candidate)
 
         candidate.status = KnowledgeCandidateStatus.REJECTED.value
+        assert reviewer.id is not None  # narrowed for pyright: require_requester_user returns a persisted user
         candidate.reviewer_id = reviewer.id
         candidate.reviewed_at = datetime.now(UTC)
         candidate.rejection_reason = reason

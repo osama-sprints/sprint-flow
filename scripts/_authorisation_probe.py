@@ -9,11 +9,19 @@ database that has the domain schema:
 
 It seeds test identities straight into ``users`` (fake Mattermost ids prefixed
 ``verify-auth-``), binds ``current_requester`` exactly as the conversation
-layer does, and drives both the SERVICE functions and the TOOL wrappers. Every
-refusal is paired with a row-count/row-content snapshot proving nothing was
-written. Mattermost is never called: the two profile lookups ``resolve_person``
-needs are replaced with an in-memory fake for the seeded identities. All rows
-the probe creates are deleted at the end, even when an assertion fails.
+layer does — including the channel the turn arrived in — and drives both the
+SERVICE functions and the TOOL wrappers. Every refusal is paired with a
+row-count/row-content snapshot proving nothing was written. Mattermost is
+never called: the two profile lookups ``resolve_person`` needs are replaced
+with an in-memory fake for the seeded identities.
+
+This probe targets the post-refactor **channels** architecture: a channel is a
+plain Mattermost channel id (no local ``channels`` table), roles live in
+``channel_roles``, authority is decided from stored rows per channel, and the
+back-office tools derive the channel from ``current_requester`` rather than
+taking a ``cohort`` argument. All rows the probe creates carry the
+``verify-auth-`` prefix and are deleted at the end, even when an assertion
+fails.
 """
 
 import asyncio
@@ -48,13 +56,15 @@ from app.services.authorisation import (  # noqa: E402
     ValidationFailed,
 )
 from app.services.database import database_service  # noqa: E402
-from app.services.domain import cohorts as cohort_repo  # noqa: E402
+from app.services.domain import channels as channel_repo  # noqa: E402
 from app.services.domain import identity as identity_repo  # noqa: E402
-from app.services.domain import sprints as sprint_repo  # noqa: E402
 from app.services.mattermost import mattermost_client  # noqa: E402
 
 PREFIX = "verify-auth-"
 STAMP = secrets.token_hex(3)
+TEAM_ID = f"{PREFIX}team-{STAMP}"
+CHANNEL_A = f"{PREFIX}channel-a-{STAMP}"
+CHANNEL_B = f"{PREFIX}channel-b-{STAMP}"
 REFUSED = f"[{ResultCode.AUTHORISATION_REFUSED}] {REFUSAL_MESSAGE}"
 
 results: list[bool] = []
@@ -93,20 +103,22 @@ async def fake_get_user_by_email(email: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — channels architecture
 # ---------------------------------------------------------------------------
 
 
-def bind(user: Any, **overrides: Any) -> None:
-    """Bind a requester the way the conversation layer does (from the stored row)."""
+def bind(user: Any, channel_id: str, **overrides: Any) -> None:
+    """Bind a requester the way the conversation layer does (channel included)."""
     fields: dict[str, Any] = {
         "mattermost_user_id": user.mattermost_user_id,
         "username": user.username,
         "email": user.email,
-        "channel_type": "D",
+        "channel_id": channel_id,
+        "team_id": TEAM_ID,
+        "channel_type": "O",
         "user_id": user.id,
         "is_superadmin": user.is_superadmin,
-        "cohort_roles": MappingProxyType({}),
+        "channel_roles": MappingProxyType({}),
     }
     fields.update(overrides)
     current_requester.set(RequesterContext(**fields))
@@ -118,17 +130,25 @@ def unbind() -> None:
 
 
 async def snapshot() -> tuple[Any, ...]:
-    """Everything a refused action could have touched, as comparable values."""
+    """Everything a refused action could have touched, limited to probe rows."""
     async with database_service.engine.connect() as conn:
-        cohorts = (await conn.execute(text("SELECT count(*) FROM cohorts"))).scalar_one()
-        sprints = (await conn.execute(text("SELECT count(*) FROM sprints"))).scalar_one()
-        memberships = (
+        sprints = (
             await conn.execute(
-                text("SELECT user_id, cohort_id, role_id, status FROM cohort_memberships ORDER BY user_id, cohort_id")
+                text("SELECT count(*) FROM sprints WHERE channel_id LIKE :p"), {"p": f"{PREFIX}%"}
+            )
+        ).scalar_one()
+        roles = (
+            await conn.execute(
+                text(
+                    "SELECT user_id, channel_id, role_id, status FROM channel_roles "
+                    "WHERE channel_id LIKE :p "
+                    "OR user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p) "
+                    "ORDER BY user_id, channel_id"
+                ),
+                {"p": f"{PREFIX}%"},
             )
         ).all()
-        steps = (await conn.execute(text("SELECT count(*) FROM onboarding_steps"))).scalar_one()
-    return cohorts, sprints, tuple(tuple(row) for row in memberships), steps
+    return sprints, tuple(tuple(row) for row in roles)
 
 
 async def cleanup() -> None:
@@ -136,30 +156,18 @@ async def cleanup() -> None:
     async with database_service.engine.begin() as conn:
         await conn.execute(
             text(
-                "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
+                "DELETE FROM sprints WHERE channel_id LIKE :p "
+                "OR opened_by_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
             ),
             {"p": f"{PREFIX}%"},
         )
         await conn.execute(
-            text("DELETE FROM sprints WHERE cohort_id IN (SELECT id FROM cohorts WHERE lower(name) LIKE :p)"),
-            {"p": f"{PREFIX}%"},
-        )
-        await conn.execute(
             text(
-                "DELETE FROM cohort_memberships WHERE cohort_id IN "
-                "(SELECT id FROM cohorts WHERE lower(name) LIKE :p) "
+                "DELETE FROM channel_roles WHERE channel_id LIKE :p "
                 "OR user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
             ),
             {"p": f"{PREFIX}%"},
         )
-        await conn.execute(
-            text(
-                "UPDATE cohorts SET created_by_id = NULL WHERE created_by_id IN "
-                "(SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-            ),
-            {"p": f"{PREFIX}%"},
-        )
-        await conn.execute(text("DELETE FROM cohorts WHERE lower(name) LIKE :p"), {"p": f"{PREFIX}%"})
         await conn.execute(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), {"p": f"{PREFIX}%"})
 
 
@@ -176,6 +184,25 @@ async def seed_user(handle: str, *, is_superadmin: bool = False) -> Any:
         display_name=handle.title(),
         timezone="UTC",
         is_superadmin=is_superadmin,
+    )
+
+
+async def stored_role(user: Any, channel_id: str) -> RoleKey | None:
+    """The requester's stored role in the channel, per the database (what authority uses)."""
+    role = await channel_repo.get_role_for_user_in_channel(user.id, channel_id, active_only=True)
+    return role.key if role else None
+
+
+async def grant_role(user: Any, channel_id: str, role_key: RoleKey) -> None:
+    """Give ``user`` a stored role in ``channel_id`` (what the seeded happy path uses)."""
+    role = await channel_repo.get_role_by_key(role_key)
+    assert role is not None and role.id is not None and user.id is not None
+    await channel_repo.upsert_channel_role(
+        user_id=user.id,
+        team_id=TEAM_ID,
+        channel_id=channel_id,
+        role_id=role.id,
+        assigned_by_id=None,
     )
 
 
@@ -216,144 +243,123 @@ async def scenario() -> None:
     learner = await seed_user("learner")
     scrum_master = await seed_user("sm")
     target = await seed_user("target")
-    name_a = f"Verify-Auth-A-{STAMP}"
-    name_b = f"Verify-Auth-B-{STAMP}"
 
     print("--- tool boundary")
     tool_names = {tool.name for tool in back_office_tools.TOOLS}
+    contract = {"assign_role", "open_sprint", "list_channel_roles_for_requester", "list_channel_members"}
     check(
-        "five tools with the contract names",
-        tool_names == {"create_cohort", "assign_role", "open_sprint", "list_cohorts", "list_cohort_members"},
+        "the four channel-administration tools are exposed",
+        contract <= tool_names,
         str(sorted(tool_names)),
     )
-    forbidden = ("requester", "user_id", "mattermost_user", "superadmin", "identity", "role_key")
+    forbidden = ("requester", "user_id", "mattermost_user", "superadmin", "identity")
     leaks = [
         f"{tool.name}.{arg}"
         for tool in back_office_tools.TOOLS
+        if tool.name in contract
         for arg in tool.args
         if any(f in arg for f in forbidden)
     ]
-    check("no tool argument carries requester identity", not leaks, str(leaks))
+    check("no tool argument carries requester identity or a channel", not leaks, str(leaks))
 
     print("--- nobody bound (a tool invoked outside a turn)")
     unbind()
-    await expect_tool_refusal("unbound: create_cohort", back_office_tools.create_cohort, {"name": name_a})
-    await expect_tool_refusal("unbound: list_cohorts", back_office_tools.list_cohorts, {})
+    await expect_tool_refusal(
+        "unbound: assign_role", back_office_tools.assign_role, {"person": f"@{PREFIX}x-{STAMP}", "role": "learner"}
+    )
+    await expect_tool_refusal("unbound: open_sprint", back_office_tools.open_sprint, {"sprint_name": "Sprint 1"})
+    await expect_tool_refusal("unbound: list_channel_members", back_office_tools.list_channel_members, {})
 
-    print("--- superadmin: authorised platform actions")
-    bind(superadmin)
+    print("--- superadmin: authorised platform actions (channel context required)")
+    bind(superadmin, CHANNEL_A)
     before = await snapshot()
-    created = await back_office.create_cohort(name_a)
-    check("superadmin creates cohort A", created.code == ResultCode.COHORT_CREATED, created.message)
-    check("cohort A has an integer id", isinstance(created.cohort.id, int))
-    again = await back_office.create_cohort(name_a.lower())
-    check(
-        "creating A again (different case) is a no-op",
-        again.code == ResultCode.COHORT_ALREADY_EXISTS and again.cohort.id == created.cohort.id,
-        again.message,
-    )
-    after = await snapshot()
-    check("exactly one cohort row was added by the two calls", after[0] == before[0] + 1)
-    tool_again = await back_office_tools.create_cohort.ainvoke({"name": name_a})
-    check(
-        "create_cohort tool reports COHORT_ALREADY_EXISTS",
-        result_code_of(tool_again) == ResultCode.COHORT_ALREADY_EXISTS,
-        tool_again,
-    )
-    check("cohort count unchanged after the tool repeat", (await snapshot())[0] == after[0])
-    linked = await back_office.create_cohort(name_b, mattermost_team="abcdefghijklmnopqrstuvwxyz")
-    check(
-        "cohort B created with an id-shaped Mattermost team stored",
-        linked.code == ResultCode.COHORT_CREATED and linked.cohort.mattermost_team_id == "abcdefghijklmnopqrstuvwxyz",
-        linked.message,
-    )
-    cohort_a, cohort_b = created.cohort, linked.cohort
-    assert cohort_a.id is not None and cohort_b.id is not None
-
-    sm_assign = await back_office.assign_role(f"@{scrum_master.username}", "Scrum Master", name_a)
+    sm_assign = await back_office.assign_role(f"@{scrum_master.username}", "scrum master")
     check("superadmin assigns scrum master in A", sm_assign.code == ResultCode.ROLE_ASSIGNED, sm_assign.message)
-    learner_assign = await back_office.assign_role(learner.email or "", "learner", str(cohort_a.id))
     check(
-        "superadmin assigns learner in A by email and cohort id",
-        learner_assign.code == ResultCode.ROLE_ASSIGNED,
-        learner_assign.message,
+        "scrum master's role is stored under channel A",
+        await stored_role(scrum_master, CHANNEL_A) == RoleKey.SCRUM_MASTER,
     )
-    learner_in_b = await back_office.assign_role(f"@{learner.username}", "student", name_b)
-    check("superadmin assigns learner in B via alias 'student'", learner_in_b.code == ResultCode.ROLE_ASSIGNED)
+    learner_assign = await back_office.assign_role(learner.email or "", "learner")
+    check("superadmin assigns learner in A by email", learner_assign.code == ResultCode.ROLE_ASSIGNED)
+    check(
+        "learner's role is stored under channel A",
+        await stored_role(learner, CHANNEL_A) == RoleKey.LEARNER,
+    )
+    bind(superadmin, CHANNEL_B)
+    learner_in_b = await back_office.assign_role(f"@{learner.username}", "learner")
+    check("superadmin assigns learner in B", learner_in_b.code == ResultCode.ROLE_ASSIGNED)
+    check("learner's role is stored under channel B", await stored_role(learner, CHANNEL_B) == RoleKey.LEARNER)
+    bind(superadmin, CHANNEL_A)
+    after_roles = await snapshot()
+    check("exactly three channel_roles rows were added by the three assignments", len(after_roles[1]) == len(before[1]) + 3)
+    opened = await back_office.open_sprint("Sprint 1", "2030-01-06", "2030-01-17")
+    check("superadmin opens Sprint 1 in A", opened.code == ResultCode.SPRINT_OPENED, opened.message)
+    check(
+        "sprint stored as active with opened_by",
+        opened.sprint.status == "active" and opened.sprint.opened_by_id == superadmin.id,
+    )
+    check("exactly one sprint row was added", (await snapshot())[0] == before[0] + 1)
 
     print("--- learner: refused on every mutation, tables unchanged")
-    bind(learner)
-    await expect_refusal("learner: create_cohort (service)", back_office.create_cohort(f"{PREFIX}rogue-{STAMP}"))
-    await expect_refusal(
-        "learner: promote self to scrum master in A (service)",
-        back_office.assign_role(f"@{learner.username}", "scrum master", name_a),
-    )
-    await expect_refusal("learner: open_sprint in A (service)", back_office.open_sprint(name_a, "Sprint 1"))
-    await expect_tool_refusal(
-        "learner: create_cohort (tool)", back_office_tools.create_cohort, {"name": f"{PREFIX}rogue-{STAMP}"}
-    )
+    bind(learner, CHANNEL_A)
+    await expect_refusal("learner: assign_role (service)", back_office.assign_role(f"@{learner.username}", "scrum master"))
+    await expect_refusal("learner: open_sprint (service)", back_office.open_sprint("Sprint 1"))
     await expect_tool_refusal(
         "learner: assign_role (tool)",
         back_office_tools.assign_role,
-        {"person": f"@{learner.username}", "role": "scrum master", "cohort": name_a},
+        {"person": f"@{target.username}", "role": "scrum master"},
     )
     await expect_tool_refusal(
-        "learner: open_sprint (tool)", back_office_tools.open_sprint, {"cohort": name_a, "sprint_name": "Sprint 1"}
+        "learner: open_sprint (tool)", back_office_tools.open_sprint, {"sprint_name": "Sprint 1"}
     )
-    still = await cohort_repo.get_role_for_user_in_cohort(learner.id, cohort_a.id)
-    check("learner is still a learner in A afterwards", bool(still) and still.key == RoleKey.LEARNER)
     await expect_tool_refusal(
         "learner: unknown role is refused, not validated (authorisation first)",
         back_office_tools.assign_role,
-        {"person": f"@{learner.username}", "role": "emperor", "cohort": name_a},
+        {"person": f"@{target.username}", "role": "emperor"},
     )
+    check("learner is still a learner in A afterwards", await stored_role(learner, CHANNEL_A) == RoleKey.LEARNER)
 
     print("--- forged context hints do not grant authority (stored data decides)")
-    bind(learner, is_superadmin=True, cohort_roles=MappingProxyType({cohort_a.id: "scrum_master"}))
-    await expect_tool_refusal(
-        "learner with forged is_superadmin: create_cohort",
-        back_office_tools.create_cohort,
-        {"name": f"{PREFIX}forged-{STAMP}"},
+    bind(
+        learner,
+        CHANNEL_A,
+        is_superadmin=True,
+        channel_roles=MappingProxyType({CHANNEL_A: "scrum_master"}),
     )
     await expect_tool_refusal(
-        "learner with forged cohort_roles: assign_role in A",
+        "learner with forged is_superadmin: assign_role",
         back_office_tools.assign_role,
-        {"person": f"@{target.username}", "role": "learner", "cohort": name_a},
+        {"person": f"@{target.username}", "role": "learner"},
+    )
+    await expect_tool_refusal(
+        "learner with forged channel_roles: open_sprint",
+        back_office_tools.open_sprint,
+        {"sprint_name": "Sprint 1"},
     )
 
-    print("--- scrum master of A: cohort-scoped authority")
-    bind(scrum_master)
-    await expect_tool_refusal(
-        "scrum master of A: create_cohort (platform-level)",
-        back_office_tools.create_cohort,
-        {"name": f"{PREFIX}sm-{STAMP}"},
-    )
+    print("--- scrum master of A: channel-scoped authority")
+    bind(scrum_master, CHANNEL_A)
     assigned = await back_office_tools.assign_role.ainvoke(
-        {"person": f"@{target.username}", "role": "learner", "cohort": name_a}
+        {"person": f"@{target.username}", "role": "learner"}
     )
     check("scrum master assigns a learner in A", result_code_of(assigned) == ResultCode.ROLE_ASSIGNED, assigned)
+    check("target now holds learner in A", await stored_role(target, CHANNEL_A) == RoleKey.LEARNER)
+    bind(scrum_master, CHANNEL_B)
+    await expect_tool_refusal("scrum master of A: assign_role in B", back_office_tools.assign_role, {
+        "person": f"@{target.username}", "role": "learner"
+    })
     await expect_tool_refusal(
-        "scrum master of A: assign_role in B",
-        back_office_tools.assign_role,
-        {"person": f"@{target.username}", "role": "learner", "cohort": name_b},
+        "scrum master of A: open_sprint in B", back_office_tools.open_sprint, {"sprint_name": "Sprint 1"}
     )
-    await expect_tool_refusal(
-        "scrum master of A: open_sprint in B",
-        back_office_tools.open_sprint,
-        {"cohort": name_b, "sprint_name": "Sprint 1"},
-    )
-    await expect_tool_refusal(
-        "scrum master of A: list_cohort_members of B",
-        back_office_tools.list_cohort_members,
-        {"cohort": name_b},
-    )
+    await expect_tool_refusal("scrum master of A: list B's members", back_office_tools.list_channel_members, {})
 
     print("--- idempotency")
+    bind(scrum_master, CHANNEL_A)
     before = await snapshot()
-    same = await back_office.assign_role(f"@{target.username}", "learner", name_a)
+    same = await back_office.assign_role(f"@{target.username}", "learner")
     check("same role twice -> ROLE_ALREADY_ASSIGNED", same.code == ResultCode.ROLE_ALREADY_ASSIGNED, same.message)
-    check("membership rows unchanged", before == await snapshot())
-    changed = await back_office.assign_role(f"@{target.username}", "tech lead", name_a)
+    check("channel_roles rows unchanged", before == await snapshot())
+    changed = await back_office.assign_role(f"@{target.username}", "tech lead")
     check(
         "different role -> ROLE_CHANGED naming the previous role",
         changed.code == ResultCode.ROLE_CHANGED
@@ -362,98 +368,86 @@ async def scenario() -> None:
         and "Learner" in changed.message,
         changed.message,
     )
-    check("still one membership row per (user, cohort)", (await snapshot())[2].__len__() == len(before[2]))
-    before = await snapshot()
-    opened = await back_office.open_sprint(name_a, "Sprint 1", "2030-01-06", "2030-01-17")
-    check("scrum master opens Sprint 1 in A", opened.code == ResultCode.SPRINT_OPENED, opened.message)
-    check(
-        "sprint stored as active with opened_by",
-        opened.sprint.status == "active" and opened.sprint.opened_by_id == scrum_master.id,
-    )
-    reopened = await back_office_tools.open_sprint.ainvoke({"cohort": name_a, "sprint_name": "sprint 1"})
+    check("still one channel_roles row per (user, channel)", len((await snapshot())[1]) == len(before[1]))
+    reopened = await back_office_tools.open_sprint.ainvoke({"sprint_name": "sprint 1"})
     check(
         "opening Sprint 1 again -> SPRINT_ALREADY_OPEN",
         result_code_of(reopened) == ResultCode.SPRINT_ALREADY_OPEN,
         reopened,
     )
-    check("exactly one sprint row was added", (await snapshot())[1] == before[1] + 1)
+    check("exactly one sprint row still exists", (await snapshot())[0] == before[0])
 
     print("--- validation failures are distinct from refusals")
+    bind(scrum_master, CHANNEL_A)
     unknown_role = await back_office_tools.assign_role.ainvoke(
-        {"person": f"@{target.username}", "role": "emperor", "cohort": name_a}
+        {"person": f"@{target.username}", "role": "emperor"}
     )
     check(
         "unknown role -> VALIDATION_ERROR naming the known roles",
         result_code_of(unknown_role) == ResultCode.VALIDATION_ERROR and "Known roles" in unknown_role,
         unknown_role,
     )
-    unknown_cohort = await back_office_tools.open_sprint.ainvoke(
-        {"cohort": f"{PREFIX}nope-{STAMP}", "sprint_name": "S"}
+    bind(scrum_master, "")
+    outside = await back_office_tools.assign_role.ainvoke(
+        {"person": f"@{target.username}", "role": "learner"}
     )
     check(
-        "unknown cohort -> VALIDATION_ERROR",
-        result_code_of(unknown_cohort) == ResultCode.VALIDATION_ERROR,
-        unknown_cohort,
+        "no channel context -> VALIDATION_ERROR (not a refusal)",
+        result_code_of(outside) == ResultCode.VALIDATION_ERROR and "outside of a channel context" in outside,
+        outside,
+    )
+    bind(scrum_master, CHANNEL_A)
+    unknown_person = await back_office_tools.assign_role.ainvoke({"person": "@nobody-here", "role": "learner"})
+    check(
+        "unknown person -> VALIDATION_ERROR",
+        result_code_of(unknown_person) == ResultCode.VALIDATION_ERROR,
+        unknown_person,
     )
     bad_dates = await back_office_tools.open_sprint.ainvoke(
-        {"cohort": name_a, "sprint_name": "Sprint 2", "start_date": "2030-03-10", "end_date": "2030-03-01"}
+        {"sprint_name": "Sprint 2", "start_date": "2030-03-10", "end_date": "2030-03-01"}
     )
     check("end before start -> VALIDATION_ERROR", result_code_of(bad_dates) == ResultCode.VALIDATION_ERROR, bad_dates)
     overlap = await back_office_tools.open_sprint.ainvoke(
-        {"cohort": name_a, "sprint_name": "Sprint 2", "start_date": "2030-01-10", "end_date": "2030-01-20"}
+        {"sprint_name": "Sprint 2", "start_date": "2030-01-10", "end_date": "2030-01-20"}
     )
     check(
         "overlapping sprint -> VALIDATION_ERROR naming the clash",
         result_code_of(overlap) == ResultCode.VALIDATION_ERROR and "Sprint 1" in overlap,
         overlap,
     )
-    unknown_person = await back_office_tools.assign_role.ainvoke(
-        {"person": "@nobody-here", "role": "learner", "cohort": name_a}
-    )
-    check(
-        "unknown person -> VALIDATION_ERROR",
-        result_code_of(unknown_person) == ResultCode.VALIDATION_ERROR,
-        unknown_person,
-    )
+    empty_name = await back_office_tools.open_sprint.ainvoke({"sprint_name": "   "})
+    check("empty sprint name -> VALIDATION_ERROR", result_code_of(empty_name) == ResultCode.VALIDATION_ERROR, empty_name)
     check("validation and refusal codes differ", ResultCode.VALIDATION_ERROR != ResultCode.AUTHORISATION_REFUSED)
     try:
-        await back_office.assign_role(f"@{target.username}", "emperor", name_a)
+        await back_office.assign_role(f"@{target.username}", "emperor")
         distinct = False
     except ValidationFailed:
         distinct = True
     except AuthorisationRefused:
         distinct = False
     check("service raises ValidationFailed (not AuthorisationRefused) for an unknown role", distinct)
-    check("no sprint was created by the failed attempts", (await snapshot())[1] == before[1] + 1)
+    check("no sprint was created by the failed attempts", (await snapshot())[0] == before[0])
 
     print("--- scoped reads")
-    bind(learner)
-    mine = await back_office.list_cohorts()
+    bind(learner, CHANNEL_A)
+    mine = await back_office.list_channel_roles_for_requester()
     check(
-        "learner lists only their own cohorts (A and B)",
-        {c.id for c, _ in mine.entries} == {cohort_a.id, cohort_b.id} and all(r is not None for _, r in mine.entries),
+        "learner lists only their own channels (A and B)",
+        {channel_id for channel_id, _ in mine.entries} == {CHANNEL_A, CHANNEL_B} and not mine.is_superadmin,
         mine.message,
     )
-    members = await back_office_tools.list_cohort_members.ainvoke({"cohort": name_a})
+    members = await back_office_tools.list_channel_members.ainvoke({})
     check(
         "learner in A can list A's members",
         result_code_of(members) == ResultCode.OK and scrum_master.username in members,
         members,
     )
-    bind(superadmin)
-    everything = await back_office.list_cohorts()
+    bind(superadmin, CHANNEL_A)
+    everything = await back_office.list_channel_roles_for_requester()
     check(
-        "superadmin lists every cohort",
-        everything.is_superadmin and {cohort_a.id, cohort_b.id} <= {c.id for c, _ in everything.entries},
-    )
-
-    print("--- kill switch")
-    await cohort_repo.set_cohort_active(cohort_b.id, False)
-    inactive = await back_office_tools.open_sprint.ainvoke({"cohort": name_b, "sprint_name": "Sprint 1"})
-    check(
-        "inactive cohort -> VALIDATION_ERROR for an authorised requester",
-        result_code_of(inactive) == ResultCode.VALIDATION_ERROR and "inactive" in inactive,
-        inactive,
+        "superadmin's listing reports platform-wide authority",
+        everything.is_superadmin and "superadmin" in everything.message.lower(),
+        everything.message,
     )
     unbind()
 
@@ -479,12 +473,12 @@ async def main_async() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Command mode, used by the host verifier's cohort-scoped live case
+# Command mode, used by the host verifier's channel-scoped live case
 # ---------------------------------------------------------------------------
 
 
-async def command_setup_scoped(mattermost_user_id: str, username: str, email: str, stamp: str) -> dict[str, Any]:
-    """Give a REAL Mattermost account tech-lead authority in cohort A only (cohort names carry the probe prefix)."""
+async def command_setup_scoped(mattermost_user_id: str, username: str, email: str, channel_id: str) -> dict[str, Any]:
+    """Give a REAL Mattermost account tech-lead authority in ONE real channel (stored row)."""
     user = await identity_repo.upsert_mattermost_user(
         mattermost_user_id=mattermost_user_id,
         username=username,
@@ -494,37 +488,36 @@ async def command_setup_scoped(mattermost_user_id: str, username: str, email: st
         is_superadmin=False,
     )
     assert user.id is not None
-    name_a, name_b = f"{PREFIX}scoped-a-{stamp}", f"{PREFIX}scoped-b-{stamp}"
-    cohort_a = await cohort_repo.get_cohort_by_name(name_a) or await cohort_repo.create_cohort(name_a)
-    cohort_b = await cohort_repo.get_cohort_by_name(name_b) or await cohort_repo.create_cohort(name_b)
-    lead = await cohort_repo.get_role_by_key(RoleKey.TECH_LEAD)
-    assert lead is not None and lead.id is not None and cohort_a.id is not None and cohort_b.id is not None
-    await cohort_repo.upsert_membership(user_id=user.id, cohort_id=cohort_a.id, role_id=lead.id, assigned_by_id=None)
-    return {"user_id": user.id, "cohort_a": cohort_a.name, "cohort_b": cohort_b.name}
+    lead = await channel_repo.get_role_by_key(RoleKey.TECH_LEAD)
+    assert lead is not None and lead.id is not None
+    await channel_repo.upsert_channel_role(
+        user_id=user.id,
+        team_id="",
+        channel_id=channel_id,
+        role_id=lead.id,
+        assigned_by_id=None,
+    )
+    return {"user_id": user.id}
 
 
-async def command_check_scoped(stamp: str) -> dict[str, Any]:
-    """Count sprints in the scoped cohorts."""
-    result: dict[str, Any] = {}
-    for label in ("a", "b"):
-        cohort = await cohort_repo.get_cohort_by_name(f"{PREFIX}scoped-{label}-{stamp}")
-        result[f"sprints_{label}"] = len(await sprint_repo.list_sprints(cohort.id)) if cohort and cohort.id else None
-    return result
+async def command_check_scoped(channel_id: str) -> dict[str, Any]:
+    """Count sprints in the given channel."""
+    async with database_service.engine.connect() as conn:
+        runs = (await conn.execute(text("SELECT count(*) FROM sprints WHERE channel_id = :c"), {"c": channel_id})).scalar_one()
+    return {"sprints": runs}
 
 
-async def command_cleanup_scoped(mattermost_user_id: str) -> dict[str, Any]:
-    """Remove the scoped cohorts (prefix cleanup) and the real account's rows."""
+async def command_cleanup_scoped(mattermost_user_id: str, channel_id: str) -> dict[str, Any]:
+    """Remove the real account's rows and anything created under the live channel."""
     await cleanup()
     async with database_service.engine.begin() as conn:
-        await conn.execute(
-            text("DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id = :m)"),
-            {"m": mattermost_user_id},
-        )
+        await conn.execute(text("DELETE FROM sprints WHERE channel_id = :c"), {"c": channel_id})
         await conn.execute(
             text(
-                "DELETE FROM cohort_memberships WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id = :m)"
+                "DELETE FROM channel_roles WHERE user_id IN "
+                "(SELECT id FROM users WHERE mattermost_user_id = :m) OR channel_id = :c"
             ),
-            {"m": mattermost_user_id},
+            {"m": mattermost_user_id, "c": channel_id},
         )
         await conn.execute(text("DELETE FROM users WHERE mattermost_user_id = :m"), {"m": mattermost_user_id})
     return {"deleted": True}
@@ -538,7 +531,7 @@ async def command(argv: list[str]) -> int:
         elif argv[0] == "check-scoped":
             print(json.dumps(await command_check_scoped(argv[1])))
         elif argv[0] == "cleanup-scoped":
-            print(json.dumps(await command_cleanup_scoped(argv[1])))
+            print(json.dumps(await command_cleanup_scoped(argv[1], argv[2])))
         else:
             print(json.dumps({"error": f"unknown command {argv[0]}"}))
             return 2
@@ -554,7 +547,7 @@ def main() -> int:
         int: 0 when all pass.
     """
     print("=" * 84)
-    print("SprintFlow authorisation & back office — in-container probe")
+    print("SprintFlow authorisation & back office — in-container probe (channels era)")
     print("=" * 84)
     try:
         asyncio.run(main_async())

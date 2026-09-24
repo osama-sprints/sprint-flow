@@ -48,6 +48,8 @@ from datetime import (
 )
 from typing import Any
 
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
 from app.core.config import settings
 from app.core.logging import logger
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
@@ -56,15 +58,9 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 # These are optional dependencies — only imported when Google Meet is enabled.
 # The try/except prevents ImportError at startup when the packages are not
 # installed (the feature is gated behind GOOGLE_MEET_ENABLED anyway).
-try:
-    from google.oauth2 import service_account  # type: ignore[import-untyped]
-    from googleapiclient.discovery import build  # type: ignore[import-untyped]
-
-    _GOOGLE_LIBS_AVAILABLE = True
-except ImportError:
-    _GOOGLE_LIBS_AVAILABLE = False
-    service_account = None
-    build = None
+from google.oauth2 import service_account  # type: ignore[import-untyped]
+from googleapiclient.discovery import build  # type: ignore[import-untyped]
+from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
 _SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -79,13 +75,6 @@ def _build_service() -> Any | None:
     Returns:
         googleapiclient Resource | None: The service, or None on any error.
     """
-    if not _GOOGLE_LIBS_AVAILABLE:
-        logger.warning(
-            "google_meet_libs_missing",
-            hint="Install google-api-python-client google-auth to enable Meet integration",
-        )
-        return None
-
     raw = settings.GOOGLE_SERVICE_ACCOUNT_CREDENTIALS.strip()
     if not raw:
         logger.warning("google_meet_no_credentials", hint="Set GOOGLE_SERVICE_ACCOUNT_CREDENTIALS in .env")

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ai-core/scripts/docker-entrypoint.sh
 
 set -e
 
@@ -11,40 +12,33 @@ echo "Initial Database Name: $( [[ -n ${POSTGRES_DB:-${DB_NAME:-}} ]] && echo 's
 echo "Initial Database User: $( [[ -n ${POSTGRES_USER:-${DB_USER:-}} ]] && echo 'set' || echo 'Not set' )"
 
 # Load environment variables from the appropriate .env file
+load_env_file() {
+    local env_file="$1"
+    echo "Loading environment from $env_file"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments and blank lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// }" ]] && continue
+
+        # Only accept valid KEY=VALUE lines (key must start with letter or underscore)
+        if [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            key="${line%%=*}"
+            if [[ -z "${!key}" ]]; then
+                # Use a safer export that handles values with spaces/quotes better
+                export "$line"
+            else
+                echo "Keeping existing value for $key"
+            fi
+        else
+            echo "WARNING: Skipping invalid env line → $line"
+        fi
+    done < "$env_file"
+}
+
 if [ -f ".env.${APP_ENV}" ]; then
-    echo "Loading environment from .env.${APP_ENV}"
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        # Skip comments and empty lines
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$line" ]] && continue
-
-        # Extract the key
-        key=$(echo "$line" | cut -d '=' -f 1)
-
-        # Only set if not already set in environment
-        if [[ -z "${!key}" ]]; then
-            export "$line"
-        else
-            echo "Keeping existing value for $key"
-        fi
-    done <".env.${APP_ENV}"
+    load_env_file ".env.${APP_ENV}"
 elif [ -f ".env" ]; then
-    echo "Loading environment from .env"
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        # Skip comments and empty lines
-        [[ "$line" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$line" ]] && continue
-
-        # Extract the key
-        key=$(echo "$line" | cut -d '=' -f 1)
-
-        # Only set if not already set in environment
-        if [[ -z "${!key}" ]]; then
-            export "$line"
-        else
-            echo "Keeping existing value for $key"
-        fi
-    done <".env"
+    load_env_file ".env"
 else
     echo "Warning: No .env file found. Using system environment variables."
 fi
@@ -80,16 +74,18 @@ echo "Database User: $( [[ -n ${POSTGRES_USER:-${DB_USER:-}} ]] && echo 'set' ||
 echo "LLM Model: ${DEFAULT_LLM_MODEL:-Not set}"
 echo "Debug Mode: ${DEBUG:-false}"
 
-# Sprint 1 / data model: bring the domain schema to head before serving.
-# uvicorn runs a single worker here, so there is exactly one migrator per
-# container; Alembic's own version table serialises concurrent containers.
-# Set AI_CORE_MIGRATE_ON_START=false to opt out (e.g. a one-off shell).
 if [[ "${AI_CORE_MIGRATE_ON_START:-true}" == "true" ]]; then
     echo "Applying database migrations: alembic upgrade head"
     uv run alembic upgrade head
     echo "Database schema is at head"
 else
     echo "Skipping database migrations (AI_CORE_MIGRATE_ON_START=${AI_CORE_MIGRATE_ON_START})"
+fi
+
+# Automatically ingest sample policies on startup if enabled
+if [[ "${INGEST_POLICIES_ON_START:-true}" == "true" ]]; then
+    echo "Ingesting sample policy documents into vector store..."
+    uv run python -m app.services.document_ingestion.pipeline || echo "Policy ingestion encountered an issue."
 fi
 
 # Execute the CMD

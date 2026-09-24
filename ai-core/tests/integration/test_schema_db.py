@@ -82,16 +82,33 @@ async def make_user(prefix: str, index: int = 0):
         is_superadmin=False,
     )
 
-
 async def cleanup(prefix: str, channel_ids: list[str]) -> None:
     async with session_scope() as s:
         params = {"p": f"{prefix}%", "channels": channel_ids or ["__none__"]}
-        await s.exec(text("DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"), params=params)  # type: ignore[call-overload]
+        await s.exec(
+            text(
+                "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
+            ),
+            params=params,
+        )  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM escalation_tickets WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
-        await s.exec(text("DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE channel_id = ANY(:channels))"), params=params)  # type: ignore[call-overload]
-        await s.exec(text("DELETE FROM ceremonies WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
+        await s.exec(
+            text(
+                "DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE organizer_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p))"
+            ),
+            params=params,
+        )  # type: ignore[call-overload]
+        await s.exec(
+            text(
+                "DELETE FROM ceremonies WHERE organizer_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
+            ),
+            params=params,
+        )  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM sprints WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
-        await s.exec(text("DELETE FROM channel_roles WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
+        await s.exec(
+            text("DELETE FROM channel_roles WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"),
+            params=params,
+        )  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), params=params)  # type: ignore[call-overload]
 
 
@@ -192,8 +209,11 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
             changes = await asyncio.gather(
                 *(
                     channel_repo.upsert_channel_role(
-                        user_id=user.id, team_id="sprints-community", channel_id=channel_id,
-                        role_id=learner.id, assigned_by_id=None,
+                        user_id=user.id,
+                        team_id="sprints-community",
+                        channel_id=channel_id,
+                        role_id=learner.id,
+                        assigned_by_id=None,
                     )
                     for _ in range(10)
                 )
@@ -214,6 +234,8 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
     run(scenario)
 
 
+
+
 def test_ceremony_overlap_boundaries_and_amendment_trail():
     prefix = f"it-cer-{tag()}"
 
@@ -226,8 +248,8 @@ def test_ceremony_overlap_boundaries_and_amendment_trail():
             assert user.id and ctype and ctype.id
             start = datetime(2030, 6, 1, 10, 0, tzinfo=UTC)
             ceremony = await ceremony_repo.create_ceremony(
-                channel_id=channel_id,
                 team_id="sprints-community",
+                channel_id=channel_id,
                 ceremony_type_id=ctype.id,
                 organizer_id=user.id,
                 scheduled_at=start,

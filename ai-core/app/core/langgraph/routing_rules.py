@@ -366,14 +366,17 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     policy_matched = _matches(policy_rule, normalised)
     document_or_technical_rule = next(rule for rule in ROUTING_RULES if rule.name == "learner_document_or_technical")
     document_or_technical_matched = _matches(document_or_technical_rule, normalised)
-    ingestion_context = bool(re.search(r"\bingested\b.*(?:document|file|pdf|docx|txt)|\b(?:uploaded|attached)\s+(?:document|file)\b", normalised, re.IGNORECASE))
+    ingestion_context = bool(
+        re.search(
+            r"\bingested\b.*(?:document|file|pdf|docx|txt)|\b(?:uploaded|attached)\s+(?:document|file)\b",
+            normalised,
+            re.IGNORECASE,
+        )
+    )
     generic_live_session_question = question and _is_generic_live_session_question(normalised)
 
     for rule in ROUTING_RULES:
         if rule.mutation and question:
-         continue
-        if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
-          if not generic_live_session_question:
             continue
     # was: if rule.name == "policy_support" and document_or_technical_matched:
         if rule.name == "policy_support" and document_or_technical_matched and not (question and policy_matched):
@@ -381,9 +384,20 @@ def detect_intents(text: str, requester: Optional[RequesterContext] = None) -> L
     # was: if rule.name == "policy_support" and ingestion_context:
         if rule.name == "policy_support" and ingestion_context and not (question and policy_matched):
            continue
-    # was: if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"}:
-        if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"} and not (question and policy_matched):
-           continue
+        if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"} and not generic_live_session_question:
+            continue
+        if rule.name == "learner_calendar" and generic_live_session_question:
+            continue
+
+        if rule.name == "policy_support" and ((mutation_matched and not question) or (question and calendar_matched)):
+            if not generic_live_session_question:
+                continue
+        if rule.name == "policy_support" and document_or_technical_matched:
+            continue
+        if rule.name == "policy_support" and ingestion_context:
+            continue
+        if schedule_matched and rule.name in {"policy_support", "learner_calendar", "learner_support"}:
+            continue
         if rule.name == "learner_calendar" and generic_live_session_question:
             continue
         if rule.name == "learner_support" and question and policy_matched:

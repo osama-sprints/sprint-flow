@@ -23,6 +23,7 @@ One responsibility per block, kept intentionally thin:
 """
 
 import re
+from contextlib import asynccontextmanager
 from dataclasses import (
     dataclass,
 )
@@ -38,6 +39,8 @@ from typing import (
     NamedTuple,
 )
 from zoneinfo import ZoneInfo
+
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -57,6 +60,7 @@ from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.domain import sprints as sprint_repo
 from app.services.domain import standups as standup_repo
+from app.services.database import session_scope
 from app.services.identity import sync_mattermost_user
 from app.services.mattermost import mattermost_client
 
@@ -69,7 +73,24 @@ FALLBACK_TIMEZONE = "UTC"
 # Bare acknowledgements that are polite, not answers. A reply that is only this
 # is left to the chat pipeline instead of being parsed into a standup entry.
 ACK_ONLY_WORDS = frozenset(
-    {"ok", "okay", "k", "fine", "thanks", "thx", "thankyou", "ty", "noted", "gotit", "received", "sure", "surething", "cool", "done", "wellnoted"}
+    {
+        "ok",
+        "okay",
+        "k",
+        "fine",
+        "thanks",
+        "thx",
+        "thankyou",
+        "ty",
+        "noted",
+        "gotit",
+        "received",
+        "sure",
+        "surething",
+        "cool",
+        "done",
+        "wellnoted",
+    }
 )
 
 # Human-facing labels (lowercase) accepted as the first word of a section line.
@@ -291,15 +312,13 @@ def parse_standup_reply(text: str) -> ParsedStandup:
     bucket: list[str] | None = None
     for line in lines:
         stripped = _strip_markdown(line).strip()
-        label = _match_label(stripped, _DID_LABELS) or _match_label(stripped, _WILL_LABELS) or _match_label(
-            stripped, _BLOCK_LABELS
+        label = (
+            _match_label(stripped, _DID_LABELS)
+            or _match_label(stripped, _WILL_LABELS)
+            or _match_label(stripped, _BLOCK_LABELS)
         )
         if label is not None:
-            bucket = (
-                did
-                if label in _DID_LABELS
-                else (will if label in _WILL_LABELS else block)
-            )
+            bucket = did if label in _DID_LABELS else (will if label in _WILL_LABELS else block)
             _, _, rest = stripped.partition(" ")
             if rest.strip():
                 bucket.append(rest.lstrip(".:").strip())
@@ -375,6 +394,17 @@ class DeliveryResult:
     post_id: str | None = None
 
 
+@asynccontextmanager
+async def _prompt_delivery_lock(prompt_id: int, worker_id: str | None):
+    """Serialize delivery and settlement for one claimed prompt."""
+    async with session_scope() as session:
+        await session.exec(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+            params={"lock_key": f"standup-prompt:{prompt_id}:{worker_id or ''}"},
+        )
+        yield session
+
+
 def backoff_seconds(attempt: int, base_seconds: int | None = None, cap_seconds: int = 60 * 60) -> int:
     """Exponential retry delay after a failed dispatch.
 
@@ -400,10 +430,7 @@ async def _is_still_learner(prompt: DailyStandupPrompt) -> bool:
         bool: True when the person remains an active learner in the channel.
     """
     members = await channel_repo.list_channel_roles(prompt.channel_id, active_only=True)
-    return any(
-        member.user.id == prompt.learner_id and member.role.key == RoleKey.LEARNER.value
-        for member in members
-    )
+    return any(member.user.id == prompt.learner_id and member.role.key == RoleKey.LEARNER.value for member in members)
 
 
 async def _send_dm(user: User, message: str) -> tuple[str, str]:
@@ -469,57 +496,68 @@ async def deliver_prompt(prompt: DailyStandupPrompt, *, now: datetime | None = N
         )
         return DeliveryResult(outcome=DeliveryOutcome.HALTED, prompt_id=prompt.id, reason="learner_inactive")
 
-    message = render_prompt(user)
-    try:
-        dm_channel_id, post_id = await _send_dm(user, message)
-    except Exception as e:
-        updated = await standup_repo.mark_prompt_failed(
-            prompt.id,
-            error=f"{type(e).__name__}: {e}",
-            next_attempt_at=reference + timedelta(seconds=backoff_seconds(prompt.dispatch_count)),
-            max_attempts=settings.STANDUP_MAX_ATTEMPTS,
-            claimed_by=prompt.claimed_by,
-        )
-        gave_up = updated is not None and updated.status == StandupPromptStatus.FAILED.value
-        logger.warning(
-            "standup_prompt_dispatch_failed",
-            prompt_id=prompt.id,
-            learner_id=prompt.learner_id,
-            attempt_count=updated.dispatch_count if updated else prompt.dispatch_count + 1,
-            retry_in_seconds=None if gave_up else backoff_seconds(prompt.dispatch_count),
-            gave_up=gave_up,
-            error=str(e),
-        )
-        return DeliveryResult(
-            outcome=DeliveryOutcome.FAILED if gave_up else DeliveryOutcome.RETRY,
-            prompt_id=prompt.id,
-            reason=str(e),
-        )
+    async with _prompt_delivery_lock(prompt.id, prompt.claimed_by) as session:
+        current = await standup_repo.get_prompt(prompt.id, session=session)
+        if (
+            current is None
+            or current.status != StandupPromptStatus.PENDING.value
+            or current.claimed_by != prompt.claimed_by
+        ):
+            return DeliveryResult(outcome=DeliveryOutcome.SKIPPED, prompt_id=prompt.id, reason="claim_lost")
 
-    settled = await standup_repo.mark_prompt_sent(
-        prompt.id,
-        post_id=post_id,
-        dm_channel_id=dm_channel_id,
-        claimed_by=prompt.claimed_by,
-        now=reference,
-    )
-    if settled is None:
-        logger.error(
-            "standup_claim_lost_after_send",
+        message = render_prompt(user)
+        try:
+            dm_channel_id, post_id = await _send_dm(user, message)
+        except Exception as e:
+            updated = await standup_repo.mark_prompt_failed(
+                prompt.id,
+                error=f"{type(e).__name__}: {e}",
+                next_attempt_at=reference + timedelta(seconds=backoff_seconds(prompt.dispatch_count)),
+                max_attempts=settings.STANDUP_MAX_ATTEMPTS,
+                claimed_by=prompt.claimed_by,
+                session=session,
+            )
+            gave_up = updated is not None and updated.status == StandupPromptStatus.FAILED.value
+            logger.warning(
+                "standup_prompt_dispatch_failed",
+                prompt_id=prompt.id,
+                learner_id=prompt.learner_id,
+                attempt_count=updated.dispatch_count if updated else prompt.dispatch_count + 1,
+                retry_in_seconds=None if gave_up else backoff_seconds(prompt.dispatch_count),
+                gave_up=gave_up,
+                error=str(e),
+            )
+            return DeliveryResult(
+                outcome=DeliveryOutcome.FAILED if gave_up else DeliveryOutcome.RETRY,
+                prompt_id=prompt.id,
+                reason=str(e),
+            )
+
+        settled = await standup_repo.mark_prompt_sent(
+            prompt.id,
+            post_id=post_id,
+            dm_channel_id=dm_channel_id,
+            claimed_by=prompt.claimed_by,
+            now=reference,
+            session=session,
+        )
+        if settled is None:
+            logger.error(
+                "standup_claim_lost_after_send",
+                prompt_id=prompt.id,
+                learner_id=prompt.learner_id,
+                post_id=post_id,
+                worker=prompt.claimed_by,
+            )
+        logger.info(
+            "standup_prompt_sent",
             prompt_id=prompt.id,
             learner_id=prompt.learner_id,
+            sprint_id=prompt.sprint_id,
+            dm_channel_id=dm_channel_id,
             post_id=post_id,
-            worker=prompt.claimed_by,
         )
-    logger.info(
-        "standup_prompt_sent",
-        prompt_id=prompt.id,
-        learner_id=prompt.learner_id,
-        sprint_id=prompt.sprint_id,
-        dm_channel_id=dm_channel_id,
-        post_id=post_id,
-    )
-    return DeliveryResult(outcome=DeliveryOutcome.SENT, prompt_id=prompt.id, post_id=post_id)
+        return DeliveryResult(outcome=DeliveryOutcome.SENT, prompt_id=prompt.id, post_id=post_id)
 
 
 # ---------------------------------------------------------------------------
@@ -710,11 +748,16 @@ async def _find_reply_prompt(
     if root_id:
         prompt = await standup_repo.get_prompt_by_post_id(root_id)
         if prompt is not None:
-            if prompt.status in (
-                StandupPromptStatus.DISPATCHED.value,
-                StandupPromptStatus.ANSWERED.value,
-                StandupPromptStatus.MISSED.value,
-            ) and prompt.learner_id == learner_id and prompt.dm_channel_id == dm_channel_id:
+            if (
+                prompt.status
+                in (
+                    StandupPromptStatus.DISPATCHED.value,
+                    StandupPromptStatus.ANSWERED.value,
+                    StandupPromptStatus.MISSED.value,
+                )
+                and prompt.learner_id == learner_id
+                and prompt.dm_channel_id == dm_channel_id
+            ):
                 return prompt
     candidates: list[DailyStandupPrompt] = []
     for prompt in await standup_repo.list_outstanding_prompts(dm_channel_id=dm_channel_id):
@@ -827,8 +870,10 @@ async def ingest_standup_reply(
     if outcome == ReplyResult.NOT_A_STANDUP:
         return IngestResult(result=ReplyResult.NOT_A_STANDUP, prompt=prompt)
 
-    raw_outcome = StandupReplyOutcome.ACCEPTED if outcome == ReplyResult.ACCEPTED else (
-        StandupReplyOutcome.DUPLICATE if outcome == ReplyResult.DUPLICATE else StandupReplyOutcome.LATE
+    raw_outcome = (
+        StandupReplyOutcome.ACCEPTED
+        if outcome == ReplyResult.ACCEPTED
+        else (StandupReplyOutcome.DUPLICATE if outcome == ReplyResult.DUPLICATE else StandupReplyOutcome.LATE)
     )
 
     try:

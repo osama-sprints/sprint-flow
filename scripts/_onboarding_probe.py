@@ -9,10 +9,12 @@ Commands:
     replay <mm_user_id>   Call ``start_journey`` again for a real user — the exact
                           code path the ``new_user`` event runs — and print JSON.
     due-follow-up <mm_user_id>          Make the user's follow-up due now; print JSON.
-    inactive-cohort <mm_user_id> <name> Create cohort <name>, add the user as learner,
-                                        deactivate it, enqueue an orientation; print JSON.
+    inactive-cohort <mm_user_id> <channel_id>
+                                     Give the user a learner role in <channel_id>,
+                                     deactivate the membership, enqueue an orientation;
+                                     print JSON.
     steps <mm_user_id>    Print the user's outbox rows as JSON.
-    cleanup <mm_user_id> <name>         Remove the probe cohort, memberships and steps.
+    cleanup <mm_user_id> <channel_id>   Remove the probe's channel role and steps.
 
 Runs on a throwaway database too, piped the same way (from ai-core/ with the
 POSTGRES_* env set, so ``app`` resolves from the working directory):
@@ -34,12 +36,13 @@ from app.models import (
     utcnow,
 )
 from app.models.enums import (
+    MembershipStatus,
     OnboardingStepKind,
     RoleKey,
 )
 from app.services import onboarding
 from app.services.database import database_service
-from app.services.domain import cohorts as cohort_repo
+from app.services.domain import channels as channel_repo
 from app.services.domain import identity as identity_repo
 from app.services.domain import onboarding as outbox
 from app.services.mattermost_ws import mattermost_ws_listener
@@ -49,6 +52,8 @@ PREFIX = "verify-onb-"
 # Command output is one JSON object on a line starting with this marker, so the
 # host verifier can tell it apart from JSON-formatted log lines on stdout.
 PROBE_JSON_PREFIX = "PROBE_JSON "
+# A synthetic team id for the scenarios — nothing is sent to Mattermost in them.
+TEAM_ID = f"{PREFIX}team-{uuid.uuid4().hex[:6]}"
 # Every user this probe creates. Dispatcher passes are scoped to these ids so the
 # probe can never claim (and fake-deliver) a real person's pending step.
 PROBE_USER_IDS: set[int] = set()
@@ -84,7 +89,7 @@ def step_json(step: Any) -> dict[str, Any]:
     return {
         "id": step.id,
         "kind": step.step_kind,
-        "cohort_id": step.cohort_id,
+        "channel_id": step.channel_id,
         "status": step.status,
         "due_at": step.due_at.isoformat(),
         "sent_at": step.sent_at.isoformat() if step.sent_at else None,
@@ -112,15 +117,31 @@ async def make_user(tag: str, display_name: str = "Probe Person") -> User:
     return user
 
 
-async def assign(user: User, cohort_id: int, role_key: RoleKey) -> None:
-    role = await cohort_repo.get_role_by_key(role_key)
+async def assign(user: User, channel_id: str, team_id: str, role_key: RoleKey) -> None:
+    role = await channel_repo.get_role_by_key(role_key)
     assert role is not None and role.id is not None and user.id is not None
-    await cohort_repo.upsert_membership(user_id=user.id, cohort_id=cohort_id, role_id=role.id, assigned_by_id=None)
+    await channel_repo.upsert_channel_role(
+        user_id=user.id, team_id=team_id, channel_id=channel_id, role_id=role.id, assigned_by_id=None
+    )
+
+
+async def deactivate(user: User, channel_id: str) -> None:
+    assert user.id is not None
+    await channel_repo.set_channel_role_status(user.id, channel_id, MembershipStatus.INACTIVE)
+
+
+async def reactivate(user: User, channel_id: str) -> None:
+    assert user.id is not None
+    await channel_repo.set_channel_role_status(user.id, channel_id, MembershipStatus.ACTIVE)
+
+
+def new_channel_id() -> str:
+    return f"{PREFIX}channel-{uuid.uuid4().hex[:6]}"
 
 
 async def steps_of(user: User) -> dict[str, Any]:
     assert user.id is not None
-    return {f"{s.step_kind}:{s.cohort_id}": s for s in await outbox.list_steps_for_user(user.id)}
+    return {f"{s.step_kind}:{s.channel_id}": s for s in await outbox.list_steps_for_user(user.id)}
 
 
 async def remove_prefixed_rows() -> None:
@@ -129,18 +150,17 @@ async def remove_prefixed_rows() -> None:
         await s.execute(
             text(
                 "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-                " OR cohort_id IN (SELECT id FROM cohorts WHERE name LIKE :p)"
+                " OR channel_id LIKE :p"
             ),
             like,
         )
         await s.execute(
             text(
-                "DELETE FROM cohort_memberships WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-                " OR cohort_id IN (SELECT id FROM cohorts WHERE name LIKE :p)"
+                "DELETE FROM channel_roles WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
+                " OR channel_id LIKE :p"
             ),
             like,
         )
-        await s.execute(text("DELETE FROM cohorts WHERE name LIKE :p"), like)
         await s.execute(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), like)
         await s.commit()
 
@@ -163,8 +183,8 @@ async def scenarios() -> None:
 
     # 1. Arrival twice -> one welcome row, one delivery; a second pass sends nothing.
     user = await make_user("arrival")
-    first = await onboarding.start_journey(user, now=base)
-    second = await onboarding.start_journey(user, now=base)
+    first = await onboarding.start_journey(user, TEAM_ID, now=base)
+    second = await onboarding.start_journey(user, TEAM_ID, now=base)
     check("arrival: first start_journey creates the welcome", first is True)
     check("arrival: replayed start_journey is a no-op", second is False)
     steps = await steps_of(user)
@@ -192,7 +212,7 @@ async def scenarios() -> None:
 
     # 2. Delivery failure -> not sent, attempt 1, retry scheduled, sent when recovered.
     user = await make_user("retry")
-    await onboarding.start_journey(user, now=base)
+    await onboarding.start_journey(user, TEAM_ID, now=base)
     fake.fail = True
     before = len(fake.posts)
     f1 = await worker("b").run_once(now=base)
@@ -220,35 +240,34 @@ async def scenarios() -> None:
     )
     check("retry: attempt_count == 2 after the successful retry", row.attempt_count == 2 and row.last_error is None)
 
-    # 3. Inactive cohort -> no post, step stays pending and unclaimed.
+    # 3. Deactivated membership -> no post, steps stay pending and unclaimed.
     user = await make_user("inactive")
-    cohort = await cohort_repo.create_cohort(f"{PREFIX}inactive-{uuid.uuid4().hex[:6]}")
-    assert cohort.id is not None and user.id is not None
-    await assign(user, cohort.id, RoleKey.LEARNER)
-    await cohort_repo.set_cohort_active(cohort.id, False)
-    await onboarding.start_journey(user, now=base)
+    channel = new_channel_id()
+    await assign(user, channel, TEAM_ID, RoleKey.LEARNER)
+    await deactivate(user, channel)
+    await onboarding.start_journey(user, TEAM_ID, now=base)
     await outbox.enqueue_step(
-        user_id=user.id, cohort_id=cohort.id, step_kind=OnboardingStepKind.ORIENTATION, due_at=base
+        user_id=user.id, team_id=TEAM_ID, channel_id=channel, step_kind=OnboardingStepKind.ORIENTATION, due_at=base
     )
     before = len(fake.posts)
     h = await worker("c").run_once(now=base)
     rows = await steps_of(user)
     check(
-        "inactive cohort: both steps halted, nothing posted",
+        "deactivated role: both steps halted, nothing posted",
         h.halted == 2 and h.sent == 0 and len(fake.posts) == before,
     )
     check(
-        "inactive cohort: steps stay pending with the claim released",
+        "deactivated role: steps stay pending with the claim released",
         all(r.status == "pending" and r.claimed_by is None and r.attempt_count == 0 for r in rows.values()),
     )
-    await cohort_repo.set_cohort_active(cohort.id, True)
+    await reactivate(user, channel)
     r = await worker("c").run_once(now=base)
-    check("inactive cohort: reactivation resumes delivery", r.sent == 2 and len(fake.posts) == before + 2)
+    check("deactivated role: reactivation resumes delivery", r.sent == 2 and len(fake.posts) == before + 2)
 
     # 4. Two dispatchers over 20 due steps -> every step delivered exactly once.
     users = [await make_user(f"conc{i}") for i in range(20)]
     for u in users:
-        await onboarding.start_journey(u, now=base)
+        await onboarding.start_journey(u, TEAM_ID, now=base)
     before = len(fake.posts)
     left, right = worker("left", 3), worker("right", 3)
     taken = {"left": 0, "right": 0}
@@ -273,15 +292,14 @@ async def scenarios() -> None:
 
     # 5. Role assigned after a role-less welcome -> one orientation post.
     user = await make_user("late", display_name="Omar Said")
-    cohort = await cohort_repo.create_cohort(f"{PREFIX}late-{uuid.uuid4().hex[:6]}")
-    assert cohort.id is not None and user.id is not None
-    await onboarding.start_journey(user, now=base)
+    channel = new_channel_id()
+    await onboarding.start_journey(user, TEAM_ID, now=base)
     await worker("d").run_once(now=base)
-    await assign(user, cohort.id, RoleKey.LEARNER)
-    await onboarding.on_role_assigned(user.id, cohort.id, now=base)
+    await assign(user, channel, TEAM_ID, RoleKey.LEARNER)
+    await onboarding.on_role_assigned(user.id, channel, team_id=TEAM_ID, now=base)
     before = len(fake.posts)
     o = await worker("d").run_once(now=base)
-    orientation = (await steps_of(user)).get(f"orientation:{cohort.id}")
+    orientation = (await steps_of(user)).get(f"orientation:{channel}")
     check("late role: exactly one orientation post", o.sent == 1 and len(fake.posts) == before + 1)
     check(
         "late role: orientation marked sent as learner",
@@ -291,25 +309,24 @@ async def scenarios() -> None:
         "late role: learner content in the orientation",
         "your role in" in fake.posts[-1]["message"] and "standup" in fake.posts[-1]["message"].lower(),
     )
-    await onboarding.on_role_assigned(user.id, cohort.id, now=base)
+    await onboarding.on_role_assigned(user.id, channel, team_id=TEAM_ID, now=base)
     o2 = await worker("d").run_once(now=base)
     check("late role: repeating the assignment sends nothing", o2.claimed == 0 and len(fake.posts) == before + 1)
 
     # 6. Role assigned before the welcome -> the welcome carries the orientation.
     user = await make_user("early", display_name="Nour")
-    cohort = await cohort_repo.create_cohort(f"{PREFIX}early-{uuid.uuid4().hex[:6]}")
-    assert cohort.id is not None and user.id is not None
-    await assign(user, cohort.id, RoleKey.TECH_LEAD)
-    await onboarding.start_journey(user, now=base)
-    await onboarding.on_role_assigned(user.id, cohort.id, now=base)
+    channel = new_channel_id()
+    await assign(user, channel, TEAM_ID, RoleKey.TECH_LEAD)
+    await onboarding.start_journey(user, TEAM_ID, now=base)
+    await onboarding.on_role_assigned(user.id, channel, team_id=TEAM_ID, now=base)
     check(
         "early role: no separate orientation while the welcome is pending",
-        f"orientation:{cohort.id}" not in await steps_of(user),
+        f"orientation:{channel}" not in await steps_of(user),
     )
     before = len(fake.posts)
     e = await worker("e").run_once(now=base)
     rows = await steps_of(user)
-    carried = rows.get(f"orientation:{cohort.id}")
+    carried = rows.get(f"orientation:{channel}")
     check(
         "early role: one post, tech-lead content",
         e.sent == 1 and len(fake.posts) == before + 1 and "Escalations arrive" in fake.posts[-1]["message"],
@@ -325,7 +342,7 @@ async def scenarios() -> None:
     # 7. Follow-up already due -> sent. Earlier probe users' follow-ups are due at the
     # same instant, so this counts the posts in THIS person's DM channel only.
     user = await make_user("followup")
-    await onboarding.start_journey(user, now=base)
+    await onboarding.start_journey(user, TEAM_ID, now=base)
     f = await worker("f").run_once(now=base + delay + timedelta(minutes=1))
     rows = await steps_of(user)
     own_posts = [p for p in fake.posts if p["channel_id"] == f"dm-{user.mattermost_user_id}"]
@@ -386,23 +403,30 @@ async def command(args: list[str]) -> None:
         return
     if name == "inactive-cohort":
         user = await get_user_or_exit(args[1])
-        cohort = await cohort_repo.get_cohort_by_name(args[2]) or await cohort_repo.create_cohort(args[2])
-        assert cohort.id is not None and user.id is not None
-        await assign(user, cohort.id, RoleKey.LEARNER)
-        await cohort_repo.set_cohort_active(cohort.id, False)
+        channel_id = args[2]
+        await assign(user, channel_id, settings.MATTERMOST_DEFAULT_TEAM, RoleKey.LEARNER)
+        await deactivate(user, channel_id)
         step, created = await outbox.enqueue_step(
-            user_id=user.id, cohort_id=cohort.id, step_kind=OnboardingStepKind.ORIENTATION, due_at=utcnow()
+            user_id=user.id,
+            team_id=settings.MATTERMOST_DEFAULT_TEAM,
+            channel_id=channel_id,
+            step_kind=OnboardingStepKind.ORIENTATION,
+            due_at=utcnow(),
         )
-        print(PROBE_JSON_PREFIX + json.dumps({"cohort_id": cohort.id, "step_id": step.id, "created": created}))
+        print(PROBE_JSON_PREFIX + json.dumps({"channel_id": channel_id, "step_id": step.id, "created": created}))
         return
     if name == "cleanup":
         user = await get_user_or_exit(args[1])
-        cohort = await cohort_repo.get_cohort_by_name(args[2])
+        channel_id = args[2]
         async with database_service.session() as s:
-            if cohort is not None:
-                await s.execute(text("DELETE FROM onboarding_steps WHERE cohort_id = :c"), {"c": cohort.id})
-                await s.execute(text("DELETE FROM cohort_memberships WHERE cohort_id = :c"), {"c": cohort.id})
-                await s.execute(text("DELETE FROM cohorts WHERE id = :c"), {"c": cohort.id})
+            await s.execute(
+                text("DELETE FROM onboarding_steps WHERE user_id = :u AND channel_id = :c"),
+                {"u": user.id, "c": channel_id},
+            )
+            await s.execute(
+                text("DELETE FROM channel_roles WHERE user_id = :u AND channel_id = :c"),
+                {"u": user.id, "c": channel_id},
+            )
             await s.commit()
         print(PROBE_JSON_PREFIX + json.dumps({"cleaned": True, "user_id": user.id}))
         return

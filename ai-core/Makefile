@@ -89,14 +89,43 @@ format:
 typecheck:
 	uv run pyright
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+# Unit tests: no database, no network. Integration tests: real PostgreSQL
+# (migrations are applied by the suite), every external service faked.
+test:
+	uv run python -m pytest -q tests/
+
+test-integration:
+	SPRINTFLOW_INTEGRATION_DB=1 uv run python -m pytest -q tests/integration/
+
+test-all: test test-integration
+	@echo "All tests passed"
+
 check: lint typecheck
 	@echo "All checks passed"
 
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+# Unit suite runs fully offline (no DB, no Mattermost, no LLM). Integration
+# tests are skipped automatically unless SPRINTFLOW_INTEGRATION_DB=1.
 test:
-	uv run pytest -q tests/
+	uv run pytest tests/
 
+# Run integrations against a throwaway database. Requires APP_ENV=test,
+# POSTGRES_* / DATABASE_URL pointing at a writable Postgres, and the schema
+# applied ahead of time:  uv run alembic upgrade head
 test-integration:
-	SPRINTFLOW_INTEGRATION_DB=1 uv run pytest -q tests/integration/
+	@if [ -z "$$SPRINTFLOW_INTEGRATION_DB" ]; then \
+		echo "Set SPRINTFLOW_INTEGRATION_DB=1 and point POSTGRES_*/DATABASE_URL at a throwaway Postgres."; \
+		echo "Then run: uv run alembic upgrade head && make test-integration"; \
+		exit 1; \
+	fi
+	uv run pytest tests/integration/
+
+
 
 pre-commit:
 	uv run pre-commit run --all-files
@@ -193,6 +222,11 @@ help:
 	@echo "  pre-commit           Run all pre-commit hooks"
 	@echo "  pre-commit-update    Update pre-commit hook versions"
 	@echo ""
+	@echo "Tests:"
+	@echo "  test                 Run unit + integration tests (integration needs SPRINTFLOW_INTEGRATION_DB=1)"
+	@echo "  test-integration     Run the real-PostgreSQL integration tests"
+	@echo "  test-all             Run unit tests, then integration tests"
+	@echo ""
 	@echo "Docker (API + DB):"
 	@echo "  docker-build         Build Docker image"
 	@echo "  docker-up            Start API + DB containers"
@@ -214,6 +248,7 @@ help:
         migrate migration migrate-downgrade migrate-history \
         eval eval-quick eval-no-report \
         lint format typecheck check pre-commit pre-commit-update \
+        test test-integration test-all \
         docker-build docker-up docker-down docker-logs docker-migrate \
         docker-migrate-downgrade docker-migrate-history \
         stack-up stack-down stack-logs \

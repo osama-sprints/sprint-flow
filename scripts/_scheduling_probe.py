@@ -1,16 +1,24 @@
 """In-container scheduling probe, driven by ``scripts/verify_scheduling.py`` over stdin.
 
+Channels are their Mattermost ids (strings); the requester context carries the
+``channel_id``/``team_id`` the transport would bind, and no tool or service takes
+a channel argument (see ``app.services.ceremony_scheduling``).
+
 Modes (``argv[1]``):
 
-- ``checks``            — seed people/cohort, exercise the service and the tools (with a
-                          real LangGraph ``interrupt()`` / ``Command(resume=...)``), print one
-                          PASS/FAIL line per assertion, clean up, exit non-zero on failure.
+- ``checks``            — seed people/channel roles, exercise the service and the tools
+                          (with a real LangGraph ``interrupt()`` / ``Command(resume=...)``),
+                          print one PASS/FAIL line per assertion, clean up, exit non-zero
+                          on failure.
 - ``setup <stamp> <mm_user_id> <username> <email>``
-                        — create cohort ``Verify-Sched-<stamp>`` and give that Mattermost
-                          account a scrum_master membership; print JSON.
-- ``inspect <cohort>``  — print JSON with every ceremony of the cohort (id, scheduled_at UTC,
-                          status, type key).
-- ``cleanup <stamp>``   — delete everything the setup and the conversation created.
+                        — sync the Mattermost account behind a live conversation (a platform
+                          admin on ADMIN_EMAILS); print JSON.
+- ``inspect <channel_id>``
+                        — print JSON with every ceremony of that channel (id, scheduled_at
+                          UTC, status, type key).
+- ``cleanup <stamp> [channel_id]``
+                        — delete everything ``checks``/``setup`` and a live conversation in
+                          ``channel_id`` created under prefix ``verify-sched-<stamp>``.
 
 Run in the stack:  docker compose exec -T ai-core /app/.venv/bin/python - checks < scripts/_scheduling_probe.py
 Run on a dev DB:   cd ai-core && .venv/bin/python ../scripts/_scheduling_probe.py checks
@@ -65,6 +73,7 @@ from app.models.enums import (  # noqa: E402
 )
 from app.services import ceremony_scheduling as scheduling  # noqa: E402
 from app.services.authorisation import (  # noqa: E402
+    MEETING_REFUSAL_MESSAGE,
     REFUSAL_MESSAGE,
     AuthorisationRefused,
     ValidationFailed,
@@ -126,8 +135,7 @@ async def answer(harness: Any, config: dict, paused: dict[str, Any], text: str) 
 
     The conversation layer echoes a structured interrupt's payload back with the
     person's words (``graph.resume_value``), which is what lets a confirming tool
-    verify it is committing the instant that was actually shown. Resuming with a
-    bare string here would test a path the product never takes.
+    verify it is committing the instant that was actually shown.
 
     Args:
         harness: The compiled one-node graph.
@@ -141,50 +149,69 @@ async def answer(harness: Any, config: dict, paused: dict[str, Any], text: str) 
     return await harness.ainvoke(Command(resume=resume_value(text, pending_value(paused))), config)
 
 
-def requester_for(user, roles: dict[int, str] | None = None) -> RequesterContext:
-    """Build the context the conversation layer would bind for this stored user."""
+def requester_for(
+    user,
+    channel_id: str,
+    role: str | None = None,
+    *,
+    team_id: str = "sprints-community",
+) -> RequesterContext:
+    """Build the context the conversation layer would bind for this stored user in a channel."""
+    roles = MappingProxyType({channel_id: role}) if role else MappingProxyType({})
     return RequesterContext(
         mattermost_user_id=user.mattermost_user_id,
         username=user.username,
         email=user.email,
-        channel_id="dm",
-        channel_type="D",
+        channel_id=channel_id,
+        team_id=team_id,
+        channel_type="O",
         user_id=user.id,
         is_superadmin=user.is_superadmin,
         timezone=user.timezone,
-        cohort_roles=MappingProxyType(roles or {}),
+        channel_roles=roles,
     )
 
 
-async def count_ceremonies(cohort_id: int) -> int:
-    """Count a cohort's ceremonies straight from the table (no service in the loop)."""
+async def count_ceremonies(channel_id: str) -> int:
+    """Count a channel's ceremonies straight from the table (no service in the loop)."""
     async with database_service.session() as s:
-        result = await s.exec(text("SELECT count(*) FROM ceremonies WHERE cohort_id = :c"), params={"c": cohort_id})
+        result = await s.exec(text("SELECT count(*) FROM ceremonies WHERE channel_id = :c"), params={"c": channel_id})
         return int(result.scalar_one())
 
 
-async def delete_cohorts(cohort_ids: list[int], user_ids: list[int]) -> None:
-    """Delete probe rows in dependency order."""
+async def delete_probe_rows(stamp: str, channel_ids: list[str] | None = None) -> None:
+    """Delete probe rows in dependency order, by the prefix plus any explicit channel ids."""
+    p = f"{PREFIX}{stamp}%"
     async with database_service.session() as s:
-        if cohort_ids:
-            params = {"ids": list(cohort_ids)}
+        if channel_ids:
+            params = {"channels": [c for c in channel_ids if c]}
             await s.exec(
                 text(
                     "DELETE FROM ceremony_amendments WHERE ceremony_id IN "
-                    "(SELECT id FROM ceremonies WHERE cohort_id = ANY(:ids))"
+                    "(SELECT id FROM ceremonies WHERE channel_id = ANY(:channels))"
                 ),
                 params=params,
             )
-            await s.exec(text("DELETE FROM ceremonies WHERE cohort_id = ANY(:ids)"), params=params)
-            await s.exec(text("DELETE FROM sprints WHERE cohort_id = ANY(:ids)"), params=params)
-            await s.exec(text("DELETE FROM onboarding_steps WHERE cohort_id = ANY(:ids)"), params=params)
-            await s.exec(text("DELETE FROM cohort_memberships WHERE cohort_id = ANY(:ids)"), params=params)
-            await s.exec(text("DELETE FROM cohorts WHERE id = ANY(:ids)"), params=params)
-        if user_ids:
-            params = {"ids": list(user_ids)}
-            await s.exec(text("DELETE FROM cohort_memberships WHERE user_id = ANY(:ids)"), params=params)
-            await s.exec(text("DELETE FROM onboarding_steps WHERE user_id = ANY(:ids)"), params=params)
-            await s.exec(text("DELETE FROM users WHERE id = ANY(:ids)"), params=params)
+            await s.exec(text("DELETE FROM ceremonies WHERE channel_id = ANY(:channels)"), params=params)
+        params = {"p": p}
+        await s.exec(
+            text(
+                "DELETE FROM ceremony_amendments WHERE ceremony_id IN "
+                "(SELECT id FROM ceremonies WHERE channel_id LIKE :p)"
+            ),
+            params=params,
+        )
+        await s.exec(
+            text(
+                "DELETE FROM ceremony_reminders WHERE ceremony_id IN "
+                "(SELECT id FROM ceremonies WHERE channel_id LIKE :p)"
+            ),
+            params=params,
+        )
+        await s.exec(text("DELETE FROM ceremonies WHERE channel_id LIKE :p"), params=params)
+        await s.exec(text("DELETE FROM sprints WHERE channel_id LIKE :p"), params=params)
+        await s.exec(text("DELETE FROM channel_roles WHERE channel_id LIKE :p"), params=params)
+        await s.exec(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), params=params)
         await s.commit()
 
 
@@ -192,7 +219,6 @@ async def checks() -> None:
     """Exercise every path against the live database, then clean up."""
     stamp = str(int(datetime.now(UTC).timestamp()))
     user_ids: list[int] = []
-    cohort_ids: list[int] = []
 
     async def person(handle: str, *, zone: str | None = "Europe/Berlin"):
         user = await identity_repo.upsert_mattermost_user(
@@ -208,34 +234,33 @@ async def checks() -> None:
         return user
 
     try:
-        cohort = await channel_repo.create_channel(f"{PREFIX}{stamp}")
-        other = await channel_repo.create_channel(f"{PREFIX}{stamp}-other")
-        assert cohort.id and other.id
-        cohort_ids += [cohort.id, other.id]
+        team_id = f"team-{stamp}"
+        channel_a = f"{PREFIX}{stamp}-a"
+        channel_b = f"{PREFIX}{stamp}-b"
         lead, learner, outsider = await person("lead"), await person("learner"), await person("outsider")
         scrum_master = await channel_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
         learner_role = await channel_repo.get_role_by_key(RoleKey.LEARNER)
         assert scrum_master and scrum_master.id and learner_role and learner_role.id and lead.id and learner.id
         await channel_repo.upsert_channel_role(
             user_id=lead.id,
-            team_id="",
-            channel_id=str(cohort.id),
+            team_id=team_id,
+            channel_id=channel_a,
             role_id=scrum_master.id,
             assigned_by_id=None,
         )
         await channel_repo.upsert_channel_role(
             user_id=learner.id,
-            team_id="",
-            channel_id=str(cohort.id),
+            team_id=team_id,
+            channel_id=channel_a,
             role_id=learner_role.id,
             assigned_by_id=None,
         )
-        lead_ctx = requester_for(lead, {cohort.id: "scrum_master"})
-        learner_ctx = requester_for(learner, {cohort.id: "learner"})
+        lead_ctx = requester_for(lead, channel_a, "scrum_master", team_id=team_id)
+        learner_ctx = requester_for(learner, channel_a, "learner", team_id=team_id)
         harness = build_harness()
         expected = datetime.combine(datetime.now(BERLIN).date() + timedelta(days=1), time(14, 0), tzinfo=BERLIN)
         expected = expected.astimezone(UTC)
-        base_args = {"cohort": cohort.name, "ceremony_type": "sprint planning", "time_expression": "tomorrow at 2pm"}
+        base_args = {"ceremony_type": "sprint planning", "time_expression": "tomorrow at 2pm"}
 
         # 1. Ambiguous time -> clarification, zero rows.
         current_requester.set(lead_ctx)
@@ -245,29 +270,30 @@ async def checks() -> None:
             result.startswith("[TIME_CLARIFICATION_REQUIRED] Did you mean 2 in the afternoon"),
             result,
         )
-        check("ambiguous time created zero rows", await count_ceremonies(cohort.id) == 0)
+        check("ambiguous time created zero rows", await count_ceremonies(channel_a) == 0)
 
         # 2. Unauthorised (learner) -> refused, zero rows. Outsider too.
         current_requester.set(learner_ctx)
         result = await schedule_ceremony.ainvoke(base_args)
         check(
             "learner -> [AUTHORISATION_REFUSED] fixed sentence",
-            result == f"[AUTHORISATION_REFUSED] {REFUSAL_MESSAGE}",
+            result == f"[AUTHORISATION_REFUSED] {MEETING_REFUSAL_MESSAGE}",
             result,
         )
-        current_requester.set(requester_for(outsider))
+        current_requester.set(requester_for(outsider, channel_a, team_id=team_id))
         result = await schedule_ceremony.ainvoke(base_args)
         check("non-member -> [AUTHORISATION_REFUSED]", result.startswith("[AUTHORISATION_REFUSED]"), result)
-        current_requester.set(lead_ctx)
-        result = await schedule_ceremony.ainvoke({**base_args, "cohort": other.name})
+        current_requester.set(requester_for(lead, channel_b, team_id=team_id))
+        result = await schedule_ceremony.ainvoke(base_args)
         check(
-            "scrum master of another cohort -> refused (cohort-scoped)",
+            "scrum master of another channel -> refused (authority is channel-scoped)",
             result.startswith("[AUTHORISATION_REFUSED]"),
             result,
         )
-        check("unauthorised attempts created zero rows", await count_ceremonies(cohort.id) == 0)
+        check("unauthorised attempts created zero rows", await count_ceremonies(channel_a) == 0)
 
         # 3. Confirm "no" -> zero rows.
+        current_requester.set(lead_ctx)
         config = {"configurable": {"thread_id": f"{stamp}-no"}}
         paused = await harness.ainvoke({"tool": "schedule_ceremony", "args": base_args}, config)
         question = interrupt_question(pending_value(paused)) if pending_value(paused) is not None else ""
@@ -286,14 +312,14 @@ async def checks() -> None:
             "(Europe/Berlin)" in question and expected.strftime("%Y-%m-%d %H:%M UTC") in question,
             question,
         )
-        check("nothing stored while waiting for confirmation", await count_ceremonies(cohort.id) == 0)
+        check("nothing stored while waiting for confirmation", await count_ceremonies(channel_a) == 0)
         declined = await answer(harness, config, paused, "no")
         check(
             "reply 'no' -> [CONFIRMATION_DECLINED]",
             declined.get("result", "").startswith("[CONFIRMATION_DECLINED]"),
             str(declined),
         )
-        check("reply 'no' left zero rows", await count_ceremonies(cohort.id) == 0)
+        check("reply 'no' left zero rows", await count_ceremonies(channel_a) == 0)
 
         # 4. Confirm "yes" -> one row at the intended UTC instant.
         config = {"configurable": {"thread_id": f"{stamp}-yes"}}
@@ -304,8 +330,8 @@ async def checks() -> None:
             confirmed.get("result", "").startswith("[CEREMONY_SCHEDULED]"),
             str(confirmed),
         )
-        rows = await ceremony_repo.list_ceremonies(cohort.id)
-        check("exactly one ceremony exists", len(rows) == 1 and await count_ceremonies(cohort.id) == 1)
+        rows = await ceremony_repo.list_ceremonies(channel_a)
+        check("exactly one ceremony exists", len(rows) == 1 and await count_ceremonies(channel_a) == 1)
         stored = rows[0] if rows else None
         check(
             "stored scheduled_at equals the confirmed UTC instant (tz-aware)",
@@ -330,9 +356,9 @@ async def checks() -> None:
             result.startswith("[CEREMONY_CONFLICT]") and "Sprint Planning" in result,
             result,
         )
-        check("conflict created zero new rows", await count_ceremonies(cohort.id) == 1)
+        check("conflict created zero new rows", await count_ceremonies(channel_a) == 1)
         repeat = await scheduling.prepare_schedule(
-            cohort=cohort.name, ceremony_type="planning", time_expression="tomorrow at 2pm", conflict_policy="warn"
+            ceremony_type="planning", time_expression="tomorrow at 2pm", conflict_policy="warn"
         )
         check("exact repeat refused even under 'warn' (no duplicate state)", isinstance(repeat, SchedulingProblem))
 
@@ -370,7 +396,8 @@ async def checks() -> None:
         planning = await ceremony_repo.get_ceremony_type_by_key(CeremonyTypeKey.SPRINT_PLANNING)
         assert planning and planning.id
         past = await ceremony_repo.create_ceremony(
-            cohort_id=cohort.id,
+            team_id=team_id,
+            channel_id=channel_a,
             ceremony_type_id=planning.id,
             organizer_id=lead.id,
             scheduled_at=datetime.now(UTC) - timedelta(days=1),
@@ -398,15 +425,15 @@ async def checks() -> None:
 
         # 8. Reads: member OK, non-member refused.
         current_requester.set(learner_ctx)
-        result = await list_ceremonies.ainvoke({"cohort": cohort.name})
+        result = await list_ceremonies.ainvoke({})
         check(
             "learner (member) reads the calendar",
             result.startswith("[OK]") and f"#{stored.id} Sprint Planning" in result,
             result,
         )
         check("calendar shows local time and UTC", "(Europe/Berlin)" in result and "UTC" in result, result)
-        current_requester.set(requester_for(outsider))
-        result = await list_ceremonies.ainvoke({"cohort": cohort.name})
+        current_requester.set(requester_for(outsider, channel_a, team_id=team_id))
+        result = await list_ceremonies.ainvoke({})
         check(
             "non-member read -> [AUTHORISATION_REFUSED]",
             result == f"[AUTHORISATION_REFUSED] {REFUSAL_MESSAGE}",
@@ -416,33 +443,36 @@ async def checks() -> None:
         # 9. Service-level exceptions keep refusal and validation distinct.
         try:
             await scheduling.prepare_schedule(
-                cohort=cohort.name, ceremony_type="town hall", time_expression="tomorrow at 2pm", requester=lead_ctx
+                ceremony_type="town hall", time_expression="tomorrow at 2pm", requester=lead_ctx
             )
             check("unknown ceremony type -> ValidationFailed listing the five", False, "no exception")
         except ValidationFailed as exc:
             check("unknown ceremony type -> ValidationFailed listing the five", "Open Q&A" in str(exc), str(exc))
         try:
             await scheduling.prepare_schedule(
-                cohort=cohort.name, ceremony_type="retro", time_expression="tomorrow at 2pm", requester=learner_ctx
+                ceremony_type="retro", time_expression="tomorrow at 2pm", requester=learner_ctx
             )
             check("service refuses learner with AuthorisationRefused", False, "no exception")
         except AuthorisationRefused as exc:
-            check("service refuses learner with AuthorisationRefused", str(exc) == REFUSAL_MESSAGE)
+            check(
+                "service refuses learner with AuthorisationRefused",
+                str(exc) == MEETING_REFUSAL_MESSAGE,
+            )
         proposal = await scheduling.prepare_schedule(
-            cohort=cohort.name, ceremony_type="retro", time_expression="tomorrow at 2pm", requester=lead_ctx
+            ceremony_type="retro", time_expression="tomorrow at 2pm", requester=lead_ctx
         )
         check(
             "prepare_schedule writes nothing (still 2 rows)",
-            isinstance(proposal, ScheduleProposal) and await count_ceremonies(cohort.id) == 2,
+            isinstance(proposal, ScheduleProposal) and await count_ceremonies(channel_a) == 2,
         )
     finally:
         current_requester.set(None)
-        await delete_cohorts(cohort_ids, user_ids)
+        await delete_probe_rows(stamp)
         check("probe rows cleaned up", True)
 
 
 async def setup(stamp: str, mattermost_user_id: str, username: str, email: str) -> dict[str, Any]:
-    """Create the cohort the conversation will target and make the admin its scrum master."""
+    """Sync the Mattermost account a live conversation will schedule as."""
     user = await identity_repo.upsert_mattermost_user(
         mattermost_user_id=mattermost_user_id,
         username=username,
@@ -451,31 +481,13 @@ async def setup(stamp: str, mattermost_user_id: str, username: str, email: str) 
         timezone=None,
         is_superadmin=email.lower() in settings.ADMIN_EMAILS,
     )
-    name = f"Verify-Sched-{stamp}"
-    cohort = await channel_repo.get_channel_by_name(name) or await channel_repo.create_channel(name)
-    role = await channel_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
-    assert user.id and cohort.id and role and role.id
-    await channel_repo.upsert_channel_role(
-        user_id=user.id,
-        team_id="",
-        channel_id=str(cohort.id),
-        role_id=role.id,
-        assigned_by_id=user.id,
-    )
-    return {
-        "cohort_id": cohort.id,
-        "cohort_name": cohort.name,
-        "user_id": user.id,
-        "is_superadmin": user.is_superadmin,
-    }
+    assert user.id is not None
+    return {"user_id": user.id, "is_superadmin": user.is_superadmin}
 
 
-async def inspect(cohort_reference: str) -> dict[str, Any]:
-    """Report every ceremony of a cohort, in UTC."""
-    cohort = await channel_repo.resolve_channel(cohort_reference)
-    if cohort is None or cohort.id is None:
-        return {"cohort": None, "ceremonies": []}
-    rows = await ceremony_repo.list_ceremonies(cohort.id, include_past=True, include_cancelled=True)
+async def inspect(channel_id: str) -> dict[str, Any]:
+    """Report every ceremony of a channel, in UTC."""
+    rows = await ceremony_repo.list_ceremonies(channel_id, include_past=True, include_cancelled=True)
     types = {row.id: row.key for row in await ceremony_repo.list_ceremony_types()}
     ceremonies = []
     for row in rows:
@@ -498,16 +510,13 @@ async def inspect(cohort_reference: str) -> dict[str, Any]:
                 ],
             }
         )
-    return {"cohort": cohort.name, "ceremonies": ceremonies}
+    return {"channel_id": channel_id, "ceremonies": ceremonies}
 
 
-async def cleanup(stamp: str) -> dict[str, Any]:
-    """Delete the cohort created by ``setup`` and everything hanging off it."""
-    cohort = await channel_repo.get_channel_by_name(f"Verify-Sched-{stamp}")
-    if cohort is None or cohort.id is None:
-        return {"deleted": False}
-    await delete_cohorts([cohort.id], [])
-    return {"deleted": True, "cohort_id": cohort.id}
+async def cleanup(stamp: str, *channel_ids: str) -> dict[str, Any]:
+    """Delete everything a verification run created under this stamp."""
+    await delete_probe_rows(stamp, list(channel_ids) or None)
+    return {"deleted": True, "stamp": stamp}
 
 
 async def main(argv: list[str]) -> int:
@@ -529,7 +538,7 @@ async def main(argv: list[str]) -> int:
             print(json.dumps(await inspect(argv[1])))
             return 0
         if mode == "cleanup":
-            print(json.dumps(await cleanup(argv[1])))
+            print(json.dumps(await cleanup(argv[1], *argv[2:])))
             return 0
         print(f"unknown mode {mode!r}", file=sys.stderr)
         return 2

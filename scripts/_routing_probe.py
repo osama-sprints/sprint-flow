@@ -10,10 +10,11 @@ machine from ``ai-core/`` with the app's environment variables set:
 Sub-commands (first argument):
 
     probe                                   PASS/FAIL lines, latency distribution, exit 1 on any FAIL
-    setup-cohort NAME MM_USER_ID USERNAME EMAIL
-                                            create NAME (idempotent) and make that person its scrum master
-    check-sprint COHORT SPRINT              print JSON {"exists": bool, ...}
-    check-ceremonies COHORT                 print JSON list of upcoming ceremonies for the cohort
+    setup-channel CHANNEL_ID MM_USER_ID USERNAME EMAIL
+                                            seed reference data, sync the person and make them
+                                            the channel's scrum master (channels are plain ids)
+    check-sprint CHANNEL_ID SPRINT          print JSON {"exists": bool, ...}
+    check-ceremonies CHANNEL_ID             print JSON list of upcoming ceremonies for the channel
 
 The database sub-commands print one JSON document on stdout and nothing else.
 """
@@ -50,12 +51,12 @@ from app.models.enums import (  # noqa: E402
     RoleKey,
 )
 from app.services.domain import ceremonies as ceremony_repo  # noqa: E402
-from app.services.domain import cohorts as cohort_repo  # noqa: E402
+from app.services.domain import channels as channel_repo  # noqa: E402
 from app.services.domain import identity as identity_repo  # noqa: E402
 from app.services.domain import sprints as sprint_repo  # noqa: E402
 from app.services.domain.reference_data import seed_reference_data  # noqa: E402
 
-MUTATING_TOOL_NAMES = {"create_cohort", "assign_role", "open_sprint", "schedule_ceremony", "amend_ceremony"}
+MUTATING_TOOL_NAMES = {"assign_role", "open_sprint", "schedule_ceremony", "amend_ceremony"}
 EXPECTED_NODES = {
     "supervisor",
     "chat",
@@ -105,8 +106,8 @@ def probe_routing() -> None:
         hard and multi,
     )
     check(
-        "learner saying 'create a cohort' -> learner_support / back_office_cohort_denied_role",
-        (detect_intents("create a cohort", REQUESTERS["learner"])[0].matched_rule == "back_office_cohort_denied_role"),
+        "learner saying 'create a channel' -> learner_support / back_office_channel_denied_role",
+        (detect_intents("create a channel", REQUESTERS["learner"])[0].matched_rule == "back_office_channel_denied_role"),
     )
 
     print("==> routing latency (regex only, no model)")
@@ -179,8 +180,12 @@ def probe_graph_shape() -> None:
     )
 
 
-async def setup_cohort(name: str, mattermost_user_id: str, username: str, email: str) -> dict[str, Any]:
-    """Create the cohort if missing and make the given person its scrum master."""
+async def setup_channel(channel_id: str, mattermost_user_id: str, username: str, email: str) -> dict[str, Any]:
+    """Seed reference data, sync the person and make them the channel's scrum master.
+
+    Channels are bare Mattermost channel ids — there is no local registry to
+    create — so the only write is the channel_roles membership.
+    """
     await seed_reference_data()
     user = await identity_repo.upsert_mattermost_user(
         mattermost_user_id=mattermost_user_id,
@@ -190,21 +195,19 @@ async def setup_cohort(name: str, mattermost_user_id: str, username: str, email:
         timezone=None,
         is_superadmin=email.lower() in settings.ADMIN_EMAILS,
     )
-    cohort = await cohort_repo.get_cohort_by_name(name)
-    created = cohort is None
-    if cohort is None:
-        cohort = await cohort_repo.create_cohort(name, created_by_id=user.id)
-    role = await cohort_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
+    role = await channel_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
     if role is None:
         raise SystemExit("roles are not seeded")
-    assert cohort.id is not None and user.id is not None and role.id is not None
-    change = await cohort_repo.upsert_membership(
-        user_id=user.id, cohort_id=cohort.id, role_id=role.id, assigned_by_id=user.id
+    assert user.id is not None and role.id is not None
+    change = await channel_repo.upsert_channel_role(
+        user_id=user.id,
+        team_id=settings.MATTERMOST_DEFAULT_TEAM,
+        channel_id=channel_id,
+        role_id=role.id,
+        assigned_by_id=user.id,
     )
     return {
-        "cohort_id": cohort.id,
-        "cohort_name": cohort.name,
-        "cohort_created": created,
+        "channel_id": channel_id,
         "user_id": user.id,
         "is_superadmin": user.is_superadmin,
         "membership_created": change.created,
@@ -212,14 +215,11 @@ async def setup_cohort(name: str, mattermost_user_id: str, username: str, email:
     }
 
 
-async def check_sprint(cohort_name: str, sprint_name: str) -> dict[str, Any]:
-    """Report whether a sprint exists for the cohort."""
-    cohort = await cohort_repo.get_cohort_by_name(cohort_name)
-    if cohort is None or cohort.id is None:
-        return {"exists": False, "reason": "cohort not found"}
-    sprint = await sprint_repo.get_sprint_by_name(cohort.id, sprint_name)
+async def check_sprint(channel_id: str, sprint_name: str) -> dict[str, Any]:
+    """Report whether a sprint exists for the channel."""
+    sprint = await sprint_repo.get_sprint_by_name(channel_id, sprint_name)
     if sprint is None:
-        names = [s.name for s in await sprint_repo.list_sprints(cohort.id)]
+        names = [s.name for s in await sprint_repo.list_sprints(channel_id)]
         return {"exists": False, "reason": "sprint not found", "sprints": names}
     return {
         "exists": True,
@@ -231,15 +231,12 @@ async def check_sprint(cohort_name: str, sprint_name: str) -> dict[str, Any]:
     }
 
 
-async def check_ceremonies(cohort_name: str) -> dict[str, Any]:
-    """List the cohort's upcoming (non-cancelled) ceremonies."""
-    cohort = await cohort_repo.get_cohort_by_name(cohort_name)
-    if cohort is None or cohort.id is None:
-        return {"cohort_found": False, "ceremonies": []}
+async def check_ceremonies(channel_id: str) -> dict[str, Any]:
+    """List the channel's upcoming (non-cancelled) ceremonies."""
     types = {t.id: t.key for t in await ceremony_repo.list_ceremony_types()}
-    rows = await ceremony_repo.list_ceremonies(cohort.id)
+    rows = await ceremony_repo.list_ceremonies(channel_id)
     return {
-        "cohort_found": True,
+        "channel_found": True,
         "ceremonies": [
             {
                 "id": row.id,
@@ -265,8 +262,8 @@ def main(argv: List[str]) -> int:
         failed = results.count(False)
         print(f"==> probe: {len(results) - failed}/{len(results)} checks passed")
         return 1 if failed else 0
-    if command == "setup-cohort" and len(argv) == 5:
-        print(json.dumps(asyncio.run(setup_cohort(argv[1], argv[2], argv[3], argv[4]))))
+    if command == "setup-channel" and len(argv) == 5:
+        print(json.dumps(asyncio.run(setup_channel(argv[1], argv[2], argv[3], argv[4]))))
         return 0
     if command == "check-sprint" and len(argv) == 3:
         print(json.dumps(asyncio.run(check_sprint(argv[1], argv[2]))))

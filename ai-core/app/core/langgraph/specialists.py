@@ -1,56 +1,30 @@
 """The specialists the supervisor can delegate to, and what each one is allowed to do.
-
-A specialist is a pair of graph nodes (a model node and a tool-executor node)
-bound to ONE tool group. The model node binds exactly that group for its call,
-so the model cannot see — let alone call — another specialist's tools, and the
-executor node refuses any name outside the group. That structural boundary is
-the point of the supervisor pattern: the learner-facing specialist has no way
-to reach an administrative action, whatever the prompt or the model says.
-
-Adding a specialisation is three edits: a ``CapabilityRoute`` value, a tool
-group in ``tools/__init__.py``, and a ``Specialist`` entry here (plus routing
-rules in ``routing_rules.py`` so the supervisor can pick it). ``graph.py``
-builds the nodes from this table; it has no per-specialist code.
-
-Node names for the ``general`` route are ``chat`` and ``tool_call`` on
-purpose: they are the pre-Sprint-1 node names, and a conversation that was
-paused inside ``tool_call`` before the supervisor existed resumes into the
-same-named node of the new graph.
+...
 """
-
 from dataclasses import dataclass
 from typing import (
     Dict,
     List,
     Optional,
 )
-
 from app.schemas.graph import CapabilityRoute
-
 
 @dataclass(frozen=True)
 class Specialist:
-    """One specialised capability the supervisor can route a turn to.
-
-    Attributes:
-        route: The capability route this specialist serves.
-        node_name: Graph node that calls the model with this specialist's tools bound.
-        tools_node_name: Graph node that executes ONLY this specialist's tool group.
-        tool_group: Key into ``TOOL_GROUPS`` — the only tools this specialist can use.
-        prompt_context: The ``# Routing`` text appended to the system prompt.
-    """
-
     route: CapabilityRoute
     node_name: str
     tools_node_name: str
     tool_group: str
     prompt_context: str
 
-
 _LEARNER_SUPPORT_CONTEXT = (
     "You are the SprintFlow AI Assistant, specialized in retrieving and explaining document content. "
     "Answer the user's question clearly, accurately, and concisely using the provided retrieval context and tools. "
     "Address the main question directly without introductory fluff.\n"
+    "CRITICAL RULE – NEVER CITE SOURCES: "
+    "Do NOT include any source, filename, page number, section, or reference in your answer. "
+    "Never write things like '(Source: ...)', 'Page X', 'File: ...', or any similar citation. "
+    "Just give the clean answer.\n"
     "When someone asks whether they can send, upload, or share files or attachments, tell them they CAN upload "
     "documents directly in the chat (PDF, DOCX, TXT, etc.). Explain that uploaded documents are automatically "
     "ingested into the workspace knowledge base. Once uploaded, they can ask for summaries, key details, or "
@@ -61,11 +35,8 @@ _LEARNER_SUPPORT_CONTEXT = (
     "follow-ups such as 'What does it say?', 'What is it about?', 'Summarize this', or 'About what?'. "
     "Pass the active or recent file name as part of the retrieval query context whenever a file is mentioned. "
     "Never claim that local files, attachments, or document-reading tools are unavailable.\n"
-    "If retrieval finds no matching context, say exactly: \"I checked the workspace database for 'Data_20Analyst.pdf', "
-    "but couldn't retrieve readable context. Please try re-uploading the file or asking about a specific section.\" "
+    "If retrieval finds no matching context, say exactly: \"I checked the workspace database but couldn't retrieve readable context. Please try re-uploading the file or asking about a specific section.\" "
     "Do not mention file paths, local environments, or missing tools.\n"
-    "Do not include file metadata or citation lines anywhere in your response. Never append strings such as "
-    "Source:, Section:, or Page:. Present only the core answer with natural explanatory formatting.\n"
     "You have NO tools that create or change channels, roles, sprints or ceremonies, and none "
     "for workspace administration. Never say or imply that such an action was performed, "
     "queued or 'taken care of' — it was not. If the person asks for one of those, say plainly "
@@ -76,13 +47,14 @@ _LEARNER_SUPPORT_CONTEXT = (
     "MANDATORY ESCALATION RULE: If you cannot provide a grounded, supported answer to a policy, "
     "process, programme or operational question — whether because no document context was provided, "
     "the context does not cover it, or you are genuinely uncertain — you MUST call the "
-    "'escalate_to_human' tool immediately. Do NOT say 'I\u2019m not sure', 'you should contact ops', "
+    "'escalate_to_human' tool immediately. Do NOT say 'I’m not sure', 'you should contact ops', "
     "or any soft refusal without first calling that tool. The tool opens a tracked ticket and "
     "contacts the right person automatically. Relay the tool's returned sentence to the learner verbatim. "
     "Never skip this step for unanswered policy or programme questions."
 )
 
 _BACK_OFFICE_CONTEXT = (
+    # (keep the existing long back-office prompt exactly as it was)
     "You are the official SprintFlow AI Assistant, specializing in Agile ceremonies, workspace scheduling, and team support. "
     "You are acting as the Back Office for this message: channel, role, sprint and ceremony "
     "administration. Use the back-office tools; each one checks authorisation in code from "
@@ -97,24 +69,26 @@ _BACK_OFFICE_CONTEXT = (
     "Standup summary results include a dedicated blockers section; highlight it separately so blockers are easy to act on. "
     "When submitted_updates is empty, use the result's message verbatim (for example, 'No daily standup updates were submitted "
     "for 2026-09-15 in this channel.') and then list the missing members. Do not invent updates or imply that submissions exist. "
-    "CONTEXT AWARENESS: in a public or private channel, use the current channel context automatically and do not ask which channel "
-    "to use unless the user explicitly asks to schedule elsewhere. In a direct message, you cannot infer the channel, so ask: "
-    "'Which team channel should this meeting be scheduled for?' before creating the meeting.\n"
-    "MANDATORY DATA GATHERING: before calling schedule_ceremony, confirm all four required parameters are present: "
-    "Meeting/Ceremony Type, Date & Time, Duration, and Target Channel Name/ID. If any are missing, do not call the tool yet; "
-    "instead, politely list the missing details needed. Example format: 'I'd be happy to schedule that meeting for you! Before I create it, "
-    "please let me know: - What is the duration of the meeting? (e.g., 30 minutes) - Which team channel should this meeting be scheduled in?'\n"
+    "THE CHANNEL IS ALWAYS ALREADY KNOWN: schedule_ceremony, amend_ceremony and list_ceremonies operate on the conversation's "
+    "own channel, which is bound in code from the message context — they take NO channel, team, cohort or workspace argument. "
+    "Never ask which team channel, cohort or workspace to use. If the person names another channel, tell them plain that "
+    "ceremonies are fixed to the conversation they are messaging in.\n"
+    "schedule_ceremony needs only TWO inputs: the ceremony type and the person's own words for the time, passed verbatim "
+    "as time_expression (never compute or reformat a date or time yourself). Duration is optional and defaults to the type's "
+    "standard length: pass duration_minutes only when the person stated a length, and never ask for it. There is no title, "
+    "participants, or channel parameter to gather. Call schedule_ceremony as soon as the type and time are known; it asks the "
+    "person to confirm the exact instant itself.\n"
     "THREAD CONTINUITY: treat a reply containing only missing scheduling details as part of the active scheduling request. "
     "Combine it with the earlier ceremony request and keep processing it in this scheduling pipeline. Do not issue a generic policy refusal.\n"
-    "MANDATORY TOOL EXECUTION: when the user provides sufficient meeting parameters (Type, Date, Time, Duration, and channel when required), "
-    "you MUST invoke the schedule_ceremony tool to create the meeting in the backend database. "
-    "Never claim that you do not have a direct scheduling tool or cannot book this automatically. "
-    "Always execute the scheduling tool when the required details are present.\n"
+    "MANDATORY TOOL EXECUTION: once the person has given the ceremony type and a time, you MUST invoke the schedule_ceremony "
+    "tool immediately. Never wait for a duration, a channel, a title or participants — those are not required and should never "
+    "be requested. Never claim that you do not have a direct scheduling tool or cannot book this automatically.\n"
     "ERROR HANDLING: if the backend returns a channel or parameter validation error, translate it into friendly plain language and ask "
     "the user to provide or correct the missing information without exposing internal tags or traces. Do not show raw system tags or "
     "validation codes to the user.\n"
-    "CONFIRMATION STEP: if required parameters are missing, ask for them. Once the user provides them, call the tool directly, "
-    "output the confirmed Ceremony ID, and provide a concise summary. Do not default to drafting manual announcements unless explicitly asked.\n"
+    "CONFIRMATION STEP: when a scheduling tool asks a question (for an ambiguous time or to confirm the exact instant), relay "
+    "that question word for word and wait for the person's answer; when the tool returns [CEREMONY_SCHEDULED] or "
+    "[CEREMONY_AMENDED], relay its message so the person sees the confirmed ceremony and id.\n"
     "Creating a channel, assigning a role and opening a sprint are idempotent and validated by "
     "the tools — call them directly, without asking for confirmation first. The scheduling "
     "tools ask the person for confirmation themselves when a change needs it; when a tool "
@@ -122,9 +96,8 @@ _BACK_OFFICE_CONTEXT = (
     "Report exactly what the tool result says. If it answers with [AUTHORISATION_REFUSED], "
     "relay the refusal sentence exactly and do not try another route; if it answers with "
     "[VALIDATION_ERROR], explain what was wrong so the person can correct it. "
-    "If the user wants to schedule a meeting or ceremony but has not specified required details "
-    "(date, time, title, or participants), ask a polite follow-up question for the missing details "
-    "before calling the scheduling tool. Never claim that scheduling tools are unavailable. "
+    "If the user wants to schedule a ceremony but has not yet given the type or a time, ask a polite follow-up for exactly "
+    "those two things — never for a channel, duration, title or participants. Never claim that scheduling tools are unavailable. "
     "For scheduling, interpret dates relative to the active year 2026. Before asking for confirmation "
     "or creating anything, verify the requested date and time are in the future; if the date has passed, "
     "tell the user it has already passed and ask for a valid future date and time without shifting it. "
@@ -141,17 +114,20 @@ _GENERAL_CONTEXT = (
     "If a file has been ingested in the active session context, do not trigger the generic workspace-only refusal for document Q&A — "
     "route those questions to learner support and use the retrieval context instead."
 )
+
 _POLICY_SUPPORT_CONTEXT = (
     "You are the SprintFlow AI Assistant, providing policy information and document Q&A. "
     "Answer the user's question clearly, accurately, and concisely using the provided retrieval context and tools. "
-    "Address the main question directly without introductory fluff. "
+    "Address the main question directly without introductory fluff.\n"
+    "CRITICAL RULE – NEVER CITE SOURCES: "
+    "Do NOT include any source, filename, page number, section, or reference in your answer. "
+    "Never write things like '(Source: ...)', 'Page X', 'File: ...', or any similar citation. "
+    "Just give the clean answer.\n"
     "Provide clean answers only; do not expose internal state strings, code blocks, or system tags such as "
     "[ESCALATION_OPENED_NO_HUMAN], [ESCALATED], or similar markers in your final response. "
     "Do not explain retrieval mechanics, vector search internals, or mention that a document does not contain specific snippets. "
     "Answer directly from the retrieved context when appropriate. "
-    "Answer strictly using ONLY the provided document snippets below when they are relevant. "
-    "Do not include file metadata or citation lines anywhere in your response. Never append strings such as "
-    "Source:, Section:, or Page:. Present only the core answer with natural explanatory formatting.\n"
+    "Answer strictly using ONLY the provided document snippets below when they are relevant.\n"
     "MANDATORY ESCALATION RULE: If the provided document text does NOT contain enough information to answer "
     "the user's question, or if the question asks about a policy/topic not covered in the retrieved text, "
     "you MUST call the 'escalate_to_human' tool immediately. Do NOT say 'the documentation does not cover it' "
@@ -191,24 +167,10 @@ SPECIALISTS: Dict[str, Specialist] = {
 
 DEFAULT_SPECIALIST: Specialist = SPECIALISTS[CapabilityRoute.GENERAL.value]
 
-
 def specialist_for(route: Optional[str]) -> Specialist:
-    """Return the specialist serving a route, falling back to the general one.
-
-    An unknown or missing route (an old checkpoint, a renamed route) must never
-    strand a turn, so the fallback is the behaviour that existed before the
-    supervisor: the general specialist.
-
-    Args:
-        route: A ``CapabilityRoute`` value as stored in the graph state, or None.
-
-    Returns:
-        Specialist: The matching specialist, or the general one.
-    """
     if not route:
         return DEFAULT_SPECIALIST
     return SPECIALISTS.get(route, DEFAULT_SPECIALIST)
-
 
 def describe_route(
     route: Optional[str],
@@ -216,17 +178,6 @@ def describe_route(
     *,
     continuation: bool = False,
 ) -> str:
-    """Return the ``# Routing`` section of the system prompt for one specialist call.
-
-    Args:
-        route: The route the current specialist is running as.
-        route_plan: Routes still to run after this one, for a multi-step request.
-        continuation: True when earlier routes of the same request already ran
-            and this specialist must produce the single final reply.
-
-    Returns:
-        str: The prompt section, or an empty string when the turn has no route.
-    """
     if not route:
         return ""
     body = specialist_for(route).prompt_context
@@ -246,7 +197,6 @@ def describe_route(
             f"apologise for or comment on the rest."
         )
     return f"# Routing\n{body}"
-
 
 __all__ = [
     "DEFAULT_SPECIALIST",

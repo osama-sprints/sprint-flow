@@ -5,16 +5,16 @@ Revises: 41cec28ef92a
 Create Date: 2026-09-15 09:54:53.077676
  
 """
+
 from typing import Sequence, Union
  
 import sqlalchemy as sa
 import sqlmodel  # noqa: F401
 from alembic import op
- 
- 
+
 # revision identifiers, used by Alembic.
-revision = '88dc2e879c6b'
-down_revision = ('9199422f052d', 'e79a5dd80fe3', '0004_escalation_raw_response')
+revision = "88dc2e879c6b"
+down_revision = ("9199422f052d", "e79a5dd80fe3", "0004_escalation_raw_response")
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
  

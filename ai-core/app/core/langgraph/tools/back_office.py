@@ -33,6 +33,7 @@ from app.services.announcements import (
     request_announcement,
 )
 
+
 @tool
 @guarded_tool
 async def prepare_announcement_preview_tool(
@@ -57,8 +58,10 @@ async def prepare_announcement_preview_tool(
     can raise these exceptions, and it's the one inside that function.
     """
     requester = current_requester.get()
+    assert requester is not None  # guarded_tool guarantees a bound requester before tools run
     try:
         user = await require_requester_user(requester, action="prepare_announcement")
+        assert user.id is not None
 
         async with session_scope() as session:
             return await request_announcement(
@@ -76,6 +79,7 @@ async def prepare_announcement_preview_tool(
     except ValidationFailed as exc:
         return {"status": "invalid", "message": str(exc)}
 
+
 @tool
 async def confirm_announcement_tool(
     announcement_id: int,
@@ -87,13 +91,16 @@ async def confirm_announcement_tool(
     created the preview may confirm it.
     """
     requester = current_requester.get()
+    assert requester is not None  # guarded_tool guarantees a bound requester before tools run
     try:
         user = await require_requester_user(requester, action="confirm_announcement")
+        assert user.id is not None
     except AuthorisationRefused as exc:
         return {"status": "unauthorized", "message": str(exc)}
 
     async with session_scope() as session:
         return await confirm_and_dispatch_announcement(session, announcement_id, confirming_user_id=user.id)
+
 
 @tool
 async def cancel_announcement_tool(
@@ -102,6 +109,7 @@ async def cancel_announcement_tool(
     """Cancel a prepared announcement."""
     async with session_scope() as session:
         return await cancel_announcement(session, announcement_id)
+
 
 @tool
 @guarded_tool
@@ -192,13 +200,22 @@ async def list_channel_members() -> str:
 
 
 TOOLS: list[BaseTool] = [
-    assign_role, 
+    assign_role,
     open_sprint,
     list_channel_roles_for_requester,
     list_channel_members,
     prepare_announcement_preview_tool,
     confirm_announcement_tool,
-    cancel_announcement_tool
+    cancel_announcement_tool,
 ]
 
-__all__ = ["TOOLS", "assign_role", "list_channel_members", "list_channel_roles_for_requester", "open_sprint", "prepare_announcement_preview_tool", "confirm_announcement_tool", "cancel_announcement_tool"]
+__all__ = [
+    "TOOLS",
+    "assign_role",
+    "list_channel_members",
+    "list_channel_roles_for_requester",
+    "open_sprint",
+    "prepare_announcement_preview_tool",
+    "confirm_announcement_tool",
+    "cancel_announcement_tool",
+]

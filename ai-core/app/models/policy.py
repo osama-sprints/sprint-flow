@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any, Dict
+from sqlalchemy import Text
 from sqlmodel import SQLModel, Field, Column, JSON, DateTime
 from pgvector.sqlalchemy import Vector
 from app.models.domain_base import utcnow
@@ -12,7 +13,7 @@ class PolicyDocumentChunk(SQLModel, table=True):
     document_id: str = Field(index=True, nullable=False)
     chunk_index: int = Field(nullable=False)
     audience: str = Field(index=True, nullable=False)  # 'learner' or 'internal_operator'
-    content: str = Field(nullable=False)
+    content: str = Field(sa_type=Text, nullable=False)
     embedding: Any = Field(sa_column=Column(Vector(1536), nullable=False))
     doc_metadata: Dict[str, Any] = Field(default_factory=dict, sa_column=Column("metadata", JSON, nullable=False))
     content_hash: str = Field(nullable=False)

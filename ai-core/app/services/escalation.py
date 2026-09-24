@@ -56,13 +56,15 @@ ROLE_FOR_TICKET_TYPE: dict[EscalationType, RoleKey] = {
 }
 
 # See `choosing_the_human` in reports/escalation_report.md: this task does not
-# split tech/ops:questions are not classified by content, the refusal signal
+# split tech/ops: questions are not classified by content, the refusal signal
 # carries no category, and splitting is not required by the brief. Every
-# escalation routes to the channel's tech lead. A future caller (e.g. an
-# escalation opened from a distinctly operational flow) can still pass
-# ticket_type=EscalationType.OPS explicitly — the split is supported end to
-# end, just never inferred from a message.
+# escalation opened from the conversation graph routes to the channel's
+# ops support (the policy/operations resolver — see ROLE_SEED), which is why
+# the default is OPS; the graph node passes EscalationType.OPS explicitly.
+# A tech escalation can still be requested with ticket_type=EscalationType.TECH
+# — the split is supported end to end, just never inferred from a message.
 DEFAULT_TICKET_TYPE = EscalationType.OPS
+
 
 @dataclass(frozen=True)
 class EscalationResult:
@@ -184,7 +186,7 @@ async def open_escalation(
     """Route an ungrounded learner question to the channel's designated human, privately.
 
     The human is resolved strictly from the stored channel-role mapping
-    (``channel_memberships`` joined to ``roles``) for the role ``ticket_type``
+    (``channel_roles`` joined to ``roles``) for the role ``ticket_type``
     maps to — never from ``question`` or any other message content. When the
     channel has nobody in that role, the ticket is still created (unassigned)
     and the learner is told honestly rather than the request failing; see
