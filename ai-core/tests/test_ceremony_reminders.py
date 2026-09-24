@@ -17,6 +17,7 @@ Test cases (from the spec):
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import (
     UTC,
     datetime,
@@ -27,6 +28,7 @@ from unittest.mock import (
     patch,
 )
 
+import pytest
 
 from app.models import Ceremony
 from app.models.enums import CeremonyStatus
@@ -41,6 +43,17 @@ from app.services.ceremony_reminders import (
 # ---------------------------------------------------------------------------
 
 NOW = datetime(2026, 9, 8, 10, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def no_database_lock(monkeypatch):
+    """Keep pure unit tests offline while integration tests exercise PostgreSQL locking."""
+
+    @asynccontextmanager
+    async def fake_lock(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr("app.services.ceremony_reminders._reminder_lock", fake_lock)
 
 
 def make_ceremony(
@@ -61,6 +74,7 @@ def make_ceremony(
         status=status,
         agenda=agenda,
     )
+
 
 # ----------------------------------------------------------------------
 # due_ceremonies
@@ -149,6 +163,7 @@ def test_cancelled_ceremony_skipped():
     assert cancelled not in result
     assert result == []
 
+
 # ----------------------------------------------------------------------
 # test_already_sent_skipped
 # ---------------------------------------------------------------------------
@@ -171,6 +186,7 @@ def test_already_sent_skipped():
     assert result is False
     mock_mm.create_direct_channel.assert_not_called()
     mock_mm.create_post.assert_not_called()
+
 
 # ----------------------------------------------------------------------
 # test_idempotent_on_restart
@@ -214,6 +230,7 @@ def test_idempotent_on_restart():
     assert result2 is False  # Second call skipped — row already in sent_set.
     assert post_count == 1
 
+
 # ----------------------------------------------------------------------
 # test_timezone_formatting
 # ---------------------------------------------------------------------------
@@ -238,6 +255,7 @@ def test_timezone_formatting_utc():
 
     assert "14:30" in formatted
     assert tz_name == "UTC"
+
 
 # ----------------------------------------------------------------------
 # test_fallback_to_utc

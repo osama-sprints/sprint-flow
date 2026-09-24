@@ -214,6 +214,30 @@ def test_poller_sends_next_day_window_and_records_idempotency_rows(fake: FakeMat
     run(scenario())
 
 
+def test_concurrent_workers_send_one_reminder(fake: FakeMattermost):
+    """The database lock prevents duplicate DMs when workers race."""
+
+    async def scenario() -> None:
+        channel = f"{_PREFIX}race-{int(time_module.time() * 1000)}"
+        organizer = await make_person("organizer")
+        member = await make_person("member")
+        assert organizer.id is not None and member.id is not None
+        await add_member(member, channel, f"{_PREFIX}team", RoleKey.LEARNER)
+        ceremony = await seed_ceremony(channel, organizer.id, hours_before=24)
+        assert ceremony.id is not None
+
+        results = await asyncio.gather(
+            ceremony_reminders.send_reminder(ceremony, member.mattermost_user_id, "24h", "Sprint Planning"),
+            ceremony_reminders.send_reminder(ceremony, member.mattermost_user_id, "24h", "Sprint Planning"),
+        )
+
+        assert sorted(results) == [False, True]
+        assert len(fake.posts) == 1
+        assert await _reminder_count(ceremony.id) == 1
+
+    run(scenario())
+
+
 def test_poller_sends_last_hour_window_with_catchup(fake: FakeMattermost):
     """A ceremony ~1h out gets both the last-hour window and the 24h catch-up DM."""
 

@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,15 @@ from app.services.ceremony_scheduling import ScheduleProposal
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def no_database_reminder_lock(monkeypatch):
+    @asynccontextmanager
+    async def fake_lock(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr("app.services.ceremony_reminders._reminder_lock", fake_lock)
 
 
 @pytest.fixture
@@ -48,7 +58,9 @@ def mock_google_api(monkeypatch):
 async def test_create_meet_event_success(mock_google_settings, mock_google_api):
     mock_google_api.return_value = {
         "id": "evt_abc123",
-        "conferenceData": {"entryPoints": [{"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij"}]}
+        "conferenceData": {
+            "entryPoints": [{"entryPointType": "video", "uri": "https://meet.google.com/abc-defg-hij"}]
+        },
     }
 
     start = datetime(2026, 9, 8, 14, 0, tzinfo=timezone.utc)
@@ -62,6 +74,7 @@ async def test_create_meet_event_success(mock_google_settings, mock_google_api):
 
     assert link == "https://meet.google.com/abc-defg-hij"
     assert event_id == "evt_abc123"
+
 
 @pytest.mark.anyio
 async def test_create_meet_event_api_failure_returns_none(mock_google_settings, mock_google_api):
