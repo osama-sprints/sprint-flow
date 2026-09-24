@@ -33,7 +33,6 @@ AMENDABLE_FIELDS: frozenset[str] = frozenset(
         "status",
         "time_expression",
         "time_zone",
-        "channel_id",
         "meet_link",
         "external_event_id",
     }

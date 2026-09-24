@@ -126,6 +126,7 @@ def test_downtime_catchup_included():
     assert catchup_ceremony in result
 
 
+<<<<<<< HEAD
 def test_bands_are_disjoint():
     """Multi-interval bands are disjoint: a ceremony 25h out is caught only by the 24h band, never the 1h band."""
     far = make_ceremony(ceremony_id=4, scheduled_at=NOW + timedelta(hours=24))
@@ -143,6 +144,9 @@ def test_bands_are_disjoint():
 
 
 # ----------------------------------------------------------------------
+=======
+# ---------------------------------------------------------------------------
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
 # test_cancelled_ceremony_skipped
 # ---------------------------------------------------------------------------
 

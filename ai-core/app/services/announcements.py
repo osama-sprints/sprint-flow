@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from sqlmodel import func, select, update
+from sqlmodel import col, func, select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.requester import RequesterContext
@@ -38,10 +38,10 @@ async def is_rate_limited(
 
     window_start = now - timedelta(minutes=RATE_LIMIT_WINDOW_MINUTES)
 
-    stmt = select(func.count(Announcement.id)).where(
-        Announcement.resolved_channel_id == channel_id,
-        Announcement.outcome == AnnouncementOutcome.SENT,
-        Announcement.status_changed_at >= window_start,
+    stmt = select(func.count(col(Announcement.id))).where(
+        col(Announcement.resolved_channel_id) == channel_id,
+        col(Announcement.outcome) == AnnouncementOutcome.SENT,
+        col(Announcement.status_changed_at) >= window_start,
     )
     result = await session.exec(stmt)
     count = result.one()
@@ -57,8 +57,8 @@ async def cancel_announcement(
     stmt = (
         update(Announcement)
         .where(
-            Announcement.id == announcement_id,
-            Announcement.confirmation_status == "pending",
+            col(Announcement.id) == announcement_id,
+            col(Announcement.confirmation_status) == "pending",
         )
         .values(
             confirmation_status="cancelled",
@@ -97,9 +97,9 @@ async def confirm_and_dispatch_announcement(
     stmt = (
         update(Announcement)
         .where(
-            Announcement.id == announcement_id,
-            Announcement.confirmation_status == "pending",
-            Announcement.requester_id == confirming_user_id,
+            col(Announcement.id) == announcement_id,
+            col(Announcement.confirmation_status) == "pending",
+            col(Announcement.requester_id) == confirming_user_id,
         )
         .values(confirmation_status="confirmed", status_changed_at=now)
     )
@@ -134,7 +134,7 @@ async def confirm_and_dispatch_announcement(
     if await is_rate_limited(session, channel_id, now=now):
         rate_limit_stmt = (
             update(Announcement)
-            .where(Announcement.id == announcement_id)
+            .where(col(Announcement.id) == announcement_id)
             .values(outcome=AnnouncementOutcome.RATE_LIMITED)
         )
         await session.exec(rate_limit_stmt)
@@ -155,7 +155,7 @@ async def confirm_and_dispatch_announcement(
 
         final_stmt = (
             update(Announcement)
-            .where(Announcement.id == announcement_id)
+            .where(col(Announcement.id) == announcement_id)
             .values(outcome=AnnouncementOutcome.SENT, mattermost_post_id=post_id)
         )
         await session.exec(final_stmt)
@@ -172,7 +172,7 @@ async def confirm_and_dispatch_announcement(
     except Exception as exc:
         fail_stmt = (
             update(Announcement)
-            .where(Announcement.id == announcement_id)
+            .where(col(Announcement.id) == announcement_id)
             .values(outcome=AnnouncementOutcome.FAILED)
         )
         await session.exec(fail_stmt)
@@ -325,8 +325,7 @@ async def resolve_recipients_by_role(
     matching = [m for m in members if str(m.role.key).lower() == role.lower()]
 
     return [
-        {"user_id": m.user.id, "username": m.user.username, "role": role, "channel_id": channel_id}
-        for m in matching
+        {"user_id": m.user.id, "username": m.user.username, "role": role, "channel_id": channel_id} for m in matching
     ]
 
 
@@ -338,9 +337,10 @@ async def resolve_recipients_by_usernames(
     resolved_recipients = []
 
     for username in usernames:
-        user = await identity_repo.get_user_by_username(session, username)
+        user = await identity_repo.get_user_by_username(username, session=session)
         if not user:
             raise ValidationFailed(f"User '{username}' does not exist.")
+        assert user.id is not None  # narrowed for pyright: the existence check above guarantees the PK
 
         role = await channel_repo.get_role_for_user_in_channel(user.id, channel_id, session=session)
         if role is None:

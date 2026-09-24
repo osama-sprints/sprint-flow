@@ -1,4 +1,6 @@
-"""Create test data for verify_announcement_bot_flow.py: two users, one
+"""Create test data for verify_announcement_bot_flow.py.
+
+two users, one
 tech_lead and one learner, both active members of Cohort 1's channel.
 
 Uses only real, already-confirmed functions — upsert_mattermost_user (safe to

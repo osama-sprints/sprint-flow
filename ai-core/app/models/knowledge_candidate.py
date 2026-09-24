@@ -1,15 +1,15 @@
 from datetime import datetime
- 
+
 from sqlalchemy import Text
 from sqlmodel import Field
- 
+
 from app.models.domain_base import TZ_DATETIME, DomainBase
 from app.models.enums import KnowledgeCandidateStatus
- 
- 
+
+
 class KnowledgeCandidate(DomainBase, table=True):
     """One extracted, reviewable statement derived from a resolved escalation.
- 
+
     Attributes:
         id: Primary key.
         escalation_id: The source EscalationTicket.id this was extracted
@@ -30,9 +30,9 @@ class KnowledgeCandidate(DomainBase, table=True):
             rejecting, for later audit -- not shown to anyone but other
             reviewers/auditors.
     """
- 
+
     __tablename__ = "knowledge_candidates"  # pyright: ignore[reportAssignmentType]
- 
+
     id: int | None = Field(default=None, primary_key=True)
     escalation_id: int = Field(foreign_key="escalation_tickets.id", unique=True, index=True)
     statement: str = Field(sa_type=Text)

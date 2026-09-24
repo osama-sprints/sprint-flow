@@ -45,9 +45,7 @@ class StandupReply(DomainBase, table=True):
     """
 
     __tablename__ = "standup_replies"  # pyright: ignore[reportAssignmentType]
-    __table_args__ = (
-        UniqueConstraint("post_id", name="uq_standup_replies_post_id"),
-    )
+    __table_args__ = (UniqueConstraint("post_id", name="uq_standup_replies_post_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
     prompt_id: int = Field(foreign_key="daily_standup_prompts.id", index=True, nullable=False)

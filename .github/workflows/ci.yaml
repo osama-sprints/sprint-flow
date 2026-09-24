@@ -3,6 +3,7 @@ name: CI
 on:
   pull_request:
   push:
+<<<<<<< HEAD
     branches: [main]
 
 jobs:
@@ -24,3 +25,64 @@ jobs:
         run: docker compose exec -T -w /app ai-core /app/.venv/bin/ruff format --check app/ alembic/ scripts/ tests/
       - name: Type check
         run: docker compose exec -T -w /app ai-core /app/.venv/bin/pyright
+=======
+    branches: [main, master]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    services:
+      # Real PostgreSQL for the integration tests (SPRINTFLOW_INTEGRATION_DB=1).
+      # pgvector is required: the policy search tables use the vector type.
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: sprintflow
+          POSTGRES_PASSWORD: sprintflow
+          POSTGRES_DB: sprintflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sprintflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Offline test environment: no real OpenAI, no real Mattermost, no internet.
+      APP_ENV: test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: sprintflow_test
+      POSTGRES_USER: sprintflow
+      POSTGRES_PASSWORD: sprintflow
+      SPRINTFLOW_INTEGRATION_DB: "1"
+      OPENAI_API_KEY: ""
+      MATTERMOST_URL: http://localhost:8065
+      MATTERMOST_BOT_TOKEN: test-token
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+        working-directory: ai-core
+      - name: Ruff lint
+        run: uv run ruff check .
+        working-directory: ai-core
+      - name: Ruff format check
+        run: uv run ruff format --check .
+        working-directory: ai-core
+      - name: Pyright typecheck
+        run: uv run pyright
+        working-directory: ai-core
+      # Integration tests live beside the unit tests; the suite applies the
+      # Alembic migrations itself (see tests/integration helpers) and every
+      # external service is faked, so no other infrastructure is needed.
+      - name: Run pytest (unit + real-PostgreSQL integration)
+        run: uv run python -m pytest -q tests/
+        working-directory: ai-core
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)

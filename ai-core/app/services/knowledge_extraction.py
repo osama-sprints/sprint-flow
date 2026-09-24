@@ -18,21 +18,20 @@ is entirely the extraction prompt's job -- see _SYSTEM_PROMPT.
 from typing import Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from sqlalchemy import select
+from sqlmodel import col, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlmodel import Session
 
 from app.core.logging import logger
 from app.models import EscalationTicket
 from app.models.enums import EscalationStatus, KnowledgeCandidateStatus
 from app.models.knowledge_candidate import KnowledgeCandidate
-from app.services.database import database_service
 from app.services.llm.service import llm_service
 from app.models.enums import RoleKey
 from app.services.domain import channels as channel_repo
 from app.services.mattermost import mattermost_client
 from app.services.domain.channels import find_any_ops_support_user
 from app.services.database import session_scope
+
 _SYSTEM_PROMPT = """You extract one reviewable candidate piece of institutional knowledge from a resolved support escalation.
 You are given the learner's original question and the human reviewer's verbatim decision.
 Your job is to formulate a concise knowledge statement capturing the decision, and classify the target audience.
@@ -44,6 +43,7 @@ Respond in exactly this form, two lines, nothing else:
 AUDIENCE: learner|internal_operator
 STATEMENT: <the clear knowledge statement summarizing the decision>
 """
+
 
 async def _notify_reviewer(candidate_id: int, ticket: EscalationTicket, statement: str, audience: str) -> None:
     """DM the ops-support reviewer about a new knowledge candidate.
@@ -57,9 +57,7 @@ async def _notify_reviewer(candidate_id: int, ticket: EscalationTicket, statemen
     """
     # 1. Try the ticket's own channel first.
     members = await channel_repo.list_channel_roles(ticket.channel_id, active_only=True)
-    holder_user = next(
-        (m.user for m in members if m.role.key == RoleKey.OPS_SUPPORT.value), None
-    )
+    holder_user = next((m.user for m in members if m.role.key == RoleKey.OPS_SUPPORT.value), None)
 
     # 2. Fallback: any ops-support member system-wide.
     if holder_user is None:
@@ -102,6 +100,7 @@ async def _notify_reviewer(candidate_id: int, ticket: EscalationTicket, statemen
         reviewer_user_id=holder_user.mattermost_user_id,
     )
 
+
 async def _extract_candidate(question: str, raw_human_response: str) -> Optional[tuple[str, str]]:
     payload = f"Question:\n{question}\n\nReviewer's decision (verbatim):\n{raw_human_response}"
     response = await llm_service.call([SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=payload)])
@@ -128,8 +127,9 @@ async def extract_candidate_for_ticket(escalation_id: int) -> bool:
             return False
         if not ticket.answer or not ticket.raw_human_response:
             return False
+        question, human_response = ticket.question, ticket.raw_human_response
 
-    extracted = await _extract_candidate(ticket.question, ticket.raw_human_response)
+    extracted = await _extract_candidate(question, human_response)
     if extracted is None:
         logger.info("knowledge_extraction_skipped_no_generalizable_content", escalation_id=escalation_id)
         return False
@@ -145,7 +145,7 @@ async def extract_candidate_for_ticket(escalation_id: int) -> bool:
                 status=KnowledgeCandidateStatus.PENDING.value,
             )
             .on_conflict_do_nothing(index_elements=["escalation_id"])
-            .returning(KnowledgeCandidate.id)
+            .returning(col(KnowledgeCandidate.id))
         )
         result = await session.exec(stmt)
         new_id = result.scalar_one_or_none()
@@ -162,17 +162,20 @@ async def discover_candidates() -> int:
     async with session_scope() as session:
         already_seen = select(KnowledgeCandidate.escalation_id)
         stmt = select(EscalationTicket).where(
-            EscalationTicket.status == EscalationStatus.RESOLVED.value,
-            EscalationTicket.answer.is_not(None),
-            EscalationTicket.raw_human_response.is_not(None),
-            EscalationTicket.id.not_in(already_seen),
+            col(EscalationTicket.status) == EscalationStatus.RESOLVED.value,
+            col(EscalationTicket.answer).is_not(None),
+            col(EscalationTicket.raw_human_response).is_not(None),
+            col(EscalationTicket.id).not_in(already_seen),
         )
         result = await session.exec(stmt)
         pending_tickets = result.all()
 
     created = 0
     for ticket in pending_tickets:
-        extracted = await _extract_candidate(ticket.question, ticket.raw_human_response)
+        question, human_response = ticket.question, ticket.raw_human_response
+        if not question or not human_response:
+            continue  # the SQL filter above guarantees both, but never assume under a loop
+        extracted = await _extract_candidate(question, human_response)
         if extracted is None:
             logger.info("knowledge_extraction_skipped_no_generalizable_content", escalation_id=ticket.id)
             continue
@@ -188,7 +191,7 @@ async def discover_candidates() -> int:
                     status=KnowledgeCandidateStatus.PENDING.value,
                 )
                 .on_conflict_do_nothing(index_elements=["escalation_id"])
-                .returning(KnowledgeCandidate.id)
+                .returning(col(KnowledgeCandidate.id))
             )
             res = await session.exec(stmt)
             new_id = res.scalar_one_or_none()

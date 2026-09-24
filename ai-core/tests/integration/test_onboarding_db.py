@@ -80,6 +80,8 @@ def run(coro: Awaitable[T]) -> T:
             await database_service.engine.dispose()
 
     return asyncio.run(wrapped())
+
+
 async def cleanup() -> None:
     async with database_service.session() as s:
         async with s.begin():
@@ -103,6 +105,7 @@ async def cleanup() -> None:
                 text("DELETE FROM users WHERE mattermost_user_id LIKE :p"),
                 {"p": f"{PREFIX}%"},
             )
+
 
 @pytest.fixture()
 def fake(monkeypatch: pytest.MonkeyPatch):
@@ -129,7 +132,8 @@ async def make_user(tag: str, display_name: str = "Test Person") -> User:
     )
 
 
-from types import SimpleNamespace
+from types import SimpleNamespace  # noqa: E402
+
 
 async def make_channel(tag: str, team_id: str = "test-team") -> Any:
     name = f"{PREFIX}{tag}-{uuid.uuid4().hex[:6]}"
@@ -362,6 +366,7 @@ def test_follow_up_due_in_the_past_is_sent(fake: FakeMattermost):
 
     run(scenario())
 
+
 def test_only_inactive_memberships_halt_workspace_steps(fake: FakeMattermost):
     async def scenario() -> None:
         user = await make_user("halt-all")
@@ -371,11 +376,7 @@ def test_only_inactive_memberships_halt_workspace_steps(fake: FakeMattermost):
         async with database_service.session() as s:
             async with s.begin():
                 await s.execute(
-                    text(
-                        "UPDATE channel_roles "
-                        "SET status = :status "
-                        "WHERE channel_id = :cid AND user_id = :uid"
-                    ),
+                    text("UPDATE channel_roles SET status = :status WHERE channel_id = :cid AND user_id = :uid"),
                     {"status": MembershipStatus.INACTIVE.value, "cid": inactive.id, "uid": user.id},
                 )
 
@@ -388,7 +389,10 @@ def test_only_inactive_memberships_halt_workspace_steps(fake: FakeMattermost):
         assert summary.sent == 1
         assert "policy" in fake.posts[0]["message"].lower()
         assert (await steps_of(user))["welcome:None"].role_key_at_delivery == RoleKey.OPS_SUPPORT.value
+
     run(scenario())
+
+
 def test_start_journey_is_noop_when_disabled(fake: FakeMattermost, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "ONBOARDING_ENABLED", False)
 

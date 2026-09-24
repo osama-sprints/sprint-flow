@@ -260,6 +260,8 @@ async def resolve_onboarding_context(user_id: int, channel_id: str | None = None
 
     role = await _role_context_for(chosen, user_id) if chosen is not None else None
     return OnboardingContext(role=role, memberships=all_memberships)
+
+
 # ---------------------------------------------------------------------------
 # Halting
 # ---------------------------------------------------------------------------
@@ -279,6 +281,7 @@ def first_name_of(user: User) -> str:
     if display:
         return display.split()[0]
     return user.username or "there"
+
 
 def render_message(step_kind: str | OnboardingStepKind, context: RoleContext | None, user: User) -> str:
     """Render the Markdown for one step.
@@ -428,7 +431,6 @@ async def on_role_assigned(
     if welcome is not None and welcome.status == OnboardingStepStatus.PENDING.value and not _claim_in_flight(welcome):
         logger.info("onboarding_orientation_deferred_to_welcome", user_id=user_id, channel_id=channel_id)
         return
-
 
     existing = await outbox.get_step_for(user_id, channel_id, OnboardingStepKind.ORIENTATION)
     if existing is not None:

@@ -208,7 +208,6 @@ def test_parse_leading_blank_lines_do_not_hide_numbered():
     assert parsed == ParsedStandup("x", "y", "z")
 
 
-
 def test_parse_numbered_zero_leading_item_is_tolerated():
     parsed = parse_standup_reply("0. misc\n1. main")
     assert parsed.what_i_did == "misc"
@@ -258,7 +257,21 @@ def test_parse_numbered_with_parenthetical_is_flat():
 
 @pytest.mark.parametrize(
     "text",
-    ["ok", "OK", "thanks!", "thank you", "got it", "done", "sure thing", "K", "k.", "thx :)", "well noted", "fine.", "okay!"],
+    [
+        "ok",
+        "OK",
+        "thanks!",
+        "thank you",
+        "got it",
+        "done",
+        "sure thing",
+        "K",
+        "k.",
+        "thx :)",
+        "well noted",
+        "fine.",
+        "okay!",
+    ],
 )
 def test_is_ack_only(text: str):
     assert is_ack_only(text)
@@ -266,7 +279,14 @@ def test_is_ack_only(text: str):
 
 @pytest.mark.parametrize(
     "text",
-    ["1. did onboarding\n2. next: review\n3. none", "Some progress", "blocked on the api", "10/10", "done but tired", "👍"],
+    [
+        "1. did onboarding\n2. next: review\n3. none",
+        "Some progress",
+        "blocked on the api",
+        "10/10",
+        "done but tired",
+        "👍",
+    ],
 )
 def test_is_not_ack_only(text: str):
     assert not is_ack_only(text)
