@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]   # my guess, use your team's branch
+
+defaults:
+  run:
+    working-directory: ai-core
+
+env:
+  APP_ENV: test
+  JWT_SECRET_KEY: ci-only-not-a-real-secret-0123456789abcdef
+  OPENAI_API_KEY: ci-dummy-key
+
+jobs:
+  tests:
+    name: pytest (Sprint 4 offline suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --all-groups
+      - run: >-
+          uv run pytest -q -rs
+          tests/test_schema.py
+          tests/test_escalation_dispatch.py
+          tests/integration/test_schema_db.py
+          tests/integration/test_calendar_integration_db.py
+
+  full-suite:
+    name: pytest (full repo, informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --all-groups
+      - run: uv run pytest -q tests/
+
+  lint:
+    name: ruff (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --all-groups
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  typecheck:
+    name: pyright (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - run: uv sync --all-extras --all-groups
+      - run: uv run pyright
