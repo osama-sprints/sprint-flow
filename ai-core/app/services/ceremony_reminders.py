@@ -28,8 +28,6 @@ from datetime import (
     timedelta,
     timezone,
 )
-from threading import local
-from threading import local
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.exc import IntegrityError
