@@ -17,7 +17,13 @@ from app.core.langgraph.tools.results import (
     guarded_tool,
     tool_result,
 )
+from app.core.requester import current_requester
 from app.services import back_office
+from app.services.authorisation import (
+    AuthorisationRefused,
+    ValidationFailed,
+    require_requester_user,
+)
 from app.services.database import session_scope
 from typing import Any, Dict, Optional
 
@@ -28,45 +34,70 @@ from app.services.announcements import (
     create_announcement_preview,
     confirm_and_dispatch_announcement,
     cancel_announcement,
+    request_announcement,
 )
 
 @tool
+@guarded_tool
 async def prepare_announcement_preview_tool(
     cohort_id: int,
     raw_text: str,
     delivery_mode: str,
     target_type: str,
     target_value: Optional[str] = None,
-    created_by_user_id: int = 1,
 ) -> Dict[str, Any]:
-    """Prepare a preview for an announcement before confirmation."""
-    async with session_scope() as session:
-        resolved_channel = await resolve_announcement_channel(session, None, cohort_id)
-        if target_type == "role" and target_value:
-            resolved_audience = await resolve_recipients_by_role(session, cohort_id, target_value)
-        elif target_type == "usernames" and target_value:
-            usernames = [u.strip() for u in target_value.split(",")]
-            resolved_audience = await resolve_recipients_by_usernames(session, cohort_id, usernames)
-        else:
-            resolved_audience = []
+    """Prepare a preview for an announcement before confirmation.
 
-        return await create_announcement_preview(
-            session=session,
-            cohort_id=cohort_id,
-            raw_text=raw_text,
-            delivery_mode=delivery_mode,
-            resolved_channel=resolved_channel,
-            resolved_audience=resolved_audience,
-            created_by_user_id=created_by_user_id,
-        )
+    Fixed: requester identity is never a tool argument (it was previously
+    hardcoded to user id 1 for every caller, and the channel resolution call
+    passed requester=None). Both now come from current_requester, the same
+    ContextVar every other privileged action in this codebase trusts.
+
+    Fixed: this now calls request_announcement() as the single entry point,
+    rather than resolving the channel here AND separately inside a helper —
+    that earlier shape meant this tool's own try/except could swallow an
+    AuthorisationRefused before request_announcement ever got a chance to
+    write its refusal audit row. There must be exactly one call site that
+    can raise these exceptions, and it's the one inside that function.
+    """
+    requester = current_requester.get()
+    try:
+        user = await require_requester_user(requester, action="prepare_announcement")
+
+        async with session_scope() as session:
+            return await request_announcement(
+                session=session,
+                requester=requester,
+                cohort_id=cohort_id,
+                raw_text=raw_text,
+                delivery_mode=delivery_mode,
+                created_by_user_id=user.id,
+                target_type=target_type,
+                target_value=target_value,
+            )
+    except AuthorisationRefused as exc:
+        return {"status": "unauthorized", "message": str(exc)}
+    except ValidationFailed as exc:
+        return {"status": "invalid", "message": str(exc)}
 
 @tool
 async def confirm_announcement_tool(
     announcement_id: int,
 ) -> Dict[str, Any]:
-    """Confirm and dispatch a prepared announcement."""
+    """Confirm and dispatch a prepared announcement.
+
+    Fixed: now resolves and passes confirming_user_id, required since
+    confirm_and_dispatch_announcement enforces that only the requester who
+    created the preview may confirm it.
+    """
+    requester = current_requester.get()
+    try:
+        user = await require_requester_user(requester, action="confirm_announcement")
+    except AuthorisationRefused as exc:
+        return {"status": "unauthorized", "message": str(exc)}
+
     async with session_scope() as session:
-        return await confirm_and_dispatch_announcement(session, announcement_id)
+        return await confirm_and_dispatch_announcement(session, announcement_id, confirming_user_id=user.id)
 
 @tool
 async def cancel_announcement_tool(

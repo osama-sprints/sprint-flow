@@ -28,12 +28,6 @@ async def send_to_mattermost(channel_id: str, message: str) -> str:
     return post["id"]
 
 
-def format_announcement_text(raw_message: str, delivery_mode: str) -> str:
-    if delivery_mode == "dm":
-        return f"📢 **[Sprint Announcement]**\n\n{raw_message}"
-    return f"📢 **[Announcement]**\n\n{raw_message}"
-
-
 async def is_rate_limited(
     session: AsyncSession,
     channel_id: str,
@@ -99,6 +93,7 @@ async def confirm_and_dispatch_announcement(
 ) -> Dict[str, Any]:
     if now is None:
         now = datetime.now(timezone.utc)
+
     stmt = (
         update(Announcement)
         .where(
@@ -133,36 +128,10 @@ async def confirm_and_dispatch_announcement(
             "message": "Announcement not found.",
             "dispatched": False,
         }
-        
-    target_channel_id = announcement.resolved_channel_id or ""
-    if announcement.delivery_mode == "dm":
-        target_username = getattr(announcement, "target_value", None) or getattr(announcement, "target_username", "learner")
-        target_username = target_username.strip().lstrip("@")
-        
-        mm_user = await mattermost_client.get_user_by_username(target_username)
-        if not mm_user:
-            return {
-                "status": "failed",
-                "message": f"Dispatch failed: Recipient Mattermost user '@{target_username}' not found.",
-                "dispatched": False,
-                "outcome": AnnouncementOutcome.FAILED,
-            }
-        
-        dm_channel = await mattermost_client.create_direct_channel(mm_user["id"])
-        if not dm_channel or "id" not in dm_channel:
-            return {
-                "status": "failed",
-                "message": f"Dispatch failed: Could not create direct channel with user {mm_user['id']}.",
-                "dispatched": False,
-                "outcome": AnnouncementOutcome.FAILED,
-            }
-        
-        target_channel_id = dm_channel["id"]
-        announcement.resolved_channel_id = target_channel_id
-        session.add(announcement)
-        await session.commit()
 
-    if await is_rate_limited(session, target_channel_id, now=now):
+    channel_id = announcement.resolved_channel_id or ""
+
+    if await is_rate_limited(session, channel_id, now=now):
         rate_limit_stmt = (
             update(Announcement)
             .where(Announcement.id == announcement_id)
@@ -177,16 +146,11 @@ async def confirm_and_dispatch_announcement(
             "dispatched": False,
             "outcome": AnnouncementOutcome.RATE_LIMITED,
         }
-        
-    try:
-        formatted_message = format_announcement_text(
-            announcement.exact_text or "", 
-            announcement.delivery_mode
-        )
 
+    try:
         post_id = await send_to_mattermost(
-            channel_id=target_channel_id,
-            message=formatted_message,
+            channel_id=channel_id,
+            message=announcement.exact_text or "",
         )
 
         final_stmt = (
@@ -231,8 +195,6 @@ async def create_announcement_preview(
     resolved_channel: str,
     resolved_audience: List[Dict[str, Any]],
     created_by_user_id: int,
-    target_type: Optional[str] = None,   
-    target_value: Optional[str] = None,  
 ) -> Dict[str, Any]:
     preview_data = {
         "final_text": raw_text,
@@ -250,8 +212,6 @@ async def create_announcement_preview(
         resolved_channel_id=resolved_channel,
         confirmation_status="pending",
         mattermost_post_id=None,
-        target_type=target_type,    
-        target_value=target_value,  
     )
 
     session.add(audit_entry)
@@ -264,21 +224,6 @@ async def create_announcement_preview(
         "preview": preview_data,
         "mattermost_post_id": audit_entry.mattermost_post_id,
     }
-
-
-async def resolve_announcement_channel(
-    session: AsyncSession,
-    requester: RequesterContext,
-    cohort_id: int,
-) -> str:
-    sprint = await sprint_repo.get_sprint(cohort_id, session)
-    if not sprint:
-        raise ValidationFailed(f"Cohort {cohort_id} not found.")
-    if sprint.status != "active":
-        raise ValidationFailed(f"Cohort {cohort_id} is not active (current status: {sprint.status}).")
-
-    await require_channel_authority(requester, sprint.channel_id, action="send_announcement")
-    return sprint.channel_id
 
 
 async def request_announcement(
@@ -310,8 +255,6 @@ async def request_announcement(
             resolved_channel=channel_id,
             resolved_audience=resolved_audience,
             created_by_user_id=created_by_user_id,
-            target_type=target_type,    
-            target_value=target_value,  
         )
 
     except AuthorisationRefused:
@@ -325,10 +268,9 @@ async def request_announcement(
         )
         raise
     except ValidationFailed:
-        safe_cohort_id = cohort_id if await sprint_repo.get_sprint(cohort_id, session) is not None else None
         await _write_refusal_audit_row(
             session,
-            cohort_id=safe_cohort_id,
+            cohort_id=cohort_id,
             requester_id=created_by_user_id,
             raw_text=raw_text,
             delivery_mode=delivery_mode,
@@ -340,7 +282,7 @@ async def request_announcement(
 async def _write_refusal_audit_row(
     session: AsyncSession,
     *,
-    cohort_id: Optional[int],
+    cohort_id: int,
     requester_id: int,
     raw_text: str,
     delivery_mode: str,
@@ -357,6 +299,21 @@ async def _write_refusal_audit_row(
     )
     session.add(audit_entry)
     await session.commit()
+
+
+async def resolve_announcement_channel(
+    session: AsyncSession,
+    requester: RequesterContext,
+    cohort_id: int,
+) -> str:
+    sprint = await sprint_repo.get_sprint(cohort_id, session)
+    if not sprint:
+        raise ValidationFailed(f"Cohort {cohort_id} not found.")
+    if sprint.status != "active":
+        raise ValidationFailed(f"Cohort {cohort_id} is not active (current status: {sprint.status}).")
+
+    await require_channel_authority(requester, sprint.channel_id, action="send_announcement")
+    return sprint.channel_id
 
 
 async def resolve_recipients_by_role(
@@ -381,8 +338,7 @@ async def resolve_recipients_by_usernames(
     resolved_recipients = []
 
     for username in usernames:
-        clean_username = username.strip().lstrip("@")
-        user = await identity_repo.get_user_by_username(clean_username, session)
+        user = await identity_repo.get_user_by_username(session, username)
         if not user:
             raise ValidationFailed(f"User '{username}' does not exist.")
 
