@@ -25,7 +25,7 @@ from app.services.authorisation import (
     require_requester_user,
 )
 from app.services.database import session_scope
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from app.services.announcements import (
     confirm_and_dispatch_announcement,
@@ -40,8 +40,8 @@ async def prepare_announcement_preview_tool(
     cohort_id: int,
     raw_text: str,
     delivery_mode: str,
-    target_type: str,
-    target_value: Optional[str] = None,
+    target_type: Literal["role", "usernames"],
+    target_value: str,
 ) -> Dict[str, Any]:
     """Prepare a preview for an announcement before confirmation.
 

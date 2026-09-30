@@ -28,6 +28,12 @@ async def send_to_mattermost(channel_id: str, message: str) -> str:
     return post["id"]
 
 
+def format_announcement_text(raw_message: str, delivery_mode: str) -> str:
+    if delivery_mode == "dm":
+        return f"📢 **[Sprint Announcement]**\n\n{raw_message}"
+    return f"📢 **[Announcement]**\n\n{raw_message}"
+
+
 async def is_rate_limited(
     session: AsyncSession,
     channel_id: str,
@@ -93,7 +99,6 @@ async def confirm_and_dispatch_announcement(
 ) -> Dict[str, Any]:
     if now is None:
         now = datetime.now(timezone.utc)
-
     stmt = (
         update(Announcement)
         .where(
@@ -129,9 +134,7 @@ async def confirm_and_dispatch_announcement(
             "dispatched": False,
         }
 
-    channel_id = announcement.resolved_channel_id or ""
-
-    if await is_rate_limited(session, channel_id, now=now):
+    if await is_rate_limited(session, announcement.resolved_channel_id or "", now=now):
         rate_limit_stmt = (
             update(Announcement)
             .where(col(Announcement.id) == announcement_id)
@@ -147,16 +150,47 @@ async def confirm_and_dispatch_announcement(
             "outcome": AnnouncementOutcome.RATE_LIMITED,
         }
 
+    formatted_message = format_announcement_text(announcement.exact_text or "", announcement.delivery_mode)
+
     try:
-        post_id = await send_to_mattermost(
-            channel_id=channel_id,
-            message=announcement.exact_text or "",
-        )
+        if announcement.delivery_mode == "dm":
+            usernames = [u.strip() for u in (announcement.target_usernames or "").split(",") if u.strip()]
+            if not usernames:
+                raise RuntimeError(
+                    "No resolved recipients were stored for this DM announcement "
+                    "(target_usernames is empty) -- cannot determine who to message."
+                )
+
+            sent_post_ids: List[str] = []
+            failed_usernames: List[str] = []
+            for username in usernames:
+                mm_user = await mattermost_client.get_user_by_username(username)
+                if not mm_user:
+                    failed_usernames.append(username)
+                    continue
+                dm_channel = await mattermost_client.create_direct_channel(mm_user["id"])
+                if not dm_channel or "id" not in dm_channel:
+                    failed_usernames.append(username)
+                    continue
+                sent_post_ids.append(await send_to_mattermost(channel_id=dm_channel["id"], message=formatted_message))
+
+            if not sent_post_ids:
+                raise RuntimeError(
+                    f"DM dispatch failed for every recipient: {', '.join(failed_usernames)}"
+                )
+            final_post_id = ",".join(sent_post_ids)
+            if failed_usernames:
+                final_post_id += f" (failed: {','.join(failed_usernames)})"
+        else:
+            final_post_id = await send_to_mattermost(
+                channel_id=announcement.resolved_channel_id or "",
+                message=formatted_message,
+            )
 
         final_stmt = (
             update(Announcement)
-            .where(col(Announcement.id) == announcement_id)
-            .values(outcome=AnnouncementOutcome.SENT, mattermost_post_id=post_id)
+            .where(Announcement.id == announcement_id)
+            .values(outcome=AnnouncementOutcome.SENT, mattermost_post_id=final_post_id)
         )
         await session.exec(final_stmt)
         await session.commit()
@@ -166,7 +200,7 @@ async def confirm_and_dispatch_announcement(
             "message": "Announcement confirmed and dispatched.",
             "dispatched": True,
             "outcome": AnnouncementOutcome.SENT,
-            "mattermost_post_id": post_id,
+            "mattermost_post_id": final_post_id,
         }
 
     except Exception as exc:
@@ -203,6 +237,9 @@ async def create_announcement_preview(
         "resolved_audience": resolved_audience,
         "delivery_mode": delivery_mode,
     }
+    target_usernames_csv = (
+        ",".join(item["username"] for item in resolved_audience if item.get("username")) or None
+    )
 
     audit_entry = Announcement(
         cohort_id=cohort_id,
@@ -210,6 +247,7 @@ async def create_announcement_preview(
         exact_text=raw_text,
         delivery_mode=delivery_mode,
         resolved_channel_id=resolved_channel,
+        target_usernames=target_usernames_csv,
         confirmation_status="pending",
         mattermost_post_id=None,
     )
@@ -224,6 +262,21 @@ async def create_announcement_preview(
         "preview": preview_data,
         "mattermost_post_id": audit_entry.mattermost_post_id,
     }
+
+
+async def resolve_announcement_channel(
+    session: AsyncSession,
+    requester: RequesterContext,
+    cohort_id: int,
+) -> str:
+    sprint = await sprint_repo.get_sprint(cohort_id, session)
+    if not sprint:
+        raise ValidationFailed(f"Cohort {cohort_id} not found.")
+    if sprint.status != "active":
+        raise ValidationFailed(f"Cohort {cohort_id} is not active (current status: {sprint.status}).")
+
+    await require_channel_authority(requester, sprint.channel_id, action="send_announcement")
+    return sprint.channel_id
 
 
 async def request_announcement(
@@ -268,9 +321,10 @@ async def request_announcement(
         )
         raise
     except ValidationFailed:
+        safe_cohort_id = cohort_id if await sprint_repo.get_sprint(cohort_id, session) is not None else None
         await _write_refusal_audit_row(
             session,
-            cohort_id=cohort_id,
+            cohort_id=safe_cohort_id,
             requester_id=created_by_user_id,
             raw_text=raw_text,
             delivery_mode=delivery_mode,
@@ -282,7 +336,7 @@ async def request_announcement(
 async def _write_refusal_audit_row(
     session: AsyncSession,
     *,
-    cohort_id: int,
+    cohort_id: Optional[int],
     requester_id: int,
     raw_text: str,
     delivery_mode: str,
@@ -301,22 +355,7 @@ async def _write_refusal_audit_row(
     await session.commit()
 
 
-async def resolve_announcement_channel(
-    session: AsyncSession,
-    requester: RequesterContext,
-    cohort_id: int,
-) -> str:
-    sprint = await sprint_repo.get_sprint(cohort_id, session)
-    if not sprint:
-        raise ValidationFailed(f"Cohort {cohort_id} not found.")
-    if sprint.status != "active":
-        raise ValidationFailed(f"Cohort {cohort_id} is not active (current status: {sprint.status}).")
-
-    await require_channel_authority(requester, sprint.channel_id, action="send_announcement")
-    return sprint.channel_id
-
-
-async def resolve_recipients_by_role(
+"""async def resolve_recipients_by_role(
     session: AsyncSession,
     channel_id: str,
     role: str,
@@ -327,8 +366,34 @@ async def resolve_recipients_by_role(
     return [
         {"user_id": m.user.id, "username": m.user.username, "role": role, "channel_id": channel_id} for m in matching
     ]
+"""
+async def resolve_recipients_by_role(
+    session: AsyncSession,
+    channel_id: str,
+    role: str,
+) -> List[Dict[str, Any]]:
+    normalized_role = role.strip().lstrip("@").lower()
 
+    members = await channel_repo.list_channel_roles(
+        channel_id,
+        session=session,
+    )
 
+    matching = [
+        m
+        for m in members
+        if str(m.role.key).strip().lower() == normalized_role
+    ]
+
+    return [
+        {
+            "user_id": m.user.id,
+            "username": m.user.username,
+            "role": normalized_role,
+            "channel_id": channel_id,
+        }
+        for m in matching
+    ]
 async def resolve_recipients_by_usernames(
     session: AsyncSession,
     channel_id: str,
@@ -338,6 +403,8 @@ async def resolve_recipients_by_usernames(
 
     for username in usernames:
         user = await identity_repo.get_user_by_username(username, session=session)
+        clean_username = username.strip().lstrip("@")
+        user = await identity_repo.get_user_by_username(clean_username, session)
         if not user:
             raise ValidationFailed(f"User '{username}' does not exist.")
         assert user.id is not None  # narrowed for pyright: the existence check above guarantees the PK

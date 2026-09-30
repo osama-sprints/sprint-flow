@@ -20,6 +20,10 @@ class Announcement(DomainBase, table=True):
     resolved_channel_id: str = Field(index=True)
     exact_text: str = Field(description="The exact text of the announcement sent or proposed")
     delivery_mode: str = Field(description="e.g. broadcast or targeted")
+    target_usernames: Optional[str] = Field(
+    default=None,
+    description="Comma-separated usernames resolved for DM delivery"
+    )
     confirmation_status: str = Field(default="pending", description="pending, confirmed, cancelled, or refused")
     mattermost_post_id: Optional[str] = Field(default=None, description="Set only on successful post")
     outcome: AnnouncementOutcome = Field(default=AnnouncementOutcome.PENDING)
