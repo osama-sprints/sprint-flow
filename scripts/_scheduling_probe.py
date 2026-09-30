@@ -76,7 +76,7 @@ from app.services.ceremony_scheduling import (  # noqa: E402
 )
 from app.services.database import database_service  # noqa: E402
 from app.services.domain import ceremonies as ceremony_repo  # noqa: E402
-from app.services.domain import cohorts as cohort_repo  # noqa: E402
+from app.services.domain import channels as channel_repo  # noqa: E402
 from app.services.domain import identity as identity_repo  # noqa: E402
 
 PREFIX = "verify-sched-"
@@ -208,19 +208,27 @@ async def checks() -> None:
         return user
 
     try:
-        cohort = await cohort_repo.create_cohort(f"{PREFIX}{stamp}")
-        other = await cohort_repo.create_cohort(f"{PREFIX}{stamp}-other")
+        cohort = await channel_repo.create_channel(f"{PREFIX}{stamp}")
+        other = await channel_repo.create_channel(f"{PREFIX}{stamp}-other")
         assert cohort.id and other.id
         cohort_ids += [cohort.id, other.id]
         lead, learner, outsider = await person("lead"), await person("learner"), await person("outsider")
-        scrum_master = await cohort_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
-        learner_role = await cohort_repo.get_role_by_key(RoleKey.LEARNER)
+        scrum_master = await channel_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
+        learner_role = await channel_repo.get_role_by_key(RoleKey.LEARNER)
         assert scrum_master and scrum_master.id and learner_role and learner_role.id and lead.id and learner.id
-        await cohort_repo.upsert_membership(
-            user_id=lead.id, cohort_id=cohort.id, role_id=scrum_master.id, assigned_by_id=None
+        await channel_repo.upsert_channel_role(
+            user_id=lead.id,
+            team_id="",
+            channel_id=str(cohort.id),
+            role_id=scrum_master.id,
+            assigned_by_id=None,
         )
-        await cohort_repo.upsert_membership(
-            user_id=learner.id, cohort_id=cohort.id, role_id=learner_role.id, assigned_by_id=None
+        await channel_repo.upsert_channel_role(
+            user_id=learner.id,
+            team_id="",
+            channel_id=str(cohort.id),
+            role_id=learner_role.id,
+            assigned_by_id=None,
         )
         lead_ctx = requester_for(lead, {cohort.id: "scrum_master"})
         learner_ctx = requester_for(learner, {cohort.id: "learner"})
@@ -444,10 +452,16 @@ async def setup(stamp: str, mattermost_user_id: str, username: str, email: str) 
         is_superadmin=email.lower() in settings.ADMIN_EMAILS,
     )
     name = f"Verify-Sched-{stamp}"
-    cohort = await cohort_repo.get_cohort_by_name(name) or await cohort_repo.create_cohort(name)
-    role = await cohort_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
+    cohort = await channel_repo.get_channel_by_name(name) or await channel_repo.create_channel(name)
+    role = await channel_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
     assert user.id and cohort.id and role and role.id
-    await cohort_repo.upsert_membership(user_id=user.id, cohort_id=cohort.id, role_id=role.id, assigned_by_id=user.id)
+    await channel_repo.upsert_channel_role(
+        user_id=user.id,
+        team_id="",
+        channel_id=str(cohort.id),
+        role_id=role.id,
+        assigned_by_id=user.id,
+    )
     return {
         "cohort_id": cohort.id,
         "cohort_name": cohort.name,
@@ -458,7 +472,7 @@ async def setup(stamp: str, mattermost_user_id: str, username: str, email: str) 
 
 async def inspect(cohort_reference: str) -> dict[str, Any]:
     """Report every ceremony of a cohort, in UTC."""
-    cohort = await cohort_repo.resolve_cohort(cohort_reference)
+    cohort = await channel_repo.resolve_channel(cohort_reference)
     if cohort is None or cohort.id is None:
         return {"cohort": None, "ceremonies": []}
     rows = await ceremony_repo.list_ceremonies(cohort.id, include_past=True, include_cancelled=True)
@@ -489,7 +503,7 @@ async def inspect(cohort_reference: str) -> dict[str, Any]:
 
 async def cleanup(stamp: str) -> dict[str, Any]:
     """Delete the cohort created by ``setup`` and everything hanging off it."""
-    cohort = await cohort_repo.get_cohort_by_name(f"Verify-Sched-{stamp}")
+    cohort = await channel_repo.get_channel_by_name(f"Verify-Sched-{stamp}")
     if cohort is None or cohort.id is None:
         return {"deleted": False}
     await delete_cohorts([cohort.id], [])

@@ -1,7 +1,7 @@
 """Durable outbox of onboarding deliveries.
 
 Each row is one message that must be delivered exactly once: the welcome, a
-cohort orientation, or a later follow-up. Rows are inserted with
+channel orientation, or a later follow-up. Rows are inserted with
 ``ON CONFLICT DO NOTHING`` on the unique key, so a replayed arrival event or a
 second dispatcher can never create a duplicate, and they are claimed with a
 lease before delivery so two workers can never send the same one.
@@ -28,7 +28,8 @@ class OnboardingStep(DomainBase, table=True):
     Attributes:
         id: Primary key.
         user_id: The person being onboarded.
-        cohort_id: The cohort the step is about; NULL for workspace-level steps
+        team_id: The Mattermost team.
+        channel_id: The Mattermost channel the step is about; NULL for workspace-level steps
             (the welcome and the follow-up).
         step_kind: ``welcome``, ``orientation`` or ``follow_up``.
         status: ``pending``, ``sent``, ``failed`` or ``halted``.
@@ -47,16 +48,17 @@ class OnboardingStep(DomainBase, table=True):
     __table_args__ = (
         UniqueConstraint(
             "user_id",
-            "cohort_id",
+            "channel_id",
             "step_kind",
-            name="uq_onboarding_steps_user_cohort_kind",
+            name="uq_onboarding_steps_user_channel_kind",
             postgresql_nulls_not_distinct=True,
         ),
     )
 
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="users.id", index=True)
-    cohort_id: int | None = Field(default=None, foreign_key="cohorts.id", index=True)
+    team_id: str | None = Field(default="sprints-community", max_length=64, index=True)
+    channel_id: str | None = Field(default=None, max_length=64, index=True)
     step_kind: str = Field(max_length=32)
     status: str = Field(default=OnboardingStepStatus.PENDING.value, nullable=False, max_length=32, index=True)
     due_at: datetime = Field(sa_type=TZ_DATETIME, nullable=False, index=True)

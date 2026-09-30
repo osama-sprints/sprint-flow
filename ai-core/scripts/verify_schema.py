@@ -80,7 +80,7 @@ from app.services.domain import sprints as sprint_repo  # noqa: E402
 from app.services.domain import standups as standup_repo  # noqa: E402
 from app.services.domain.reference_data import seed_reference_data  # noqa: E402
 
-HEAD_REVISION = "0002_sprints_name_ci"
+HEAD_REVISION = "e40272b244ca"
 DEFAULT_CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations")
 LEGACY_TABLES = (
     "user",
@@ -403,12 +403,12 @@ async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None
     assert standup_type and standup_type.id
     start = datetime(2030, 1, 7, 10, 0, tzinfo=UTC)
     ceremony = await ceremony_repo.create_ceremony(
-        cohort_id=cohort_a.id,
+        team_id="sprints-community",
+        channel_id="chan-probe",
         ceremony_type_id=standup_type.id,
         organizer_id=user.id,
         scheduled_at=start,
         duration_minutes=30,
-        sprint_id=sprint.id,
         agenda="Probe standup",
         time_expression="10am",
         time_zone="UTC",
@@ -422,7 +422,8 @@ async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None
     naive_rejected = False
     try:
         await ceremony_repo.create_ceremony(
-            cohort_id=cohort_a.id,
+            team_id="sprints-community",
+            channel_id="chan-probe",
             ceremony_type_id=standup_type.id,
             organizer_id=user.id,
             scheduled_at=datetime(2030, 1, 7, 11, 0),
@@ -431,8 +432,8 @@ async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None
     except ValueError:
         naive_rejected = True
     check("a naive ceremony instant is rejected before it reaches the database", naive_rejected)
-    touching = await ceremony_repo.find_overlapping_ceremonies(cohort_a.id, start + timedelta(minutes=30), 30)
-    inside = await ceremony_repo.find_overlapping_ceremonies(cohort_a.id, start + timedelta(minutes=29), 30)
+    touching = await ceremony_repo.find_overlapping_ceremonies("chan-probe", start + timedelta(minutes=30), 30)
+    inside = await ceremony_repo.find_overlapping_ceremonies("chan-probe", start + timedelta(minutes=29), 30)
     check("touching ceremonies (10:00-10:30, 10:30-11:00) do not conflict", not touching)
     check("overlapping ceremonies (10:00-10:30, 10:29-10:59) do conflict", [c.id for c in inside] == [ceremony.id])
     amended = await ceremony_repo.update_ceremony(
@@ -449,18 +450,18 @@ async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None
     )
     unknown_rejected = False
     try:
-        await ceremony_repo.update_ceremony(ceremony.id, amended_by_id=user.id, changes={"cohort_id": cohort_b.id})
+        await ceremony_repo.update_ceremony(ceremony.id, amended_by_id=user.id, changes={"team_id": "other"})
     except ValueError:
         unknown_rejected = True
     check("amending a non-amendable field raises ValueError", unknown_rejected)
     await ceremony_repo.update_ceremony(
         ceremony.id, amended_by_id=user.id, changes={"status": CeremonyStatus.CANCELLED}
     )
-    upcoming = await ceremony_repo.list_ceremonies(cohort_a.id, now=start - timedelta(days=1))
+    upcoming = await ceremony_repo.list_ceremonies("chan-probe", now=start - timedelta(days=1))
     with_cancelled = await ceremony_repo.list_ceremonies(
-        cohort_a.id, include_cancelled=True, now=start - timedelta(days=1)
+        "chan-probe", include_cancelled=True, now=start - timedelta(days=1)
     )
-    no_conflict = await ceremony_repo.find_overlapping_ceremonies(cohort_a.id, start, 30)
+    no_conflict = await ceremony_repo.find_overlapping_ceremonies("chan-probe", start, 30)
     check(
         "a cancelled ceremony leaves the calendar and never conflicts",
         not upcoming and [c.id for c in with_cancelled] == [ceremony.id] and not no_conflict,
@@ -567,11 +568,10 @@ def cleanup(engine: Engine, suffix: str, created: dict[str, list[int]]) -> None:
         conn.execute(
             text(
                 "DELETE FROM ceremony_amendments WHERE ceremony_id IN "
-                "(SELECT id FROM ceremonies WHERE cohort_id = ANY(:cohorts))"
-            ),
-            params,
+                "(SELECT id FROM ceremonies WHERE team_id = 'sprints-community' AND channel_id = 'chan-probe')"
+            )
         )
-        conn.execute(text("DELETE FROM ceremonies WHERE cohort_id = ANY(:cohorts)"), params)
+        conn.execute(text("DELETE FROM ceremonies WHERE team_id = 'sprints-community' AND channel_id = 'chan-probe'"))
         conn.execute(text("DELETE FROM sprints WHERE cohort_id = ANY(:cohorts)"), params)
         conn.execute(text("DELETE FROM cohort_memberships WHERE cohort_id = ANY(:cohorts)"), params)
         conn.execute(text("DELETE FROM cohorts WHERE id = ANY(:cohorts)"), params)

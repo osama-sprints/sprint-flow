@@ -20,9 +20,11 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.core.requester import current_requester
 from app.schemas.chat import Message
+from app.core.cache import cache_key, cache_service
 from app.services.agent import agent
 from app.services.identity import resolve_requester
 from app.services.mattermost import mattermost_client
+from app.services.mattermost_ingestion import ingest_attached_documents
 
 # app/schemas/chat.py caps Message.content at 3000 characters. Mattermost posts
 # can be far longer, so trim rather than let validation reject the turn.
@@ -40,6 +42,7 @@ class IncomingMessage(BaseModel):
     """One inbound Mattermost message, normalised across both transports."""
 
     channel_id: str = Field(..., description="Channel the message arrived in")
+    team_id: str = Field(default="", description="Team the message belongs to")
     post_id: str = Field(default="", description="The triggering post")
     text: str = Field(..., description="Cleaned message body")
     user_id: str = Field(default="", description="Author's Mattermost user id — scopes long-term memory")
@@ -47,6 +50,8 @@ class IncomingMessage(BaseModel):
     channel_type: str = Field(default="O", description="O public, P private, D direct, G group")
     root_id: str = Field(default="", description="Set when the trigger is already inside a thread")
     source: str = Field(default="unknown", description="Transport label for logs")
+    file_ids: list[str] = Field(default_factory=list, description="Mattermost attachment ids")
+    thread_history: list[Message] = Field(default_factory=list, description="Fetched Mattermost thread context")
 
     @property
     def threads_by_default(self) -> bool:
@@ -128,6 +133,50 @@ async def is_own_post(user_id: str, user_name: str = "") -> bool:
     return bool(bot_user_id) and user_id == bot_user_id
 
 
+async def claim_mattermost_event(post_id: str) -> bool:
+    """Claim a post across webhook/WebSocket workers for the deduplication TTL."""
+    if not post_id:
+        return True
+    return await cache_service.add_if_absent(
+        cache_key("mattermost_event", post_id),
+        "1",
+        ttl=settings.MATTERMOST_EVENT_DEDUP_TTL,
+    )
+
+
+async def get_thread_history(root_id: str, current_post_id: str = "") -> list[Message]:
+    """Convert Mattermost thread posts into graph messages for a fresh session."""
+    if not root_id:
+        return []
+    thread = await mattermost_client.get_thread(root_id)
+    if not thread:
+        return []
+    bot_user_id = await mattermost_client.get_bot_user_id()
+    posts = thread.get("posts") or {}
+    history: list[Message] = []
+    for post_id in thread.get("order") or list(posts):
+        if post_id == current_post_id:
+            continue
+        post = posts.get(post_id) or {}
+        text = str(post.get("message") or "").strip()
+        if not text:
+            continue
+        role = "assistant" if bot_user_id and post.get("user_id") == bot_user_id else "user"
+        history.append(Message(role=role, content=text[:3000]))
+    return history
+
+
+async def handle_attachment_and_reply(message: IncomingMessage) -> None:
+    """Ingest an attachment and reply without entering the general agent graph."""
+    try:
+        reply = await ingest_attached_documents(message)
+    except Exception as e:
+        logger.exception("mattermost_document_ingestion_failed", error=str(e), user_id=message.user_id)
+        reply = FALLBACK_REPLY
+    if reply is not None:
+        await _deliver(message, reply)
+
+
 async def answer_and_reply(message: IncomingMessage) -> None:
     """Run the agent for one message and post the answer back to Mattermost.
 
@@ -157,7 +206,9 @@ async def answer_and_reply(message: IncomingMessage) -> None:
         mattermost_user_id=message.user_id,
         username=message.user_name,
         channel_id=channel_id,
+        team_id=message.team_id,
         channel_type=message.channel_type,
+        thread_root_id=message.root_id or message.post_id,
     )
     current_requester.set(requester)
 
@@ -171,6 +222,7 @@ async def answer_and_reply(message: IncomingMessage) -> None:
             # not leak between them.
             user_id=message.user_id or None,
             username=message.user_name or None,
+            thread_history=message.thread_history,
         )
         # get_response returns the WHOLE accumulated thread from the checkpointer,
         # not just this turn's answer, so take the last assistant message only.

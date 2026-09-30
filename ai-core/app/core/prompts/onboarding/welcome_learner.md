@@ -1,4 +1,4 @@
-Hi {first_name}, welcome to SprintFlow — I'm {bot_handle}, the assistant on the team, and I'll be your first stop for questions while you settle into **{cohort_name}**.
+Hi {first_name}, welcome to SprintFlow — I'm {bot_handle}, the assistant on the team, and I'll be your first stop for questions while you settle into **{channel_id}**.
 
 You're joining as a **{role_label}**. Here's how things work day to day:
 
@@ -8,8 +8,8 @@ You're joining as a **{role_label}**. Here's how things work day to day:
 
 **Standups.** Each working day I'll ask you three short things: what you did, what you're doing next, and what's blocking you. Two minutes, straight to me in DM; your lead sees the blockers.
 
-**Your calendar.** Ask me "what's scheduled this week?" or "when is the next retro?" and I'll list the ceremonies for {cohort_name} — planning, standups, reviews, retros and open Q&A.
+**Your calendar.** Ask me "what's scheduled this week?" or "when is the next retro?" and I'll list the ceremonies for {channel_id} — planning, standups, reviews, retros and open Q&A.
 
-Your leads in {cohort_name}: {lead_handles}.
+Your leads in {channel_id}: {lead_handles}.
 
 I'll check in again in a few days. Until then — reply here whenever you need something.

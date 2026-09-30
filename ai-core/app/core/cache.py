@@ -6,6 +6,7 @@ Otherwise, falls back to a simple in-memory TTL cache.
 
 import hashlib
 import time
+import asyncio
 from typing import (
     TYPE_CHECKING,
     Awaitable,
@@ -43,6 +44,7 @@ class InMemoryCacheService:
         """
         self._cache: dict[str, tuple[float, str]] = {}
         self._default_ttl = default_ttl
+        self._claim_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         """No-op for in-memory cache."""
@@ -76,6 +78,14 @@ class InMemoryCacheService:
         """
         expires_at = time.monotonic() + (ttl or self._default_ttl)
         self._cache[key] = (expires_at, value)
+
+    async def add_if_absent(self, key: str, value: str, ttl: Optional[int] = None) -> bool:
+        """Store a value only when the key is absent, returning whether it won."""
+        async with self._claim_lock:
+            if await self.get(key) is not None:
+                return False
+            await self.set(key, value, ttl)
+            return True
 
     async def delete(self, key: str) -> None:
         """Delete a value from cache.
@@ -153,6 +163,17 @@ class ValkeyCacheService:
             await self._client.set(key, value, ex=(ttl or self._default_ttl))
         except Exception as e:
             logger.warning("cache_set_failed", key=key, error=str(e))
+
+    async def add_if_absent(self, key: str, value: str, ttl: Optional[int] = None) -> bool:
+        """Atomically store a value only when the key is absent."""
+        if not self._client:
+            return False
+        try:
+            result = await self._client.set(key, value, ex=(ttl or self._default_ttl), nx=True)
+            return bool(result)
+        except Exception as e:
+            logger.warning("cache_add_if_absent_failed", key=key, error=str(e))
+            return False
 
     async def delete(self, key: str) -> None:
         """Delete a value from Valkey.

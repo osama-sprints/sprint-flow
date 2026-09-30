@@ -1,7 +1,8 @@
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any
 import docx
 from pypdf import PdfReader
+
 
 class DocumentLoader:
     @staticmethod
@@ -34,7 +35,7 @@ class DocumentLoader:
         for idx, page in enumerate(reader.pages):
             text = page.extract_text() or ""
             full_text.append(text)
-            sections.append({"title": f"Page {idx+1}", "text": text, "page": idx+1})
+            sections.append({"title": f"Page {idx + 1}", "text": text, "page": idx + 1})
         return {"content": "\n".join(full_text), "sections": sections}
 
     @staticmethod
@@ -46,7 +47,7 @@ class DocumentLoader:
         current_text = []
 
         for p in doc.paragraphs:
-            if p.style.name.startswith("Heading"):
+            if getattr(getattr(p, "style", None), "name", None) and p.style.name.startswith("Heading"):  # type: ignore
                 if current_text:
                     sections.append({"title": current_heading, "text": "\n".join(current_text), "page": 1})
                     current_text = []

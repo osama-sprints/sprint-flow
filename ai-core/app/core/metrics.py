@@ -76,6 +76,14 @@ onboarding_steps_total = Counter(
     ["step_kind", "outcome"],  # outcome: sent | failed | halted | retry
 )
 
+# --- Sprint 1: proactive daily standups ---------------------------------------
+standup_prompts_total = Counter(
+    "sprintflow_standup_prompts_total",
+    "Standup prompt lifecycle outcomes",
+    # Delivery side: sent | retry | failed | halted. Reply side: accepted | duplicate | late.
+    ["outcome"],
+)
+
 
 def setup_metrics(app):
     """Set up Prometheus metrics middleware and endpoints.

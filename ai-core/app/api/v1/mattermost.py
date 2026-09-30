@@ -49,9 +49,13 @@ from app.core.logging import logger
 from app.services.conversation import (
     IncomingMessage,
     answer_and_reply,
+    claim_mattermost_event,
     clean_text,
+    handle_attachment_and_reply,
+    get_thread_history,
     is_own_post,
 )
+from app.services.mattermost_ingestion import extract_file_ids
 from app.services.mattermost import mattermost_client
 from app.services.mattermost_ws import mattermost_ws_listener
 
@@ -170,35 +174,76 @@ async def mattermost_webhook(
     payload = await _parse_payload(request)
     _verify_token(payload.token)
 
-    prompt = clean_text(payload.text, payload.trigger_word)
-
-    if not prompt:
-        logger.info("mattermost_webhook_ignored_empty_text", channel_id=payload.channel_id)
+    post = await mattermost_client.get_post(payload.post_id) if payload.post_id else None
+    props = (post or {}).get("props") or {}
+    if props.get("from_bot") is True or str(props.get("from_bot")).lower() == "true":
+        logger.info("mattermost_webhook_ignored_bot_post", post_id=payload.post_id)
         return {}
 
     if await is_own_post(payload.user_id, payload.user_name):
         logger.info("mattermost_webhook_ignored_own_post", user_name=payload.user_name)
         return {}
 
+    prompt = clean_text(payload.text, payload.trigger_word)
+
+    if not await claim_mattermost_event(payload.post_id):
+        logger.info("mattermost_webhook_ignored_duplicate", post_id=payload.post_id)
+        return {}
+
     logger.info(
         "mattermost_webhook_received",
+        user_id=payload.user_id,
         channel_name=payload.channel_name,
+        team_id=payload.team_id,
         user_name=payload.user_name,
+        role="learner_default_pending_identity_resolution",
         text_length=len(prompt),
     )
+
+    # Mattermost outgoing webhooks do not include root_id, so every message looks
+    # like a new thread root. Fetch the post to restore thread continuity.
+    root_id = str((post or {}).get("root_id") or "")
+    thread_history = await get_thread_history(root_id, payload.post_id)
+    payload_file_ids = payload.file_ids if isinstance(payload.file_ids, list) else [item for item in payload.file_ids.split(",") if item]
+    file_ids = extract_file_ids(post, payload_file_ids)
+    if file_ids:
+        background_tasks.add_task(
+            handle_attachment_and_reply,
+            IncomingMessage(
+                channel_id=payload.channel_id,
+                team_id=payload.team_id,
+                post_id=payload.post_id,
+                text=prompt,
+                user_id=payload.user_id,
+                user_name=payload.user_name,
+                root_id=root_id,
+                channel_type="O",
+                source="webhook",
+                file_ids=file_ids,
+            ),
+        )
+        return {}
+
+    if not prompt:
+        logger.info("mattermost_webhook_ignored_empty_text", channel_id=payload.channel_id)
+        return {}
 
     background_tasks.add_task(
         answer_and_reply,
         IncomingMessage(
             channel_id=payload.channel_id,
+            team_id=payload.team_id,
             post_id=payload.post_id,
             text=prompt,
             user_id=payload.user_id,
             user_name=payload.user_name,
+            root_id=root_id,
             # Outgoing webhooks only ever fire in public channels, so this is a
             # fact about the transport, not a guess. Replies stay threaded here.
             channel_type="O",
             source="webhook",
+            file_ids=file_ids,
+            thread_history=thread_history,
         ),
     )
     return {}

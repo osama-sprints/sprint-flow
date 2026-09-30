@@ -3,7 +3,7 @@
 Rows are created and refreshed by ``app.services.identity`` from the Mattermost
 profile on every inbound event, so downstream code can rely on one existing for
 anyone who has ever spoken to the assistant or registered while it was listening.
-No global role lives here: authority is always a cohort membership. The one
+No global role lives here: authority is always a channel membership. The one
 platform-level flag, ``is_superadmin``, is synced from the ``ADMIN_EMAILS``
 allowlist so that authorisation decisions read stored data, never the message.
 """

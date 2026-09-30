@@ -9,6 +9,8 @@ renamed route can never break loading an old conversation.
 from enum import Enum
 from typing import (
     Annotated,
+    Any,
+    Dict,
     List,
     Optional,
 )
@@ -26,6 +28,7 @@ class CapabilityRoute(str, Enum):
     LEARNER_SUPPORT = "learner_support"
     BACK_OFFICE = "back_office"
     GENERAL = "general"
+    POLICY_SUPPORT = "policy_support"
 
 
 class GraphState(BaseModel):
@@ -44,3 +47,6 @@ class GraphState(BaseModel):
     route_confidence: Optional[float] = Field(default=None, description="Confidence of the rule match, 0-1")
     matched_rule: Optional[str] = Field(default=None, description="Which rule produced the decision")
     is_multi_intent: bool = Field(default=False, description="Whether the message spans more than one route")
+    policy_context: Optional[List[Dict[str, Any]]] = Field(
+        default_factory=list, description="Retrieved policy chunks for grounding"
+    )

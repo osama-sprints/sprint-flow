@@ -16,7 +16,7 @@ from app.core.langgraph.graph import pending_interrupt
 from app.core.requester import RequesterContext
 from tests.test_specialists import config_for, make_agent, run_turn, user_turn
 
-AUTHORITY = RequesterContext(mattermost_user_id="mm-sm", username="sm", user_id=5, cohort_roles={1: "scrum_master"})
+AUTHORITY = RequesterContext(mattermost_user_id="mm-sm", username="sm", user_id=5, channel_roles={1: "scrum_master"})
 
 
 def test_two_confirmations_in_one_turn_resume_in_order():

@@ -82,13 +82,13 @@ executed: list[str] = []
 
 
 @tool
-async def create_cohort(name: str) -> str:
-    """Create a cohort (fake)."""
+async def create_channel(name: str) -> str:
+    """Create a channel (fake)."""
     executed.append(name)
     return f"[COHORT_CREATED] {name}"
 
 
-TOOL_GROUPS = {"general": [ask_human], "learner_support": [ask_human], "back_office": [create_cohort, ask_human]}
+TOOL_GROUPS = {"general": [ask_human], "learner_support": [ask_human], "back_office": [create_channel, ask_human]}
 
 
 class LegacyState(BaseModel):
@@ -148,7 +148,7 @@ def test_routing_fields_round_trip_through_postgres():
 
     visited, state, calls = asyncio.run(scenario())
     assert visited == ["supervisor", "back_office", "learner_support"]
-    assert calls == [["ask_human", "create_cohort"], ["ask_human"]]
+    assert calls == [["ask_human", "create_channel"], ["ask_human"]]
     assert state.values["route"] == CapabilityRoute.LEARNER_SUPPORT.value
     assert state.values["route_plan"] == []
     assert state.values["is_multi_intent"] is True

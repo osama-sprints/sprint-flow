@@ -48,7 +48,7 @@ from typing import Sequence
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROBE = os.path.join(ROOT, "ai-core", "scripts", "verify_schema.py")
-HEAD_REVISION = "0002_sprints_name_ci"
+HEAD_REVISION = "e40272b244ca"
 DOMAIN_TABLES = (
     "users",
     "roles",
@@ -90,7 +90,7 @@ def load_dotenv() -> None:
 def check(label: str, ok: bool, detail: str = "") -> bool:
     """Record and print one assertion."""
     results.append(ok)
-    suffix = f"  ({detail.strip()[:200]})" if detail and not ok else ""
+    suffix = f"  ({detail.strip()})" if detail and not ok else ""
     print(f"  {label:74} {'PASS' if ok else 'FAIL'}{suffix}", flush=True)
     return ok
 
@@ -178,13 +178,10 @@ def population_sql(suffix: str) -> str:
         WHERE c.name = 'Verify-B-{suffix}' AND u.mattermost_user_id = 'verify-mm-{suffix}' AND r.key = 'learner';
     INSERT INTO sprints (cohort_id, name, start_date, end_date)
         SELECT id, 'Sprint 1', DATE '2030-01-06', DATE '2030-01-17' FROM cohorts WHERE name = 'Verify-A-{suffix}';
-    INSERT INTO ceremonies (cohort_id, sprint_id, ceremony_type_id, organizer_id, scheduled_at, duration_minutes, agenda)
-        SELECT c.id, s.id, t.id, u.id, TIMESTAMPTZ '2030-01-06 10:00:00+00', 90, 'Kick-off'
-        FROM cohorts c
-        JOIN sprints s ON s.cohort_id = c.id
-        JOIN ceremony_types t ON t.key = 'sprint_planning'
-        JOIN users u ON u.mattermost_user_id = 'verify-mm-{suffix}'
-        WHERE c.name = 'Verify-A-{suffix}';
+    INSERT INTO ceremonies (team_id, channel_id, ceremony_type_id, organizer_id, scheduled_at, duration_minutes, agenda)
+        SELECT 'verify-team', 'verify-channel', t.id, u.id, TIMESTAMPTZ '2030-01-06 10:00:00+00', 90, 'Kick-off'
+        FROM ceremony_types t, users u
+        WHERE t.key = 'sprint_planning' AND u.mattermost_user_id = 'verify-mm-{suffix}';
     """
 
 

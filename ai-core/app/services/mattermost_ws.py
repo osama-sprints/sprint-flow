@@ -39,14 +39,22 @@ from app.core.cache import (
 from app.core.config import settings
 from app.core.logging import logger
 from app.services import onboarding
+from app.services import standups
+from app.services import escalation_closure
+from app.services import knowledge_review
+
 from app.services.conversation import (
     IncomingMessage,
     answer_and_reply,
+    claim_mattermost_event,
     clean_text,
+    handle_attachment_and_reply,
+    get_thread_history,
     is_own_post,
 )
 from app.services.identity import sync_mattermost_user
 from app.services.mattermost import mattermost_client
+from app.services.mattermost_ingestion import extract_file_ids
 
 # Reconnect backoff: double on each consecutive failure, capped. Reset to the
 # floor as soon as a connection authenticates.
@@ -332,7 +340,7 @@ class MattermostWebSocketListener:
                 if user is None:
                     logger.error("onboarding_arrival_lost_profile_unreadable", user_id=user_id)
                 else:
-                    await onboarding.start_journey(user)
+                    await onboarding.start_journey(user, settings.MATTERMOST_DEFAULT_TEAM)
             except Exception as e:
                 logger.exception("onboarding_arrival_failed", user_id=user_id, error=str(e))
 
@@ -406,13 +414,13 @@ class MattermostWebSocketListener:
 
         1. Direct and group messages — always ours; there is no one else in the
            conversation and no webhook can reach them.
-        2. Public channel, first word is a webhook trigger word — NOT ours. The
-           outgoing webhook is already delivering this message, and answering
-           here too would post the reply twice.
-        3. The bot is mentioned anywhere in the message — ours. This also picks
+          2. The bot is mentioned anywhere in the message — ours. This also picks
            up mentions that are not the first word ("thanks @bot, can you..."),
-           which the webhook's first-word matching silently ignores.
-        4. Inside a thread the bot already participates in — ours. This is
+              and ensures public mentions are not lost to channel configuration.
+          3. Public channel, first word is a webhook trigger word — NOT ours. The
+              outgoing webhook is already delivering this message, and answering
+              here too would post the reply twice.
+          4. Inside a thread the bot already participates in — ours. This is
            thread continuity: once the bot is in a conversation, follow-ups no
            longer need to re-mention it.
         5. Anything else — ignored, with no API call and no model call.
@@ -428,11 +436,11 @@ class MattermostWebSocketListener:
         if channel_type in _DIRECT_CHANNEL_TYPES:
             return True
 
-        if channel_type in _WEBHOOK_OWNED_CHANNEL_TYPES and _starts_with_trigger_word(message):
-            return False
-
         if _MENTION_RE.search(message):
             return True
+
+        if channel_type in _WEBHOOK_OWNED_CHANNEL_TYPES and _starts_with_trigger_word(message):
+            return False
 
         if root_id:
             return await self._bot_is_in_thread(root_id)
@@ -447,7 +455,9 @@ class MattermostWebSocketListener:
                 that has to be decoded a second time.
         """
         channel_type = data.get("channel_type", "")
-        if channel_type not in settings.MATTERMOST_WS_CHANNEL_TYPES:
+        # Public-channel mentions must be handled regardless of the configured
+        # private-channel allowlist; role mapping is resolved later per turn.
+        if channel_type not in settings.MATTERMOST_WS_CHANNEL_TYPES and channel_type != "O":
             return
 
         try:
@@ -463,7 +473,9 @@ class MattermostWebSocketListener:
         # Anything posted by a bot or an incoming webhook, including our own
         # replies. Checked before the id lookup because it needs no round trip.
         props = post.get("props") or {}
-        if props.get("from_bot") == "true" or props.get("from_webhook") == "true":
+        if props.get("from_bot") is True or str(props.get("from_bot")).lower() == "true":
+            return
+        if props.get("from_webhook") is True or str(props.get("from_webhook")).lower() == "true":
             return
 
         user_id = str(post.get("user_id") or "")
@@ -475,6 +487,92 @@ class MattermostWebSocketListener:
 
         raw_message = str(post.get("message") or "")
         root_id = str(post.get("root_id") or "")
+        file_ids = extract_file_ids(post)
+        channel_id = str(post.get("channel_id") or "")
+        team_id = str(data.get("team_id") or "")
+        post_id = str(post.get("id") or "")
+        if not channel_id:
+            return
+
+        if file_ids:
+            if not await claim_mattermost_event(post_id):
+                logger.info("mattermost_ws_ignored_duplicate", post_id=post_id)
+                return
+            handler = asyncio.create_task(
+                handle_attachment_and_reply(
+                    IncomingMessage(
+                        channel_id=channel_id,
+                        team_id=team_id,
+                        post_id=post_id,
+                        text=raw_message,
+                        user_id=user_id,
+                        user_name=user_name,
+                        channel_type=channel_type,
+                        root_id=root_id,
+                        source="websocket",
+                        file_ids=file_ids,
+                    )
+                ),
+                name=f"mm-ws-ingestion-{post_id or 'unknown'}",
+            )
+            self._handlers.add(handler)
+            handler.add_done_callback(self._handlers.discard)
+            return
+
+        # Sprint 2 / escalation closure: a reviewer's reply must never reach
+        # the normal chat pipeline -- it would be answered by the general
+        # agent instead of being attributed to the ticket it resolves. This
+        # has to run before _should_handle, since that gate always accepts
+        # DMs (rule 1) and would otherwise let the reply through untouched.
+        # Never raised past here: a bug in closure must not take the
+        # listener down, same principle as onboarding's arrival handling.
+                # 1. Check Knowledge Candidate commands FIRST (approve KC-X, reject KC-X, list KC)
+        if await knowledge_review.handle_reviewer_reply(
+            mattermost_user_id=user_id, channel_id=channel_id, channel_type=channel_type, text=raw_message
+        ):
+            return
+
+        # 2. Then check Escalation Ticket closure
+        try:
+            closure_result = await escalation_closure.handle_reviewer_reply(
+                mattermost_user_id=user_id,
+                channel_id=str(post.get("channel_id") or ""),
+                channel_type=channel_type,
+                root_id=root_id,
+                text=raw_message,
+            )
+            if closure_result.outcome != escalation_closure.ClosureOutcome.NOT_ESCALATION:
+                return
+        except Exception as e:
+            logger.exception("escalation_closure_check_failed", error=str(e))
+
+        # Proactive standup collection: an attributable DM answer to an open
+        # prompt must never reach the normal chat pipeline, or the general
+        # agent would answer the same standup twice. Runs before _should_handle,
+        # which always accepts DMs. ingest_standup_reply returns NOT_A_STANDUP
+        # for anything that is not ours (an explicit @bot ask, a bare ack, or a
+        # DM with no open prompt), letting it through to the agent unchanged.
+        if settings.STANDUP_ENABLED:
+            try:
+                ingest = await standups.ingest_standup_reply(
+                    mattermost_user_id=user_id,
+                    dm_channel_id=str(post.get("channel_id") or ""),
+                    channel_type=channel_type,
+                    post_id=str(post.get("id") or ""),
+                    root_id=root_id,
+                    text=raw_message,
+                )
+                if ingest.result != standups.ReplyResult.NOT_A_STANDUP:
+                    logger.info(
+                        "mattermost_ws_standup_reply_handled",
+                        result=ingest.result.value,
+                        prompt_id=ingest.prompt.id if ingest.prompt else None,
+                        reply_id=ingest.reply_id,
+                        entry_id=ingest.entry_id,
+                    )
+                    return
+            except Exception as e:
+                logger.exception("standup_reply_ingest_failed", error=str(e))
 
         # Routing decision comes before any expensive work. Most public-channel
         # chatter is discarded here without an API call, let alone a model call.
@@ -491,17 +589,21 @@ class MattermostWebSocketListener:
         if not prompt:
             return
 
-        channel_id = str(post.get("channel_id") or "")
-        post_id = str(post.get("id") or "")
-        if not channel_id:
+        if not await claim_mattermost_event(post_id):
+            logger.info("mattermost_ws_ignored_duplicate", post_id=post_id)
             return
+
+        thread_history = await get_thread_history(root_id, post_id)
 
         self._messages_handled += 1
         logger.info(
             "mattermost_ws_message_received",
             channel_id=channel_id,
             channel_type=channel_type,
+            team_id=team_id,
+            user_id=user_id,
             user_name=user_name,
+            role="learner_default_pending_identity_resolution",
             in_thread=bool(root_id),
             text_length=len(prompt),
         )
@@ -513,6 +615,7 @@ class MattermostWebSocketListener:
             answer_and_reply(
                 IncomingMessage(
                     channel_id=channel_id,
+                    team_id=team_id,
                     post_id=post_id,
                     text=prompt,
                     user_id=user_id,
@@ -522,6 +625,8 @@ class MattermostWebSocketListener:
                     # the reply then stays in that thread even in a DM.
                     root_id=root_id,
                     source="websocket",
+                    file_ids=extract_file_ids(post),
+                    thread_history=thread_history,
                 )
             ),
             name=f"mm-ws-turn-{post_id or 'unknown'}",
