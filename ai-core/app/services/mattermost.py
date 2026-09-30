@@ -100,6 +100,13 @@ class MattermostClient:
             logger.exception("mattermost_get_user_failed", user_id=user_id, error=str(e))
             return None
 
+    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Look up a user by handle."""
+        try:
+            return await self._request("GET", f"/users/username/{username.strip().lstrip('@')}")
+        except Exception as e:
+            logger.info("mattermost_user_username_lookup_miss", username=username, error=str(e))
+            return None
     async def get_file(self, file_id: str) -> bytes:
         """Fetch raw binary content of an uploaded file by its Mattermost file ID."""
         client = self._get_client()
