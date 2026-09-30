@@ -552,9 +552,7 @@ async def list_outstanding_prompts(
         list[DailyStandupPrompt]: Outstanding prompts by local day.
     """
     statement = select(DailyStandupPrompt).where(
-        col(DailyStandupPrompt.status).in_(
-            [StandupPromptStatus.PENDING.value, StandupPromptStatus.DISPATCHED.value]
-        )
+        col(DailyStandupPrompt.status).in_([StandupPromptStatus.PENDING.value, StandupPromptStatus.DISPATCHED.value])
     )
     if dm_channel_id is not None:
         statement = statement.where(DailyStandupPrompt.dm_channel_id == dm_channel_id)

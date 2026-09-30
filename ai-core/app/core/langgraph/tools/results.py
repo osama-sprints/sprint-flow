@@ -1,11 +1,7 @@
 """Uniform tool results and the guard every Sprint 1 tool wears.
 
 A tool returns ``"[CODE] sentence"``: the code is stable for verification
-scripts and logs, the sentence is what the agent relays. The guard turns the
-two domain exceptions into their codes, converts anything unexpected into a
-readable ``SYSTEM_ERROR`` (a tool must never surface a traceback to a person),
-and lets LangGraph's interrupt bubble up untouched — swallowing it would break
-every confirmation.
+scripts and logs, the sentence is what the agent relays.
 """
 
 import asyncio
@@ -98,18 +94,7 @@ def result_code_of(result: str) -> str | None:
 
 
 def _handle(exc: BaseException, tool_name: str) -> str:
-    """Map an exception raised inside a tool to a result string.
-
-    Args:
-        exc: The exception.
-        tool_name: For logs.
-
-    Returns:
-        str: The tool result.
-
-    Raises:
-        GraphBubbleUp: Re-raised so interrupts and parent commands propagate.
-    """
+    """Map an exception raised inside a tool to a result string."""
     if isinstance(exc, GraphBubbleUp):
         raise exc
     if isinstance(exc, AuthorisationRefused):
@@ -123,17 +108,7 @@ def _handle(exc: BaseException, tool_name: str) -> str:
 
 
 def guarded_tool(func: F) -> F:
-    """Wrap a tool body so it never raises past the tool boundary (except to bubble up).
-
-    Works for both ``async def`` and ``def`` bodies and preserves the signature
-    LangChain introspects to build the tool's argument schema.
-
-    Args:
-        func: The tool body.
-
-    Returns:
-        The wrapped body.
-    """
+    """Wrap a tool body so it never raises past the tool boundary."""
     if inspect.iscoroutinefunction(func):
         async_func: Callable[..., Awaitable[Any]] = func
 

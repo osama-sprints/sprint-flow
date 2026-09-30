@@ -108,9 +108,8 @@ API verb actually guarantees:
 | Reschedule | `ceremony_repo.update_ceremony` (new `scheduled_at`) | `update_meet_event` (PATCH by stored id) |
 | Cancel | `ceremony_repo.update_ceremony` (`status=cancelled`) | `cancel_meet_event` (DELETE by stored id) |
 
-All three verified against a live database via the automated verification
-script, and separately confirmed manually through the actual Mattermost bot
-(real Google Meet link created, reschedule and re-listing reflected correctly).
+All three verified against a live database via the automated verification script and confirmed manually through the actual Mattermost bot's
+scheduling/reschedule/list flow — with the Google API mocked at the `build()` boundary, since no live Google Meet call was made.
 
 ## 7. Disabled / Unconfigured Mode
 

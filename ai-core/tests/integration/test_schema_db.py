@@ -26,6 +26,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from app.models import ChannelRole
 from app.models.enums import (
     CeremonyStatus,
     CeremonyTypeKey,
@@ -61,7 +62,10 @@ def run(coro_factory: Callable[[], Awaitable[T]]) -> T:
         finally:
             await database_service.close()
 
-    return asyncio.run(wrapped())
+    return asyncio.run(
+        wrapped(),
+        loop_factory=asyncio.SelectorEventLoop,
+    )
 
 
 def tag() -> str:
@@ -78,10 +82,9 @@ async def make_user(prefix: str, index: int = 0):
         is_superadmin=False,
     )
 
-
-async def cleanup(prefix: str, channel_ids: list[int]) -> None:
+async def cleanup(prefix: str, channel_ids: list[str]) -> None:
     async with session_scope() as s:
-        params = {"p": f"{prefix}%", "channels": channel_ids or [-1]}
+        params = {"p": f"{prefix}%", "channels": channel_ids or ["__none__"]}
         await s.exec(
             text(
                 "DELETE FROM onboarding_steps WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
@@ -91,14 +94,21 @@ async def cleanup(prefix: str, channel_ids: list[int]) -> None:
         await s.exec(text("DELETE FROM escalation_tickets WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
         await s.exec(
             text(
-                "DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE channel_id = ANY(:channels))"
+                "DELETE FROM ceremony_amendments WHERE ceremony_id IN (SELECT id FROM ceremonies WHERE organizer_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p))"
             ),
             params=params,
         )  # type: ignore[call-overload]
-        await s.exec(text("DELETE FROM ceremonies WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
+        await s.exec(
+            text(
+                "DELETE FROM ceremonies WHERE organizer_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
+            ),
+            params=params,
+        )  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM sprints WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
-        await s.exec(text("DELETE FROM channel_memberships WHERE channel_id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
-        await s.exec(text("DELETE FROM channels WHERE id = ANY(:channels)"), params=params)  # type: ignore[call-overload]
+        await s.exec(
+            text("DELETE FROM channel_roles WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"),
+            params=params,
+        )  # type: ignore[call-overload]
         await s.exec(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), params=params)  # type: ignore[call-overload]
 
 
@@ -150,7 +160,7 @@ def test_two_workers_claim_disjoint_steps_with_skip_locked():
     prefix = f"it-claim-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_ids: list[str] = []
         try:
             channel_id = f"Claim-{prefix}"
             channel_ids.append(channel_id)
@@ -189,55 +199,56 @@ def test_concurrent_first_role_assignment_converges_on_one_membership():
     prefix = f"it-mem-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_id = f"Mem-{prefix}"
+        channel_ids: list[str] = [channel_id]
         try:
             user = await make_user(prefix)
-            channel = await channel_repo.create_channel(f"Mem-{prefix}")
             learner = await channel_repo.get_role_by_key(RoleKey.LEARNER)
             lead = await channel_repo.get_role_by_key(RoleKey.TECH_LEAD)
-            assert user.id and channel.id and learner and learner.id and lead and lead.id
-            channel_id = channel.id
-            channel_ids.append(channel_id)
+            assert user.id and learner and learner.id and lead and lead.id
             changes = await asyncio.gather(
                 *(
-                    channel_repo.upsert_membership(
-                        user_id=user.id, channel_id=channel_id, role_id=learner.id, assigned_by_id=None
+                    channel_repo.upsert_channel_role(
+                        user_id=user.id,
+                        team_id="sprints-community",
+                        channel_id=channel_id,
+                        role_id=learner.id,
+                        assigned_by_id=None,
                     )
                     for _ in range(10)
                 )
             )
-            assert len({c.membership.id for c in changes}) == 1
+            assert len({c.role_assignment.id for c in changes}) == 1
             assert sum(1 for c in changes if c.created) == 1
-            change = await channel_repo.upsert_membership(
-                user_id=user.id, channel_id=channel_id, role_id=lead.id, assigned_by_id=None
+            change = await channel_repo.upsert_channel_role(
+                user_id=user.id, team_id="sprints-community", channel_id=channel_id, role_id=lead.id, assigned_by_id=None
             )
             assert change.previous_role_id == learner.id and not change.created
             with pytest.raises(IntegrityError):
                 async with session_scope() as s:
-                    await s.exec(  # type: ignore[call-overload]
-                        text("INSERT INTO channel_memberships (channel_id, user_id, role_id) VALUES (:c, :u, :r)"),
-                        params={"c": channel_id, "u": user.id, "r": learner.id},
-                    )
+                    s.add(ChannelRole(user_id=user.id, team_id="sprints-community", channel_id=channel_id, role_id=learner.id))
+                    await s.flush()
         finally:
             await cleanup(prefix, channel_ids)
 
     run(scenario)
 
 
+
+
 def test_ceremony_overlap_boundaries_and_amendment_trail():
     prefix = f"it-cer-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_id = f"Cer-{prefix}"
+        channel_ids: list[str] = [channel_id]
         try:
             user = await make_user(prefix)
-            channel = await channel_repo.create_channel(f"Cer-{prefix}")
             ctype = await ceremony_repo.get_ceremony_type_by_key(CeremonyTypeKey.DAILY_STANDUP)
-            assert user.id and channel.id and ctype and ctype.id
-            channel_id = channel.id
-            channel_ids.append(channel_id)
+            assert user.id and ctype and ctype.id
             start = datetime(2030, 6, 1, 10, 0, tzinfo=UTC)
             ceremony = await ceremony_repo.create_ceremony(
+                team_id="sprints-community",
                 channel_id=channel_id,
                 ceremony_type_id=ctype.id,
                 organizer_id=user.id,
@@ -251,7 +262,7 @@ def test_ceremony_overlap_boundaries_and_amendment_trail():
             assert [c.id for c in hits] == [ceremony.id]
             assert not await ceremony_repo.find_overlapping_ceremonies(channel_id, start, 30, exclude_id=ceremony.id)
             with pytest.raises(ValueError):
-                await ceremony_repo.update_ceremony(ceremony.id, amended_by_id=user.id, changes={"channel_id": 1})
+                await ceremony_repo.update_ceremony(ceremony.id, amended_by_id=user.id, changes={"team_id": "another-team"})
             with pytest.raises(ValueError):
                 await ceremony_repo.update_ceremony(
                     ceremony.id, amended_by_id=user.id, changes={"scheduled_at": datetime(2030, 6, 1, 11)}
@@ -274,13 +285,11 @@ def test_concurrent_escalation_tickets_get_unique_references():
     prefix = f"it-esc-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_id = f"Esc-{prefix}"
+        channel_ids: list[str] = [channel_id]
         try:
             user = await make_user(prefix)
-            channel = await channel_repo.create_channel(f"Esc-{prefix}")
-            assert user.id and channel.id
-            channel_id = channel.id
-            channel_ids.append(channel_id)
+            assert user.id
             tickets = await asyncio.gather(
                 *(
                     escalation_repo.create_escalation_ticket(
@@ -288,7 +297,6 @@ def test_concurrent_escalation_tickets_get_unique_references():
                         learner_id=user.id,
                         ticket_type=EscalationType.TECH,
                         question=f"q{i}",
-                        learner_channel_id="c",
                         learner_thread_id=f"t{i}",
                     )
                     for i in range(10)
@@ -309,7 +317,7 @@ def test_sprint_overlap_boundaries():
     prefix = f"it-spr-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_ids: list[str] = []
         try:
             channel_id = f"Spr-{prefix}"
             channel_ids.append(channel_id)
@@ -330,7 +338,7 @@ def test_sprint_names_are_unique_case_insensitively():
     prefix = f"it-spr-ci-{tag()}"
 
     async def scenario():
-        channel_ids: list[int] = []
+        channel_ids: list[str] = []
         try:
             channel_id = f"Spr-{prefix}"
             channel_ids.append(channel_id)

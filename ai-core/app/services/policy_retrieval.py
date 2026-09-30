@@ -1,14 +1,14 @@
+# ai-core/app/services/policy_retrieval.py
 from typing import Any, Dict, List, Tuple
 from app.core.logging import logger
 from app.services.document_ingestion.embeddings import generate_embeddings
 
 try:
-    # Import the PolicyVectorStore class from your vector_store.py
     from app.services.document_ingestion.vector_store import PolicyVectorStore
 except ImportError:
     PolicyVectorStore = None
 
-DEFAULT_SIMILARITY_THRESHOLD = 0.50
+DEFAULT_SIMILARITY_THRESHOLD = 0.30
 
 
 async def get_grounded_answer_or_refusal(

@@ -10,9 +10,9 @@ What is proved, in order (one PASS/FAIL line each, non-zero exit on any failure)
      second greeting: the DM still holds exactly one bot post 30 s later.
   4. The follow-up survives a restart: its due time is moved to now, ai-core is restarted,
      and the DM then holds exactly TWO bot posts.
-  5. An inactive cohort receives nothing: a cohort is created, the user added as a
-     learner, the cohort deactivated and an orientation enqueued; the post count stays at two
-     and the row stays pending.
+5. A deactivated membership receives nothing: the user is given a learner role in a
+      channel, the membership is deactivated and an orientation enqueued; the post count stays
+      at two and the row stays pending.
   6. The bot never reacts to its own DMs: the count is stable for 20 s.
 
 The actual DM post count is printed at every stage.
@@ -34,7 +34,7 @@ POLL = int(os.environ.get("ONBOARDING_POLL_INTERVAL_SECONDS", "30"))
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROBE = os.path.join(ROOT, "scripts", "_onboarding_probe.py")
 STAMP = str(int(time.time()))
-COHORT_NAME = f"verify-onb-{STAMP}"
+CHANNEL_ID = f"verify-onb-channel-{STAMP}"
 
 checks: list[tuple[str, bool]] = []
 
@@ -169,17 +169,17 @@ check(
     follow_up.get("status") == "sent" and bool(follow_up.get("mattermost_post_id")),
 )
 
-print(f"==> [5] Inactive cohort '{COHORT_NAME}': learner membership, kill switch on, orientation enqueued")
-inactive = probe_json("inactive-cohort", USER_ID, COHORT_NAME)
+print(f"==> [5] Deactivated membership in '{CHANNEL_ID}': learner role, kill switch on, orientation enqueued")
+inactive = probe_json("inactive-cohort", USER_ID, CHANNEL_ID)
 print(f"    probe: {inactive}")
 time.sleep(2 * POLL + 10)
 count = bot_post_count()
 print(f"    after {2 * POLL + 10}s: bot posts in DM = {count}")
-check("inactive cohort: no onboarding DM was sent", count == 2)
+check("deactivated membership: no onboarding DM was sent", count == 2)
 steps = probe_json("steps", USER_ID).get("steps", [])
 orientation = next((s for s in steps if s["kind"] == "orientation"), {})
 check(
-    "inactive cohort: orientation row still pending, unclaimed",
+    "deactivated membership: orientation row still pending, unclaimed",
     orientation.get("status") == "pending" and not orientation.get("claimed_by"),
 )
 
@@ -189,7 +189,7 @@ count = bot_post_count()
 print(f"    after 20s: bot posts in DM = {count}")
 check("bot never reacted to its own DMs (count stable)", count == 2)
 
-probe("cleanup", USER_ID, COHORT_NAME)
+probe("cleanup", USER_ID, CHANNEL_ID)
 
 print()
 print("=" * 80)

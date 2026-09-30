@@ -2,15 +2,12 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.models.announcement import Announcement
 from app.models.enums import AnnouncementOutcome
-from app.services.announcements import (
-    confirm_and_dispatch_announcement,
-    cancel_announcement
-)
+from app.services.announcements import confirm_and_dispatch_announcement, cancel_announcement
 
 
 @pytest.fixture
 def anyio_backend():
-    return 'asyncio'
+    return "asyncio"
 
 
 @pytest.mark.anyio
@@ -18,7 +15,7 @@ async def test_dispatch_success_stores_post_id():
     session = AsyncMock()
 
     mock_announcement = MagicMock(spec=Announcement)
-    mock_announcement.cohort_id = 1
+    mock_announcement.channel_id = "chan-1"
     mock_announcement.resolved_channel_id = "valid_channel"
     mock_announcement.exact_text = "Hello team!"
     session.get = AsyncMock(return_value=mock_announcement)
@@ -35,7 +32,7 @@ async def test_dispatch_success_stores_post_id():
     with patch("app.services.announcements.send_to_mattermost", new_callable=AsyncMock) as mock_send:
         mock_send.return_value = "mm_post_12345"
 
-        res = await confirm_and_dispatch_announcement(session, announcement_id=10)
+        res = await confirm_and_dispatch_announcement(session, announcement_id=10, confirming_user_id=9)
 
         assert res["dispatched"] is True
         assert res["outcome"] == AnnouncementOutcome.SENT
@@ -48,7 +45,7 @@ async def test_dispatch_failure_logs_failed_outcome():
     session = AsyncMock()
 
     mock_announcement = MagicMock(spec=Announcement)
-    mock_announcement.cohort_id = 1
+    mock_announcement.channel_id = "chan-1"
     mock_announcement.resolved_channel_id = "invalid_channel"
     mock_announcement.exact_text = "Hello team!"
     session.get = AsyncMock(return_value=mock_announcement)
@@ -63,7 +60,7 @@ async def test_dispatch_failure_logs_failed_outcome():
     session.commit = AsyncMock()
 
     with patch("app.services.announcements.send_to_mattermost", side_effect=ValueError("Channel not found")):
-        res = await confirm_and_dispatch_announcement(session, announcement_id=11)
+        res = await confirm_and_dispatch_announcement(session, announcement_id=11, confirming_user_id=9)
 
         assert res["dispatched"] is False
         assert res["status"] == "failed"

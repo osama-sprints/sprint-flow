@@ -125,7 +125,7 @@ ignore = "migrations"
 
 [tool.ruff]
 line-length = 119
-exclude = ["migrations", "*.ipynb", "venv"]
+exclude = ["migrations", "*.ipynb", "venv", ".venv"]
 
 [tool.ruff.lint]
 # Enable flake8-bugbear (`B`) rules and docstring (`D`) rules

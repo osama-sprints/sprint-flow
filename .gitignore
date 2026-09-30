@@ -35,3 +35,6 @@ tasks/
 
 # Agent worktrees created during development sessions
 .claude/worktrees/
+
+# Freebuff agent working state (not project tooling)
+.freebuff/

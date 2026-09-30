@@ -19,8 +19,22 @@ import sys
 import time
 import urllib.request
 
+# Load .env into os.environ if present
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+if os.path.exists(env_path):
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, val = line.split("=", 1)
+                os.environ.setdefault(key.strip(), val.strip())
+
 API = f"http://localhost:{os.environ.get('MATTERMOST_HOST_PORT', '8065')}/api/v4"
-BOT = os.environ["MATTERMOST_BOT_USERNAME"]
+BOT = os.environ.get("MATTERMOST_BOT_USERNAME", "sprintflow-assistant")
+MM_ADMIN_USERNAME = os.environ.get("MM_ADMIN_USERNAME", "admin")
+MM_ADMIN_PASSWORD = os.environ.get("MM_ADMIN_PASSWORD", "admin")
+MM_TEAM_NAME = os.environ.get("MM_TEAM_NAME", "sprints-community")
+MM_BOT_CHANNEL = os.environ.get("MM_BOT_CHANNEL", "town-square")
 
 
 def req(method, path, body=None, token=None):
@@ -37,12 +51,12 @@ def req(method, path, body=None, token=None):
 _, headers = req(
     "POST",
     "/users/login",
-    {"login_id": os.environ["MM_ADMIN_USERNAME"], "password": os.environ["MM_ADMIN_PASSWORD"]},
+    {"login_id": MM_ADMIN_USERNAME, "password": MM_ADMIN_PASSWORD},
 )
 TOKEN = headers["Token"]
 bot, _ = req("GET", "/users/username/" + BOT, token=TOKEN)
-team, _ = req("GET", "/teams/name/" + os.environ["MM_TEAM_NAME"], token=TOKEN)
-channel, _ = req("GET", f"/teams/{team['id']}/channels/name/{os.environ['MM_BOT_CHANNEL']}", token=TOKEN)
+team, _ = req("GET", "/teams/name/" + MM_TEAM_NAME, token=TOKEN)
+channel, _ = req("GET", f"/teams/{team['id']}/channels/name/{MM_BOT_CHANNEL}", token=TOKEN)
 CH = channel["id"]
 
 

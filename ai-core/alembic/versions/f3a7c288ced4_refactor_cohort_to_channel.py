@@ -139,7 +139,7 @@ def downgrade() -> None:
     op.create_index(op.f("ux_cohorts_name_lower"), "cohorts", [sa.literal_column("lower(name::text)")], unique=True)
     op.create_index(op.f("ix_cohorts_mattermost_team_id"), "cohorts", ["mattermost_team_id"], unique=False)
     op.create_index(op.f("ix_cohorts_is_active"), "cohorts", ["is_active"], unique=False)
-    op.add_column("sprints", sa.Column("cohort_id", sa.INTEGER(), autoincrement=False, nullable=False))
+    op.add_column("sprints", sa.Column("cohort_id", sa.INTEGER(), autoincrement=False, nullable=True))
     op.create_foreign_key(op.f("fk_sprints_cohort_id_cohorts"), "sprints", "cohorts", ["cohort_id"], ["id"])
     op.drop_index("ux_sprints_channel_name_lower", table_name="sprints")
     op.drop_constraint("uq_sprints_channel_name", "sprints", type_="unique")
@@ -173,9 +173,9 @@ def downgrade() -> None:
     op.drop_column("onboarding_steps", "team_id")
     op.add_column(
         "escalation_tickets",
-        sa.Column("learner_channel_id", sa.VARCHAR(length=64), autoincrement=False, nullable=False),
+        sa.Column("learner_channel_id", sa.VARCHAR(length=64), autoincrement=False, nullable=True),
     )
-    op.add_column("escalation_tickets", sa.Column("cohort_id", sa.INTEGER(), autoincrement=False, nullable=False))
+    op.add_column("escalation_tickets", sa.Column("cohort_id", sa.INTEGER(), autoincrement=False, nullable=True))
     op.add_column(
         "escalation_tickets",
         sa.Column("resolved_at", postgresql.TIMESTAMP(timezone=True), autoincrement=False, nullable=True),

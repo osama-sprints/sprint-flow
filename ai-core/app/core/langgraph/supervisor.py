@@ -55,13 +55,31 @@ def _message_text(message: Any) -> Optional[str]:
     return str(text) if text else None
 
 
+def _message_role(message: Any) -> Optional[str]:
+    """Normalise a graph message into its role name.
+
+    Both message shapes are accepted because the graph state carries them
+    interchangeably: LangChain message objects (``.type``) and plain dicts
+    (``{"role": ...}`` in the OpenAI spelling, where an assistant turn is
+    ``"assistant"`` and a user turn is ``"user"``). The user spelling is
+    mapped onto LangChain's ``human`` so role checks downstream are uniform.
+    """
+    if message is None:
+        return None
+    role = getattr(message, "type", None)
+    if role is None and isinstance(message, dict):
+        role = message.get("type") or message.get("role")
+    if role == "user":
+        return "human"
+    return str(role) if role else None
+
+
 def _last_human_text(state: GraphState) -> Optional[str]:
     """Pull the text of the most recent human message out of the graph state."""
     if not state.messages:
         return None
     for message in reversed(state.messages):
-        role = getattr(message, "type", None) or (message.get("type") if isinstance(message, dict) else None)
-        if role == "human":
+        if _message_role(message) == "human":
             return _message_text(message)
     return _message_text(state.messages[-1])
 
@@ -71,7 +89,7 @@ def _routing_text_for_state(state: GraphState) -> str:
     human_texts: list[str] = []
     all_messages: list[tuple[str, str]] = []
     for message in state.messages:
-        role = getattr(message, "type", None) or (message.get("type") if isinstance(message, dict) else None)
+        role = _message_role(message)
         text = _message_text(message)
         if not text:
             continue
@@ -84,21 +102,29 @@ def _routing_text_for_state(state: GraphState) -> str:
 
     last = human_texts[-1]
     prior = human_texts[-2] if len(human_texts) >= 2 else ""
-    if re.search(r"\bingested\b.*(?:file|document|pdf|docx|txt)|\b(?:uploaded|attached)\s+(?:document|file)\b", prior, re.IGNORECASE):
+    if re.search(
+        r"\bingested\b.*(?:file|document|pdf|docx|txt)|\b(?:uploaded|attached)\s+(?:document|file)\b",
+        prior,
+        re.IGNORECASE,
+    ):
         return f"{prior} {last}"
     active_prompt = next(
         (message for role, message in reversed(all_messages[:-1]) if role in {"ai", "assistant"}),
         "",
     )
-    if len(human_texts) >= 2 and re.search(
-        r"\b(?:meeting|metting|ceremon(?:y|ies)|schedul(?:e|ing)|stand-?ups?|planning|review|"
-        r"retros?(?:pective)?|q\s*&?\s*a|book)\b",
-        prior,
-        re.IGNORECASE,
-    ) and re.search(
-        r"\b(?:missing|duration|channel|when|date|time|schedule|meeting|ceremony|confirm|yes|no)\b",
-        active_prompt,
-        re.IGNORECASE,
+    if (
+        len(human_texts) >= 2
+        and re.search(
+            r"\b(?:meeting|metting|ceremon(?:y|ies)|schedul(?:e|ing)|stand-?ups?|planning|review|"
+            r"retros?(?:pective)?|q\s*&?\s*a|book)\b",
+            prior,
+            re.IGNORECASE,
+        )
+        and re.search(
+            r"\b(?:missing|duration|channel|when|date|time|schedule|meeting|ceremony|confirm|yes|no)\b",
+            active_prompt,
+            re.IGNORECASE,
+        )
     ):
         return f"{prior} {last}"
     return last

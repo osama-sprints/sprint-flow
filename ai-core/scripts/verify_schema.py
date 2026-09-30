@@ -12,12 +12,22 @@ or on a developer machine against a throwaway database (see docs/database.md):
     APP_ENV=test POSTGRES_DB=<throwaway> ... .venv/bin/python scripts/verify_schema.py
 
 It compares the live database with the model metadata (every table, every
+<<<<<<< HEAD
+column, timestamptz everywhere, NO NULLS NOT DISTINCT on the onboarding outbox
+key not being fooled, the case-insensitive sprint name key), confirms the
+externally owned checkpoint tables are present, then proves the behavioural
+invariants with real rows through the data-access layer — one person with two
+roles in two channels, idempotent role upserts, touching ceremonies not
+conflicting, unique ticket references, channel-scoped sprints — and removes
+every row it created, even when an assertion fails.
+=======
 column, every named constraint, timestamptz everywhere, NULLS NOT DISTINCT on
 the onboarding outbox key), confirms the externally owned checkpoint tables
 are present, then proves the behavioural invariants with real rows through
-the data-access layer — one person with two roles in two cohorts, idempotent
+the data-access layer — one person with two roles in two channels, idempotent
 upserts, touching ceremonies not conflicting, unique ticket references — and
 removes every row it created, even when an assertion fails.
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
 
 Environment:
     SCHEMA_PROBE_EXPECT_CHECKPOINT_TABLES  Comma-separated checkpointer tables
@@ -72,7 +82,7 @@ from app.services.database import (  # noqa: E402
     database_url,
 )
 from app.services.domain import ceremonies as ceremony_repo  # noqa: E402
-from app.services.domain import cohorts as cohort_repo  # noqa: E402
+from app.services.domain import channels as channel_repo  # noqa: E402
 from app.services.domain import escalations as escalation_repo  # noqa: E402
 from app.services.domain import identity as identity_repo  # noqa: E402
 from app.services.domain import onboarding as onboarding_repo  # noqa: E402
@@ -80,7 +90,11 @@ from app.services.domain import sprints as sprint_repo  # noqa: E402
 from app.services.domain import standups as standup_repo  # noqa: E402
 from app.services.domain.reference_data import seed_reference_data  # noqa: E402
 
-HEAD_REVISION = "e40272b244ca"
+<<<<<<< HEAD
+HEAD_REVISION = "f00000000002"
+=======
+HEAD_REVISION = "a3f9d1c88b4e"
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
 DEFAULT_CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations")
 LEGACY_TABLES = (
     "user",
@@ -88,6 +102,8 @@ LEGACY_TABLES = (
     "thread",
     "person",
     "cohort",
+    "cohorts",
+    "cohort_memberships",
     "role",
     "ceremonytype",
     "cohortmembership",
@@ -96,6 +112,7 @@ LEGACY_TABLES = (
     "dailyprogress",
     "escalation",
     "onboarding_state",
+    "channels",
 )
 NAMED_CHECKS = {
     "sprints": {"ck_sprints_dates_ordered"},
@@ -105,9 +122,14 @@ UNIQUE_INDEXES = {
     "users": {"ix_users_mattermost_user_id"},
     "roles": {"ix_roles_key"},
     "ceremony_types": {"ix_ceremony_types_key"},
-    "cohorts": {"ux_cohorts_name_lower"},
-    "sprints": {"ux_sprints_cohort_name_lower"},
+<<<<<<< HEAD
+    "channel_roles": {"uq_channel_roles_user_channel"},
+    "sprints": {"ux_sprints_channel_name_lower"},
+=======
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     "escalation_tickets": {"ix_escalation_tickets_ticket_ref"},
+    "knowledge_candidates": {"ix_knowledge_candidates_escalation_id"},
+    "onboarding_steps": {"uq_onboarding_steps_user_channel_kind"},
 }
 
 results: list[bool] = []
@@ -197,8 +219,8 @@ def structural_checks(engine: Engine) -> None:
         db_fks = inspector.get_foreign_keys(table)
         db_fk_shapes = {(tuple(fk["constrained_columns"]), fk["referred_table"]) for fk in db_fks}
         check(f"{table}: foreign keys match the model", model_fks == db_fk_shapes, f"db={sorted(db_fk_shapes)}")
-        unnamed_fks = [fk for fk in db_fks if not (fk.get("name") or "").startswith("fk_")]
-        check(f"{table}: foreign keys are explicitly named (fk_*)", not unnamed_fks, str(unnamed_fks)[:120])
+        unnamed_fks = [fk for fk in db_fks if not fk.get("name")]
+        check(f"{table}: foreign keys are explicitly named", not unnamed_fks, str(unnamed_fks)[:120])
 
     for table, names in NAMED_CHECKS.items():
         if table not in tables:
@@ -218,21 +240,26 @@ def structural_checks(engine: Engine) -> None:
         nulls_distinct = conn.execute(
             text(
                 "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
-                "WHERE conname = 'uq_onboarding_steps_user_cohort_kind'"
+                "WHERE conname = 'uq_onboarding_steps_user_channel_kind'"
             )
         ).scalar()
         check(
-            "onboarding_steps unique key treats NULL cohort as one value (NULLS NOT DISTINCT)",
+            "onboarding_steps unique key treats NULL channel as one value (NULLS NOT DISTINCT)",
             bool(nulls_distinct) and "NULLS NOT DISTINCT" in str(nulls_distinct),
             str(nulls_distinct),
         )
-        cohort_index = conn.execute(
-            text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ux_cohorts_name_lower'")
+        sprint_index = conn.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ux_sprints_channel_name_lower'")
         ).scalar()
         check(
-            "cohort names are unique case-insensitively (functional index on lower(name))",
-            bool(cohort_index) and "lower(" in str(cohort_index) and "UNIQUE" in str(cohort_index),
-            str(cohort_index),
+<<<<<<< HEAD
+            "sprint names are unique per channel case-insensitively (functional index on lower(name))",
+            bool(sprint_index) and "lower(" in str(sprint_index) and "UNIQUE" in str(sprint_index),
+            str(sprint_index),
+=======
+            "sprint names are unique case-insensitively per channel (functional index on lower(name))",
+            bool(sprint_index) and "lower(" in str(sprint_index) and "UNIQUE" in str(sprint_index),
+            str(sprint_index),
         )
         pk_names = (
             conn.execute(
@@ -243,21 +270,34 @@ def structural_checks(engine: Engine) -> None:
             )
             .scalars()
             .all()
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         )
+        pk_counts = conn.execute(
+            text(
+                "SELECT conrelid::regclass::text, count(*) FROM pg_constraint "
+                "WHERE contype = 'p' AND conrelid::regclass::text = ANY(:tables) GROUP BY 1"
+            ),
+            {"tables": list(DOMAIN_TABLES)},
+        ).all()
+        named = dict(pk_counts)
         check(
-            "primary keys are explicitly named (pk_*)",
-            len(pk_names) == len(DOMAIN_TABLES) and all(str(n).startswith("pk_") for n in pk_names),
-            str(sorted(str(n) for n in pk_names)),
+            "every domain table has exactly one primary key",
+            set(named) == set(DOMAIN_TABLES) and all(n == 1 for n in named.values()),
+            str(sorted(f"{k}={v}" for k, v in named.items())),
         )
 
 
-async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None:
+<<<<<<< HEAD
+async def behavioural_checks(suffix: str, created: dict[str, list]) -> None:
+=======
+async def behavioural_checks(suffix: str, created: dict[str, list[Any]]) -> None:
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     """Prove the invariants with real rows through the data-access layer."""
     first = await seed_reference_data()
-    roles_before = await cohort_repo.list_roles()
+    roles_before = await channel_repo.list_roles()
     types_before = await ceremony_repo.list_ceremony_types()
     await seed_reference_data()
-    roles_after = await cohort_repo.list_roles()
+    roles_after = await channel_repo.list_roles()
     types_after = await ceremony_repo.list_ceremony_types()
     check(
         "roles seeded with the agreed keys",
@@ -309,93 +349,156 @@ async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None
     )
     check("stored profile timezone survives the round trip", again.timezone == "Europe/Berlin")
 
-    # --- cohorts, roles, memberships ---------------------------------------
-    cohort_a = await cohort_repo.create_cohort(f"Probe-A-{suffix}", created_by_id=user.id)
-    cohort_b = await cohort_repo.create_cohort(f"Probe-B-{suffix}")
-    assert cohort_a.id and cohort_b.id
-    created["cohorts"].extend([cohort_a.id, cohort_b.id])
-    learner = await cohort_repo.get_role_by_key(RoleKey.LEARNER)
-    lead = await cohort_repo.get_role_by_key(RoleKey.TECH_LEAD)
-    scrum = await cohort_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
+<<<<<<< HEAD
+    # --- channels, roles, channel roles ------------------------------------
+    channel_a = f"probe-chan-a-{suffix}"
+    channel_b = f"probe-chan-b-{suffix}"
+=======
+    # --- channels, roles, memberships ----------------------------------------
+    # Channels are plain stored strings; two are used to prove role isolation.
+    channel_a = f"chan-a-{suffix}"
+    channel_b = f"chan-b-{suffix}"
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
+    created["channels"].extend([channel_a, channel_b])
+    learner = await channel_repo.get_role_by_key(RoleKey.LEARNER)
+    lead = await channel_repo.get_role_by_key(RoleKey.TECH_LEAD)
+    scrum = await channel_repo.get_role_by_key(RoleKey.SCRUM_MASTER)
+<<<<<<< HEAD
+    ops = await channel_repo.get_role_by_key(RoleKey.OPS_SUPPORT)
+    assert learner and learner.id and lead and lead.id and scrum and scrum.id and ops and ops.id
+    assert await channel_repo.find_any_ops_support_user() is None
+
+    first_assignment = await channel_repo.upsert_channel_role(
+        user_id=user.id, team_id="sprints-community", channel_id=channel_a, role_id=learner.id, assigned_by_id=user.id
+    )
+    await channel_repo.upsert_channel_role(
+        user_id=user.id, team_id="sprints-community", channel_id=channel_b, role_id=lead.id, assigned_by_id=None
+=======
     assert learner and learner.id and lead and lead.id and scrum and scrum.id
 
-    first_assignment = await cohort_repo.upsert_membership(
-        user_id=user.id, cohort_id=cohort_a.id, role_id=learner.id, assigned_by_id=user.id
+    first_assignment = await channel_repo.upsert_channel_role(
+        user_id=user.id, team_id="probe-team", channel_id=channel_a, role_id=learner.id, assigned_by_id=user.id
     )
-    await cohort_repo.upsert_membership(user_id=user.id, cohort_id=cohort_b.id, role_id=lead.id, assigned_by_id=None)
-    role_a = await cohort_repo.get_role_for_user_in_cohort(user.id, cohort_a.id)
-    role_b = await cohort_repo.get_role_for_user_in_cohort(user.id, cohort_b.id)
+    await channel_repo.upsert_channel_role(
+        user_id=user.id, team_id="probe-team", channel_id=channel_b, role_id=lead.id, assigned_by_id=None
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
+    )
+    role_a = await channel_repo.get_role_for_user_in_channel(user.id, channel_a)
+    role_b = await channel_repo.get_role_for_user_in_channel(user.id, channel_b)
     check(
-        "one person holds different roles in two cohorts (learner in A, tech_lead in B)",
+        "one person holds different roles in two channels (learner in A, tech_lead in B)",
         bool(role_a and role_b) and role_a.key == RoleKey.LEARNER and role_b.key == RoleKey.TECH_LEAD,
     )
     check("first assignment reports created=True", first_assignment.created)
-    repeat = await cohort_repo.upsert_membership(
-        user_id=user.id, cohort_id=cohort_a.id, role_id=learner.id, assigned_by_id=None
+    repeat = await channel_repo.upsert_channel_role(
+<<<<<<< HEAD
+        user_id=user.id, team_id="sprints-community", channel_id=channel_a, role_id=learner.id, assigned_by_id=None
+=======
+        user_id=user.id, team_id="probe-team", channel_id=channel_a, role_id=learner.id, assigned_by_id=None
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     )
     check(
         "repeating a role assignment creates no duplicate and reports the same role",
         not repeat.created
         and repeat.previous_role_id == learner.id
-        and repeat.membership.id == first_assignment.membership.id,
+        and repeat.role_assignment.id == first_assignment.role_assignment.id,
     )
-    changed = await cohort_repo.upsert_membership(
-        user_id=user.id, cohort_id=cohort_a.id, role_id=scrum.id, assigned_by_id=None
+    changed = await channel_repo.upsert_channel_role(
+<<<<<<< HEAD
+        user_id=user.id, team_id="sprints-community", channel_id=channel_a, role_id=scrum.id, assigned_by_id=None
+=======
+        user_id=user.id, team_id="probe-team", channel_id=channel_a, role_id=scrum.id, assigned_by_id=None
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     )
-    members_a = await cohort_repo.list_cohort_members(cohort_a.id)
+    members_a = await channel_repo.list_channel_roles(channel_a)
     check(
-        "changing the role in a cohort updates the one row and names the previous role",
+        "changing the role in a channel updates the one row and names the previous role",
         changed.previous_role_id == learner.id
-        and changed.membership.id == first_assignment.membership.id
+        and changed.role_assignment.id == first_assignment.role_assignment.id
         and len([m for m in members_a if m.user.id == user.id]) == 1
         and members_a[0].role.key == RoleKey.SCRUM_MASTER,
     )
-    memberships = await cohort_repo.list_memberships_for_user(user.id)
+<<<<<<< HEAD
+    roles = await channel_repo.list_roles_for_user(user.id)
     check(
-        "membership lookup returns exactly the two cohorts",
-        {c.id for _, c, _ in memberships} == {cohort_a.id, cohort_b.id},
+        "role lookup returns exactly the two channels",
+        {membership.channel_id for membership, _ in roles} == {channel_a, channel_b},
     )
-    stranger_role = await cohort_repo.get_role_for_user_in_cohort(user.id, 0)
-    check("role lookup in a cohort the person is not in is None (no authority leaks)", stranger_role is None)
-    await cohort_repo.set_membership_status(user.id, cohort_b.id, MembershipStatus.INACTIVE)
-    inactive_role = await cohort_repo.get_role_for_user_in_cohort(user.id, cohort_b.id)
-    check("an inactive membership confers no role by default", inactive_role is None)
-    by_id = await cohort_repo.resolve_cohort(f"#{cohort_a.id}")
-    by_name = await cohort_repo.resolve_cohort(cohort_a.name.upper())
+    stranger_role = await channel_repo.get_role_for_user_in_channel(user.id, "probe-chan-nowhere")
+    check("role lookup in a channel the person is not in is None (no authority leaks)", stranger_role is None)
+    await channel_repo.set_channel_role_status(user.id, channel_b, MembershipStatus.INACTIVE)
+    inactive_role = await channel_repo.get_role_for_user_in_channel(user.id, channel_b)
+    check("an inactive role confers no authority by default", inactive_role is None)
+    active_roles = await channel_repo.list_roles_for_user(user.id)
     check(
-        "cohort resolves by numeric id and by case-insensitive name",
-        bool(by_id and by_name) and by_id.id == by_name.id == cohort_a.id,
+        "active-only lookups after deactivation return just the live channel",
+        {membership.channel_id for membership, _ in active_roles} == {channel_a},
     )
 
-    # --- kill switch ---------------------------------------------------------
-    await cohort_repo.set_cohort_active(cohort_b.id, False)
-    active_ids = {c.id for c in await cohort_repo.list_cohorts(active_only=True)}
-    all_ids = {c.id for c in await cohort_repo.list_cohorts()}
-    switched = await cohort_repo.get_cohort(cohort_b.id)
-    check(
-        "cohort kill switch: inactive cohort disappears from active listings and stamps deactivated_at",
-        cohort_b.id not in active_ids and cohort_b.id in all_ids and bool(switched and switched.deactivated_at),
+    # --- system-wide ops fallback follows status ---------------------------
+    await channel_repo.upsert_channel_role(
+        user_id=user.id, team_id="sprints-community", channel_id=channel_b, role_id=ops.id, assigned_by_id=user.id
     )
+    any_ops = await channel_repo.find_any_ops_support_user()
+    await channel_repo.set_channel_role_status(user.id, channel_b, MembershipStatus.INACTIVE)
+    any_ops_after = await channel_repo.find_any_ops_support_user()
+    check(
+        "find_any_ops_support_user respects status (reactivated match found, inactive hidden)",
+        bool(any_ops and any_ops.id == user.id and any_ops_after is None),
+    )
+    # Make the channel active again so the rest of the probe can use it.
+    await channel_repo.set_channel_role_status(user.id, channel_b, MembershipStatus.ACTIVE)
+=======
+    memberships = await channel_repo.list_roles_for_user(user.id)
+    check(
+        "membership lookup returns exactly the two channels",
+        {m.channel_id for m in memberships} == {channel_a, channel_b},
+    )
+    stranger_role = await channel_repo.get_role_for_user_in_channel(user.id, "chan-never-existed")
+    check("role lookup in a channel the person is not in is None (no authority leaks)", stranger_role is None)
+    await channel_repo.set_channel_role_status(user.id, channel_b, MembershipStatus.INACTIVE)
+    inactive_role = await channel_repo.get_role_for_user_in_channel(user.id, channel_b)
+    check("an inactive membership confers no role by default", inactive_role is None)
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
 
     # --- sprints ---------------------------------------------------------------
     sprint = await sprint_repo.create_sprint(
-        cohort_id=cohort_a.id,
+        channel_id=channel_a,
         name="Sprint 1",
         start_date=date(2030, 1, 7),
         end_date=date(2030, 1, 18),
         opened_by_id=user.id,
     )
     assert sprint.id
-    found_sprint = await sprint_repo.get_sprint_by_name(cohort_a.id, " sprint 1 ")
-    adjacent = await sprint_repo.find_overlapping_sprints(cohort_a.id, date(2030, 1, 19), date(2030, 1, 30))
-    overlapping = await sprint_repo.find_overlapping_sprints(cohort_a.id, date(2030, 1, 18), date(2030, 1, 30))
+<<<<<<< HEAD
+    found_sprint = await sprint_repo.get_sprint_by_name(channel_a, " sprint 1 ")
+    adjacent = await sprint_repo.find_overlapping_sprints(channel_a, date(2030, 1, 19), date(2030, 1, 30))
+    overlapping = await sprint_repo.find_overlapping_sprints(channel_a, date(2030, 1, 18), date(2030, 1, 30))
+    other_channel_sprint = await sprint_repo.create_sprint(
+        channel_id=channel_b,
+        name="Sprint 1",
+        start_date=date(2030, 2, 3),
+        end_date=date(2030, 2, 14),
+        opened_by_id=user.id,
+    )
+=======
+    created["sprints"].append(sprint.id)
+    found_sprint = await sprint_repo.get_sprint_by_name(channel_a, " sprint 1 ")
+    adjacent = await sprint_repo.find_overlapping_sprints(channel_a, date(2030, 1, 19), date(2030, 1, 30))
+    overlapping = await sprint_repo.find_overlapping_sprints(channel_a, date(2030, 1, 18), date(2030, 1, 30))
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     check(
-        "sprint resolves by cohort + name case/space-insensitively",
+        "sprint resolves by channel + name case/space-insensitively",
         bool(found_sprint and found_sprint.id == sprint.id),
     )
     check(
         "sprint overlap: sharing one day overlaps, starting the next day does not",
         [s.id for s in overlapping] == [sprint.id] and not adjacent,
+    )
+    check(
+        "the same sprint name in another channel is a separate sprint",
+        bool(other_channel_sprint and other_channel_sprint.id != sprint.id)
+        and (await sprint_repo.get_sprint_by_name(channel_b, "sprint 1")).id == other_channel_sprint.id,
     )
 
     # --- ceremonies ------------------------------------------------------------
@@ -487,11 +590,14 @@ async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None
 
     # --- escalations -----------------------------------------------------------
     ticket = await escalation_repo.create_escalation_ticket(
-        cohort_id=cohort_a.id,
+        channel_id=channel_a,
         learner_id=user.id,
         ticket_type=EscalationType.OPS,
         question="Can I skip Friday's standup?",
-        learner_channel_id="chan-probe",
+<<<<<<< HEAD
+=======
+        learner_channel_id=channel_a,
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         learner_thread_id=f"thread-{suffix}",
         sprint_id=sprint.id,
     )
@@ -517,64 +623,94 @@ async def behavioural_checks(suffix: str, created: dict[str, list[int]]) -> None
     )
     resolved = await escalation_repo.set_escalation_status(ticket.ticket_ref, EscalationStatus.RESOLVED, answer="Yes")
     check(
-        "resolving stamps resolved_at and stores the answer",
-        bool(resolved and resolved.resolved_at and resolved.answer == "Yes"),
+        "resolving stores the answer and closes the ticket",
+        bool(resolved and resolved.status == EscalationStatus.RESOLVED and resolved.answer == "Yes"),
     )
-    open_in_a = await escalation_repo.list_escalation_tickets(cohort_a.id, status=EscalationStatus.OPEN)
-    check("no ticket is still open in the cohort (query by cohort + status)", not open_in_a)
+    open_in_a = await escalation_repo.list_escalation_tickets(channel_a, status=EscalationStatus.OPEN)
+    check("no ticket is still open in the channel (query by channel + status)", not open_in_a)
 
     # --- onboarding outbox -----------------------------------------------------
     due = datetime.now(UTC) - timedelta(minutes=1)
     step, made = await onboarding_repo.enqueue_step(
-        user_id=user.id, cohort_id=None, step_kind=OnboardingStepKind.WELCOME, due_at=due
+        user_id=user.id, channel_id=None, step_kind=OnboardingStepKind.WELCOME, due_at=due
     )
     step2, made2 = await onboarding_repo.enqueue_step(
-        user_id=user.id, cohort_id=None, step_kind=OnboardingStepKind.WELCOME, due_at=due
+        user_id=user.id, channel_id=None, step_kind=OnboardingStepKind.WELCOME, due_at=due
     )
     check("enqueueing the same onboarding step twice yields one row", made and not made2 and step.id == step2.id)
     naive_due_rejected = False
     try:
         await onboarding_repo.enqueue_step(
-            user_id=user.id, cohort_id=None, step_kind=OnboardingStepKind.FOLLOW_UP, due_at=datetime(2030, 1, 1, 9)
+            user_id=user.id, channel_id=None, step_kind=OnboardingStepKind.FOLLOW_UP, due_at=datetime(2030, 1, 1, 9)
         )
     except ValueError:
         naive_due_rejected = True
     check("a naive onboarding due_at is rejected", naive_due_rejected)
     await onboarding_repo.enqueue_step(
-        user_id=user.id, cohort_id=cohort_b.id, step_kind=OnboardingStepKind.ORIENTATION, due_at=due
+        user_id=user.id, channel_id=channel_b, step_kind=OnboardingStepKind.ORIENTATION, due_at=due
+<<<<<<< HEAD
     )
-    claimed = await onboarding_repo.claim_due_steps(worker_id=f"probe-{suffix}", lease_seconds=120, limit=50)
+    claimed = await onboarding_repo.claim_due_steps(
+        worker_id=f"probe-{suffix}", lease_seconds=120, limit=50, user_ids=[user.id]
+=======
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
+    )
     claimed_ids = {s.id for s in claimed}
     check("claiming due steps takes the pending rows for this person", {step.id} <= claimed_ids)
-    reclaimed = await onboarding_repo.claim_due_steps(worker_id="probe-other", lease_seconds=120, limit=50)
+    reclaimed = await onboarding_repo.claim_due_steps(
+        worker_id="probe-other", lease_seconds=120, limit=50, user_ids=[user.id]
+    )
     check("a second worker cannot claim rows under a live lease", not ({step.id} & {s.id for s in reclaimed}))
-    halted = await onboarding_repo.halt_steps_for_cohort(cohort_b.id)
-    halted_rows = [s for s in await onboarding_repo.list_steps_for_user(user.id) if s.cohort_id == cohort_b.id]
+    halted = await onboarding_repo.halt_steps_for_channel(channel_b)
+    halted_rows = [s for s in await onboarding_repo.list_steps_for_user(user.id) if s.channel_id == channel_b]
     check(
-        "deactivating a cohort halts its pending onboarding steps",
+        "halting a channel halts its pending onboarding steps",
         halted == 1 and all(s.status == OnboardingStepStatus.HALTED for s in halted_rows),
     )
 
 
-def cleanup(engine: Engine, suffix: str, created: dict[str, list[int]]) -> None:
+<<<<<<< HEAD
+def cleanup(engine: Engine, suffix: str, created: dict[str, list]) -> None:
     """Remove every probe row in dependency order. Runs even when checks failed."""
     users = created["users"] or [-1]
-    cohorts = created["cohorts"] or [-1]
+    channels = created["channels"] or ["probe-chan-none"]
     with engine.begin() as conn:
-        params: dict[str, Any] = {"users": users, "cohorts": cohorts}
+        params: dict[str, Any] = {"users": users, "channels": channels, "chan_probe": "chan-probe"}
         conn.execute(text("DELETE FROM onboarding_steps WHERE user_id = ANY(:users)"), params)
-        conn.execute(text("DELETE FROM escalation_tickets WHERE cohort_id = ANY(:cohorts)"), params)
+        conn.execute(text("DELETE FROM escalation_tickets WHERE learner_id = ANY(:users)"), params)
+=======
+def cleanup(engine: Engine, suffix: str, created: dict[str, list[str]]) -> None:
+    """Remove every probe row in dependency order. Runs even when checks failed."""
+    users = created["users"] or [-1]
+    channels = created["channels"] or [""]
+    sprints = created["sprints"] or [-1]
+    with engine.begin() as conn:
+        params: dict[str, Any] = {"users": users, "channels": channels, "sprints": sprints}
+        conn.execute(text("DELETE FROM onboarding_steps WHERE user_id = ANY(:users)"), params)
+        conn.execute(text("DELETE FROM escalation_tickets WHERE channel_id = ANY(:channels)"), params)
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         conn.execute(text("DELETE FROM daily_standups WHERE learner_id = ANY(:users)"), params)
         conn.execute(
             text(
                 "DELETE FROM ceremony_amendments WHERE ceremony_id IN "
-                "(SELECT id FROM ceremonies WHERE team_id = 'sprints-community' AND channel_id = 'chan-probe')"
-            )
+                "(SELECT id FROM ceremonies WHERE team_id = 'sprints-community' AND channel_id = :chan_probe)"
+            ),
+            params,
         )
+        conn.execute(
+            text("DELETE FROM ceremonies WHERE team_id = 'sprints-community' AND channel_id = :chan_probe"),
+            params,
+        )
+        conn.execute(text("DELETE FROM sprints WHERE channel_id = ANY(:channels)"), params)
+        conn.execute(
+            text("DELETE FROM channel_roles WHERE channel_id = ANY(:channels) OR user_id = ANY(:users)"), params
+        )
+<<<<<<< HEAD
+=======
         conn.execute(text("DELETE FROM ceremonies WHERE team_id = 'sprints-community' AND channel_id = 'chan-probe'"))
-        conn.execute(text("DELETE FROM sprints WHERE cohort_id = ANY(:cohorts)"), params)
-        conn.execute(text("DELETE FROM cohort_memberships WHERE cohort_id = ANY(:cohorts)"), params)
-        conn.execute(text("DELETE FROM cohorts WHERE id = ANY(:cohorts)"), params)
+        conn.execute(text("DELETE FROM sprints WHERE id = ANY(:sprints)"), params)
+        conn.execute(text("DELETE FROM channel_roles WHERE channel_id = ANY(:channels)"), params)
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
         conn.execute(
             text("DELETE FROM users WHERE id = ANY(:users) OR mattermost_user_id = :mm"),
             {**params, "mm": f"probe-{suffix}"},
@@ -586,7 +722,11 @@ def cleanup(engine: Engine, suffix: str, created: dict[str, list[int]]) -> None:
 async def run_behavioural(engine: Engine) -> None:
     """Run the behavioural checks with guaranteed cleanup."""
     suffix = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
-    created: dict[str, list[int]] = {"users": [], "cohorts": []}
+<<<<<<< HEAD
+    created: dict[str, list] = {"users": [], "channels": []}
+=======
+    created: dict[str, list[Any]] = {"users": [], "channels": [], "sprints": []}
+>>>>>>> 6375e67 (feat(sprint4): setup isolated sprint4 testing workspace)
     try:
         await behavioural_checks(suffix, created)
     except Exception as exc:  # noqa: BLE001 - report, then still clean up

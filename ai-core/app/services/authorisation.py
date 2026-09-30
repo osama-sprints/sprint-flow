@@ -16,39 +16,10 @@ Properties this module guarantees:
 Callers raise before any mutation; the exceptions carry a machine-readable
 ``reason`` for logs and a user-facing message for the tool boundary.
 """
+
 from __future__ import annotations
-from app.services.domain import sprints as sprint_repo
-from app.models.sprint import Sprint
 
-async def require_cohort_authority(
-    session,
-    requester: User,
-    cohort_id: int
-) -> AuthorisationDecision:
-    if requester.is_superadmin:
-        return AuthorisationDecision(True, "superadmin", None, requester)
-        
-    sprint = await sprint_repo.get_sprint_by_id(session, cohort_id)
-    if not sprint:
-        raise ValidationFailed(f"Cohort {cohort_id} not found.")
-    return await require_channel_authority(
-        requester=None, 
-        channel_id=sprint.channel_id,
-        action="cohort_announcement"
-    )
 
-async def require_active_cohort(
-    session,
-    cohort_id: int
-) -> Sprint:
-    sprint = await sprint_repo.get_sprint_by_id(session, cohort_id)
-    if not sprint:
-        raise ValidationFailed(f"Cohort {cohort_id} not found.")
-        
-    if sprint.status != "active":
-        raise ValidationFailed(f"Cohort {cohort_id} is not active (current status: {sprint.status}).")
-        
-    return sprint
 from typing import (
     Iterable,
     NamedTuple,

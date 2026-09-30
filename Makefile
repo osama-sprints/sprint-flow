@@ -101,6 +101,8 @@ verify: ## Run every verification suite in order (stack up + bootstrapped; takes
 	python3 scripts/verify_escalation.py && \
 	python3 scripts/verify_orchestration.py && \
 	python3 scripts/verify_scheduling.py && \
+	python3 scripts/verify_calendar_integration.py && \
+	python3 scripts/verify_standups.py && \
 	python3 scripts/verify_onboarding_journey.py && \
 	python3 scripts/verify_routing.py && \
 	python3 scripts/verify_threading.py && \

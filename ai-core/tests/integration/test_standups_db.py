@@ -129,17 +129,11 @@ async def cleanup() -> None:
             like,
         )
         await conn.execute(
-            text(
-                "DELETE FROM channel_roles WHERE user_id IN "
-                "(SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-            ),
+            text("DELETE FROM channel_roles WHERE user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"),
             like,
         )
         await conn.execute(
-            text(
-                "DELETE FROM sprints WHERE opened_by_id IN "
-                "(SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
-            ),
+            text("DELETE FROM sprints WHERE opened_by_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"),
             like,
         )
         await conn.execute(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), like)
@@ -227,9 +221,14 @@ async def dispatched_prompt(
     zone: str = "UTC",
     post_id: str | None = None,
 ) -> DailyStandupPrompt:
-    prompt = await create_prompt(user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=local_date, zone=zone)
+    prompt = await create_prompt(
+        user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=local_date, zone=zone
+    )
     claimed = await repo.claim_due_prompts(
-        worker_id="w1", lease_seconds=300, now=NOW, user_ids=[user.id]  # type: ignore[list-item]
+        worker_id="w1",
+        lease_seconds=300,
+        now=NOW,
+        user_ids=[user.id],  # type: ignore[list-item]
     )
     assert claimed, "no prompt claimed"
     await repo.mark_prompt_sent(
@@ -245,13 +244,22 @@ async def dispatched_prompt(
 def test_ensure_prompt_is_idempotent():
     async def scenario():
         user, sprint_id, channel_id = await make_learner("idem")
-        first = await create_prompt(user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15))
-        second = await create_prompt(user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15))
+        first = await create_prompt(
+            user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
+        second = await create_prompt(
+            user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
         assert second.id == first.id
         assert await repo.count_prompts(status=StandupPromptStatus.PENDING) >= 1
-        assert await repo.get_prompt_for(  # type: ignore[no-any-return]
-            sprint_id, user.id, date(2026, 9, 15)  # type: ignore[arg-type]
-        ) is not None
+        assert (
+            await repo.get_prompt_for(  # type: ignore[no-any-return]
+                sprint_id,
+                user.id,
+                date(2026, 9, 15),  # type: ignore[arg-type]
+            )
+            is not None
+        )
 
     run(scenario())
 
@@ -259,14 +267,22 @@ def test_ensure_prompt_is_idempotent():
 def test_claim_lease_makes_rows_exclusive_then_reusable():
     async def scenario():
         user, sprint_id, channel_id = await make_learner("lease")
-        prompt = await create_prompt(user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15))
+        prompt = await create_prompt(
+            user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
         first = await repo.claim_due_prompts(
-            worker_id="w1", lease_seconds=300, now=NOW, user_ids=[user.id]  # type: ignore[list-item]
+            worker_id="w1",
+            lease_seconds=300,
+            now=NOW,
+            user_ids=[user.id],  # type: ignore[list-item]
         )
         assert [p.id for p in first] == [prompt.id]
         # A second worker cannot take the live lease.
         second = await repo.claim_due_prompts(
-            worker_id="w2", lease_seconds=300, now=NOW, user_ids=[user.id]  # type: ignore[list-item]
+            worker_id="w2",
+            lease_seconds=300,
+            now=NOW,
+            user_ids=[user.id],  # type: ignore[list-item]
         )
         assert second == []
         # After the lease expires, a second worker may take it over.
@@ -287,9 +303,14 @@ def test_claim_lease_makes_rows_exclusive_then_reusable():
 def test_deliver_prompt_sends_one_dm_and_marks_dispatched(fake: FakeMattermost):
     async def scenario():
         user, sprint_id, channel_id = await make_learner("sent")
-        prompt = await create_prompt(user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15))
+        prompt = await create_prompt(
+            user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
         claimed = await repo.claim_due_prompts(
-            worker_id="w1", lease_seconds=300, now=NOW, user_ids=[user.id]  # type: ignore[list-item]
+            worker_id="w1",
+            lease_seconds=300,
+            now=NOW,
+            user_ids=[user.id],  # type: ignore[list-item]
         )
         result = await standups.deliver_prompt(claimed[0], now=NOW)
         assert result.outcome == standups.DeliveryOutcome.SENT
@@ -306,13 +327,48 @@ def test_deliver_prompt_sends_one_dm_and_marks_dispatched(fake: FakeMattermost):
     run(scenario())
 
 
+def test_concurrent_prompt_delivery_sends_one_dm(fake: FakeMattermost):
+    async def scenario():
+        user, sprint_id, channel_id = await make_learner("race")
+        prompt = await create_prompt(
+            user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
+        claimed = await repo.claim_due_prompts(
+            worker_id="w1",
+            lease_seconds=300,
+            now=NOW,
+            user_ids=[user.id],  # type: ignore[list-item]
+        )
+        assert claimed
+
+        results = await asyncio.gather(
+            standups.deliver_prompt(claimed[0], now=NOW),
+            standups.deliver_prompt(claimed[0], now=NOW),
+        )
+
+        assert {result.outcome for result in results} == {
+            standups.DeliveryOutcome.SKIPPED,
+            standups.DeliveryOutcome.SENT,
+        }
+        assert len(fake.posts) == 1
+        updated = await repo.get_prompt(prompt.id)  # type: ignore[arg-type]
+        assert updated is not None and updated.status == StandupPromptStatus.DISPATCHED.value
+
+    run(scenario())
+
+
 def test_deliver_prompt_retries_then_gives_up(fake: FakeMattermost):
     async def scenario():
         user, sprint_id, channel_id = await make_learner("fail")
-        prompt = await create_prompt(user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15))
+        prompt = await create_prompt(
+            user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
         fake.fail_mode = "raise"
         claimed = await repo.claim_due_prompts(
-            worker_id="w1", lease_seconds=300, now=NOW, user_ids=[user.id]  # type: ignore[list-item]
+            worker_id="w1",
+            lease_seconds=300,
+            now=NOW,
+            user_ids=[user.id],  # type: ignore[list-item]
         )
         first = await standups.deliver_prompt(claimed[0], now=NOW)
         assert first.outcome == standups.DeliveryOutcome.RETRY
@@ -508,7 +564,9 @@ def test_reply_in_someone_elses_prompt_thread_is_not_ours():
         assert result.result == standups.ReplyResult.NOT_A_STANDUP
         assert (await repo.get_prompt(prompt.id)).status == StandupPromptStatus.DISPATCHED.value  # type: ignore[union-attr]
         entries = await repo.list_daily_standups(
-            sprint_id, learner_id=stranger.id, log_date=date(2026, 9, 15)  # type: ignore[arg-type]
+            sprint_id,
+            learner_id=stranger.id,
+            log_date=date(2026, 9, 15),  # type: ignore[arg-type]
         )
         assert entries == []
         # And the owner's own answer in that thread is still accepted.
@@ -612,7 +670,9 @@ def test_remove_prompts_between_cleans_verification_rows():
             await repo.get_prompt_for(sprint_id, user.id, date(2026, 9, 15))  # type: ignore[arg-type]
         ) is None
         # Next ensure_prompt creates a fresh row, not the deleted one.
-        fresh = await create_prompt(user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15))
+        fresh = await create_prompt(
+            user=user, sprint_id=sprint_id, channel_id=channel_id, local_date=date(2026, 9, 15)
+        )
         assert fresh.id != removed
 
     run(scenario())

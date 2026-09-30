@@ -38,15 +38,9 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("escalation_id", name="uq_knowledge_candidates_escalation_id"),
     )
-    op.create_index(
-        op.f("ix_knowledge_candidates_audience"), "knowledge_candidates", ["audience"], unique=False
-    )
-    op.create_index(
-        op.f("ix_knowledge_candidates_reviewer_id"), "knowledge_candidates", ["reviewer_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_knowledge_candidates_status"), "knowledge_candidates", ["status"], unique=False
-    )
+    op.create_index(op.f("ix_knowledge_candidates_audience"), "knowledge_candidates", ["audience"], unique=False)
+    op.create_index(op.f("ix_knowledge_candidates_reviewer_id"), "knowledge_candidates", ["reviewer_id"], unique=False)
+    op.create_index(op.f("ix_knowledge_candidates_status"), "knowledge_candidates", ["status"], unique=False)
 
 
 def downgrade() -> None:

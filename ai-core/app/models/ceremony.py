@@ -61,4 +61,3 @@ class Ceremony(DomainBase, table=True):
     # target the same external event. Only ever set by the google_meet
     # provider; jitsi links have no external event.
     external_event_id: str | None = Field(default=None, max_length=512)
-    

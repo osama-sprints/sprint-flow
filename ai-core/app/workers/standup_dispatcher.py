@@ -186,7 +186,9 @@ class StandupDispatcher:
 
         try:
             summary.ensured = await standups.ensure_scope(
-                now=reference, created_count_cap=200 if self.only_user_ids is None else None, user_ids=self.only_user_ids
+                now=reference,
+                created_count_cap=200 if self.only_user_ids is None else None,
+                user_ids=self.only_user_ids,
             )
         except Exception as e:
             summary.errors += 1

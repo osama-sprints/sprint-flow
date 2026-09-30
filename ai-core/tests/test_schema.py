@@ -107,24 +107,25 @@ def test_migration_downgrade_drops_exactly_the_domain_tables_in_reverse_order():
     op = RecordingOp()
     migration.op = op
     migration.downgrade()
-    # Migration 0001 created these tables; later migrations add their own
-    # (notably the standup prompt pair), so derive the list by name instead of
-    # a position slice that later FKs like daily_standups -> daily_standup_prompts
-    # would silently invalidate.
-    created_by_0001 = {
+    # Migration 0001 (the consolidated Sprint 1 revision) created these tables
+    # in dependency order; its downgrade must drop exactly these, in reverse FK
+    # order. It predates the channels refactor, so it still owns the cohorts-era
+    # tables that later revisions renamed/migrated (channel_roles, etc. were
+    # added by subsequent revisions and must NOT be dropped here).
+    created_by_0001 = [
         "users",
         "roles",
         "ceremony_types",
-        "channel_roles",
+        "cohorts",
+        "cohort_memberships",
         "sprints",
         "ceremonies",
         "ceremony_amendments",
-        "ceremony_reminders",
         "daily_standups",
         "escalation_tickets",
         "onboarding_steps",
-    }
-    assert [n for n in reversed(DOMAIN_TABLES) if n in created_by_0001] == op.dropped
+    ]
+    assert op.dropped == list(reversed(created_by_0001))
 
 
 def test_migration_head_revision_id():

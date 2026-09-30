@@ -43,7 +43,7 @@ from app.services.domain import identity as identity_repo
 from app.services.llm.service import llm_service
 from app.services.mattermost import mattermost_client
 import asyncio
- 
+
 from app.services import knowledge_extraction
 
 # Matches a cited ticket reference anywhere in a message, case-insensitively:
@@ -275,6 +275,7 @@ async def _close(ticket: EscalationTicket, reviewer: User, raw_human_response: s
         answer=answer,
         raw_human_response=raw_human_response,
     )
+    assert ticket.id is not None  # the UPDATE above re-loads the row; the PK is always set
     asyncio.create_task(_trigger_knowledge_discovery(ticket.ticket_ref, ticket.id))
     confirmation = _reviewer_confirmation(ticket)
     if ticket.human_dm_channel_id:
@@ -296,21 +297,22 @@ async def _close(ticket: EscalationTicket, reviewer: User, raw_human_response: s
     )
     return ClosureResult(ClosureOutcome.RESOLVED, ticket=ticket, reply_text=confirmation)
 
-async def _trigger_knowledge_discovery(ticket_ref: str, escalation_id: int) -> None:
-        """Fire-and-forget wrapper so a discovery failure can never surface
-        as a closure failure -- the learner has already received their
-        answer by the time this runs; nothing here should be able to affect
-        that outcome after the fact.
- 
-        Args:
-            ticket_ref: For logging only.
-            escalation_id: The just-resolved ticket to extract from.
-        """
-        try:
-            await knowledge_extraction.extract_candidate_for_ticket(escalation_id)
-        except Exception:
-            logger.exception("knowledge_discovery_trigger_failed", ticket_ref=ticket_ref)
 
+async def _trigger_knowledge_discovery(ticket_ref: str, escalation_id: int) -> None:
+    """Fire-and-forget wrapper so a discovery failure can never surface.
+
+    as a closure failure -- the learner has already received their
+    answer by the time this runs; nothing here should be able to affect
+    that outcome after the fact.
+
+    Args:
+        ticket_ref: For logging only.
+        escalation_id: The just-resolved ticket to extract from.
+    """
+    try:
+        await knowledge_extraction.extract_candidate_for_ticket(escalation_id)
+    except Exception:
+        logger.exception("knowledge_discovery_trigger_failed", ticket_ref=ticket_ref)
 
 
 # ---------------------------------------------------------------------------

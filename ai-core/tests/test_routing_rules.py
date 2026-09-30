@@ -213,11 +213,14 @@ def test_meeting_and_metting_requests_route_to_ceremony_scheduler():
     assert misspelling_result.matched_rule == "back_office_schedule"
 
 
-@pytest.mark.parametrize("text", [
-    "when is the next standup?",
-    "remind me about the next standup",
-    "what is the sprint planning agenda?",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "when is the next standup?",
+        "remind me about the next standup",
+        "what is the sprint planning agenda?",
+    ],
+)
 def test_ceremony_keywords_always_use_back_office_pipeline(text):
     result = classify_text(text, REQUESTERS["learner"])
     assert result.route is CapabilityRoute.BACK_OFFICE
@@ -225,7 +228,9 @@ def test_ceremony_keywords_always_use_back_office_pipeline(text):
 
 
 def test_bot_mentions_are_stripped_before_routing():
-    mention_result = classify_text("@sprintflow-assistant schedule the standup for tomorrow at 9am", REQUESTERS["authority"])
+    mention_result = classify_text(
+        "@sprintflow-assistant schedule the standup for tomorrow at 9am", REQUESTERS["authority"]
+    )
     assert mention_result.route is CapabilityRoute.BACK_OFFICE
     assert mention_result.matched_rule == "back_office_schedule"
 
@@ -243,9 +248,12 @@ def test_vague_document_follow_ups_and_ingestion_confirmations_are_learner_suppo
     assert follow_up_result.route is CapabilityRoute.LEARNER_SUPPORT
     assert follow_up_result.matched_rule == "learner_document_or_technical"
 
-    ingestion_confirmation = {
+    ingestion_confirmation = {  # noqa: F841 — documents the trigger message for the follow-up turn
         "messages": [
-            {"type": "human", "content": "✅ Ingested 'Data_20Analyst.pdf'. You can now ask questions about this document."},
+            {
+                "type": "human",
+                "content": "✅ Ingested 'Data_20Analyst.pdf'. You can now ask questions about this document.",
+            },
             {"type": "human", "content": "What does it say?"},
         ]
     }

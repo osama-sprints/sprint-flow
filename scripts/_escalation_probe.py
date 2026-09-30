@@ -9,9 +9,15 @@ that has the domain schema:
 
 Mattermost is never called for real: ``app.services.escalation.mattermost_client``
 is swapped for an in-memory fake that records DMs instead of sending them and
-can be told to fail on demand, exactly like the onboarding probe's fake. All
-rows this probe creates carry the ``verify-esc-`` prefix and are deleted at
-the end, even when an assertion fails.
+can be told to fail on demand. All rows this probe creates carry the
+``verify-esc-`` prefix (users and ``channel_roles`` rows) or live under ids
+with that prefix (escalation tickets), and are deleted at the end, even when
+an assertion fails.
+
+This probe targets the post-refactor **channels** architecture: a channel is a
+plain Mattermost channel id (there is no local ``channels`` table), roles live
+in ``channel_roles``, and every sticky references ``channel_id``/``channel_roles``
+rather than the legacy ``cohort_id``/``cohort_memberships``/``cohorts`` schema.
 """
 
 import asyncio
@@ -71,9 +77,8 @@ class FakeMattermost:
     """Stands in for ``mattermost_client`` inside ``app.services.escalation``.
 
     Mirrors the REAL client's failure contract (return None, never raise —
-    see ``app/services/mattermost.py``), not the onboarding probe's fake
-    (which raises), because ``open_escalation`` checks for ``None`` rather
-    than catching an exception.
+    see ``app/services/mattermost.py``), because ``open_escalation`` checks for
+    ``None`` rather than catching an exception.
     """
 
     def __init__(self) -> None:
@@ -96,8 +101,13 @@ class FakeMattermost:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers — channels architecture: a channel is just a Mattermost channel id
 # ---------------------------------------------------------------------------
+
+
+def channel_under_test(tag: str) -> str:
+    """A unique fake Mattermost channel id (no local channel row is needed)."""
+    return f"{PREFIX}channel-{tag}-{STAMP}"
 
 
 def bind(mattermost_user_id: str, channel_id: str, *, thread_id: str = "") -> None:
@@ -118,7 +128,7 @@ def unbind() -> None:
 
 
 async def make_learner(tag: str) -> Any:
-    """Seed a learner identity (not a cohort member — escalation doesn't require one)."""
+    """Seed a learner identity (escalation does not require any role)."""
     mattermost_user_id = f"{PREFIX}{tag}-{STAMP}"
     return await identity_repo.upsert_mattermost_user(
         mattermost_user_id=mattermost_user_id,
@@ -130,27 +140,14 @@ async def make_learner(tag: str) -> Any:
     )
 
 
-async def make_cohort(tag: str, *, active: bool = True) -> Any:
-    """Seed a cohort with a fake channel id, so ``get_cohort_by_channel_id`` resolves it."""
-    cohort = await channel_repo.create_channel(
-        f"{PREFIX}{tag}-{STAMP}",
-        mattermost_channel_id=f"{PREFIX}channel-{tag}-{STAMP}",
-    )
-    if not active:
-        assert cohort.id is not None
-        await channel_repo.set_channel_active(cohort.id, False)
-        cohort = await channel_repo.get_channel(cohort.id)
-    return cohort
-
-
-async def add_role(user: Any, cohort_id: int, role_key: RoleKey) -> None:
-    """Give ``user`` a role in a cohort."""
+async def add_role(user: Any, channel_id: str, role_key: RoleKey) -> None:
+    """Give ``user`` a role in a channel."""
     role = await channel_repo.get_role_by_key(role_key)
     assert role is not None and role.id is not None and user.id is not None
     await channel_repo.upsert_channel_role(
         user_id=user.id,
-        channel_id=str(cohort_id),
         team_id="",
+        channel_id=channel_id,
         role_id=role.id,
         assigned_by_id=None,
     )
@@ -164,12 +161,16 @@ async def ticket_count() -> int:
 
 
 async def cleanup() -> None:
-    """Delete every row this (or an earlier, crashed) run created, in dependency order."""
+    """Delete every row this (or an earlier, crashed) run created, in dependency order.
+
+    Targets the channels schema: escalation tickets by channel id or by their
+    users, ``channel_roles`` by channel id or user, then users. There is no
+    ``cohorts``/``cohort_memberships`` table any more.
+    """
     async with database_service.engine.begin() as conn:
         await conn.execute(
             text(
-                "DELETE FROM escalation_tickets WHERE cohort_id IN "
-                "(SELECT id FROM cohorts WHERE name LIKE :p) "
+                "DELETE FROM escalation_tickets WHERE channel_id LIKE :p "
                 "OR learner_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p) "
                 "OR assigned_human_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
             ),
@@ -177,13 +178,11 @@ async def cleanup() -> None:
         )
         await conn.execute(
             text(
-                "DELETE FROM cohort_memberships WHERE cohort_id IN "
-                "(SELECT id FROM cohorts WHERE name LIKE :p) "
+                "DELETE FROM channel_roles WHERE channel_id LIKE :p "
                 "OR user_id IN (SELECT id FROM users WHERE mattermost_user_id LIKE :p)"
             ),
             {"p": f"{PREFIX}%"},
         )
-        await conn.execute(text("DELETE FROM cohorts WHERE name LIKE :p"), {"p": f"{PREFIX}%"})
         await conn.execute(text("DELETE FROM users WHERE mattermost_user_id LIKE :p"), {"p": f"{PREFIX}%"})
 
 
@@ -221,34 +220,33 @@ async def scenario() -> None:
         unbound_result,
     )
 
-    print("--- happy path: cohort has a tech lead")
-    cohort_a = await make_cohort("a")
-    cohort_b = await make_cohort("b")
-    assert cohort_a.id is not None and cohort_b.id is not None
+    print("--- happy path: channel has an ops support")
+    channel_a = channel_under_test("a")
+    channel_b = channel_under_test("b")
     lead_a = await make_learner("lead-a")
     lead_b = await make_learner("lead-b")
     learner = await make_learner("learner")
-    await add_role(lead_a, cohort_a.id, RoleKey.TECH_LEAD)
-    await add_role(lead_b, cohort_b.id, RoleKey.TECH_LEAD)
+    await add_role(lead_a, channel_a, RoleKey.OPS_SUPPORT)
+    await add_role(lead_b, channel_b, RoleKey.OPS_SUPPORT)
 
     before_tickets = await ticket_count()
-    bind(learner.mattermost_user_id, cohort_a.mattermost_channel_id, thread_id=f"{PREFIX}thread-1")
+    bind(learner.mattermost_user_id, channel_a, thread_id=f"{PREFIX}thread-1")
     result = await escalation_tools.escalate_to_human.ainvoke({"question": "How many late days do I have left?"})
     check("happy path: tool reports ESCALATION_OPENED", result_code_of(result) == ResultCode.ESCALATION_OPENED, result)
     check("happy path: exactly one ticket row was added", await ticket_count() == before_tickets + 1)
     ticket = await escalation_repo.get_escalation_ticket_by_human_thread(fake.posts[-1]["id"])
     assert ticket is not None
     check("happy path: ticket_ref matches ESC-###### ", bool(TICKET_REF_RE.match(ticket.ticket_ref)), ticket.ticket_ref)
-    check("happy path: ticket routed to cohort A's tech lead", ticket.assigned_human_id == lead_a.id)
+    check("happy path: ticket routed to channel A's ops support", ticket.assigned_human_id == lead_a.id)
     check("happy path: ticket status is waiting_human", ticket.status == "waiting_human")
-    check("happy path: ticket cohort is A, not B", ticket.cohort_id == cohort_a.id)
+    check("happy path: ticket channel is A, not B", ticket.channel_id == channel_a)
     check(
         "happy path: learner_channel_id / learner_thread_id recorded",
-        ticket.learner_channel_id == cohort_a.mattermost_channel_id and ticket.learner_thread_id == f"{PREFIX}thread-1",
+        ticket.channel_id == channel_a and ticket.learner_thread_id == f"{PREFIX}thread-1",
     )
     check("happy path: question stored verbatim", ticket.question == "How many late days do I have left?")
     check(
-        "happy path: exactly one DM was sent, to A's tech lead's channel",
+        "happy path: exactly one DM was sent, to A's ops support's channel",
         len(fake.posts) == 1 and fake.dm_channels.get(lead_a.mattermost_user_id) == fake.posts[0]["channel_id"],
     )
     check(
@@ -262,12 +260,12 @@ async def scenario() -> None:
     )
     unbind()
 
-    print("--- cross-cohort scoping: cohort B is untouched by A's escalation")
-    check("cross-cohort: B's tech lead received no DM", fake.dm_channels.get(lead_b.mattermost_user_id) is None)
+    print("--- cross-channel scoping: channel B is untouched by A's escalation")
+    check("cross-channel: B's ops support received no DM", fake.dm_channels.get(lead_b.mattermost_user_id) is None)
 
     print("--- idempotency: replaying the same thread does not duplicate anything")
     before = (await ticket_count(), len(fake.posts))
-    bind(learner.mattermost_user_id, cohort_a.mattermost_channel_id, thread_id=f"{PREFIX}thread-1")
+    bind(learner.mattermost_user_id, channel_a, thread_id=f"{PREFIX}thread-1")
     replay_result = await escalation_tools.escalate_to_human.ainvoke(
         {"question": "How many late days do I have left?"}
     )
@@ -290,11 +288,10 @@ async def scenario() -> None:
     unbind()
 
     print("--- no human assigned for the required role")
-    cohort_c = await make_cohort("c")
-    assert cohort_c.id is not None
+    channel_c = channel_under_test("c")
     learner_c = await make_learner("learner-c")
     before = (await ticket_count(), len(fake.posts))
-    bind(learner_c.mattermost_user_id, cohort_c.mattermost_channel_id)
+    bind(learner_c.mattermost_user_id, channel_c)
     no_human_result = await escalation_tools.escalate_to_human.ainvoke({"question": "What's the leave policy?"})
     check(
         "no human: tool reports ESCALATION_OPENED_NO_HUMAN",
@@ -305,35 +302,34 @@ async def scenario() -> None:
     check("no human: no DM was attempted", len(fake.posts) == before[1])
     check(
         "no human: message is honest — mentions no one is assigned, not that someone is looking into it",
-        "tech lead" in no_human_result.lower() and "looped in a colleague" not in no_human_result.lower(),
+        "ops support" in no_human_result.lower() and "looped in a colleague" not in no_human_result.lower(),
         no_human_result,
     )
-    no_human_ticket = await escalation_repo.list_escalation_tickets(cohort_c.id)
+    no_human_ticket = await escalation_repo.list_escalation_tickets(channel_c)
     check(
         "no human: ticket stays open with no assigned human",
         len(no_human_ticket) == 1 and no_human_ticket[0].status == "open" and no_human_ticket[0].assigned_human_id is None,
     )
     before = (await ticket_count(), len(fake.posts))
-    bind(learner_c.mattermost_user_id, cohort_c.mattermost_channel_id)
+    bind(learner_c.mattermost_user_id, channel_c)
     no_human_replay = await escalation_tools.escalate_to_human.ainvoke({"question": "What's the leave policy?"})
     check(
         "idempotency (no-human case): replay is ALREADY_OPEN, no duplicate row, message stays honest",
         result_code_of(no_human_replay) == ResultCode.ESCALATION_ALREADY_OPEN
         and await ticket_count() == before[0]
-        and "tech lead" in no_human_replay.lower(),
+        and "ops support" in no_human_replay.lower(),
         no_human_replay,
     )
     unbind()
 
     print("--- human assigned but Mattermost is unreachable")
-    cohort_d = await make_cohort("d")
-    assert cohort_d.id is not None
+    channel_d = channel_under_test("d")
     lead_d = await make_learner("lead-d")
     learner_d = await make_learner("learner-d")
-    await add_role(lead_d, cohort_d.id, RoleKey.TECH_LEAD)
+    await add_role(lead_d, channel_d, RoleKey.OPS_SUPPORT)
     fake.fail = True
     before = (await ticket_count(), len(fake.posts))
-    bind(learner_d.mattermost_user_id, cohort_d.mattermost_channel_id)
+    bind(learner_d.mattermost_user_id, channel_d)
     unreachable_result = await escalation_tools.escalate_to_human.ainvoke({"question": "Is the demo cancelled?"})
     fake.fail = False
     check(
@@ -348,7 +344,7 @@ async def scenario() -> None:
         "couldn't reach them" in unreachable_result.lower() and "looped in a colleague" not in unreachable_result.lower(),
         unreachable_result,
     )
-    unreachable_tickets = await escalation_repo.list_escalation_tickets(cohort_d.id)
+    unreachable_tickets = await escalation_repo.list_escalation_tickets(channel_d)
     check(
         "unreachable: ticket keeps its assigned human but status stays open (not waiting_human)",
         len(unreachable_tickets) == 1
@@ -356,7 +352,7 @@ async def scenario() -> None:
         and unreachable_tickets[0].status == "open",
     )
     before = (await ticket_count(), len(fake.posts))
-    bind(learner_d.mattermost_user_id, cohort_d.mattermost_channel_id)
+    bind(learner_d.mattermost_user_id, channel_d)
     unreachable_replay = await escalation_tools.escalate_to_human.ainvoke({"question": "Is the demo cancelled?"})
     check(
         "idempotency (unreachable case): replay is ALREADY_OPEN, no duplicate row, still honest",
@@ -367,52 +363,47 @@ async def scenario() -> None:
     )
     unbind()
 
-    print("--- two tech leads in one cohort: earliest-assigned wins, deterministically")
-    cohort_e = await make_cohort("e")
-    assert cohort_e.id is not None
+    print("--- two ops-support holders in one channel: earliest-assigned wins, deterministically")
+    channel_e = channel_under_test("e")
     first_lead = await make_learner("first-lead")
     second_lead = await make_learner("second-lead")
     learner_e = await make_learner("learner-e")
-    await add_role(first_lead, cohort_e.id, RoleKey.TECH_LEAD)
-    await add_role(second_lead, cohort_e.id, RoleKey.TECH_LEAD)
-    bind(learner_e.mattermost_user_id, cohort_e.mattermost_channel_id)
+    await add_role(first_lead, channel_e, RoleKey.OPS_SUPPORT)
+    await add_role(second_lead, channel_e, RoleKey.OPS_SUPPORT)
+    bind(learner_e.mattermost_user_id, channel_e)
     await escalation_tools.escalate_to_human.ainvoke({"question": "Which lead answers this?"})
-    tie_tickets = await escalation_repo.list_escalation_tickets(cohort_e.id)
+    tie_tickets = await escalation_repo.list_escalation_tickets(channel_e)
     check(
         "tie: routed to whichever lead was assigned first, not arbitrarily",
         len(tie_tickets) == 1 and tie_tickets[0].assigned_human_id == first_lead.id,
     )
     unbind()
 
-    print("--- edge cases (each: no ticket row added)")
+    print("--- edge cases that add no ticket row")
     before = await ticket_count()
-    bind(learner.mattermost_user_id, f"{PREFIX}no-such-channel-{STAMP}")
-    no_cohort_result = await escalation_tools.escalate_to_human.ainvoke({"question": "anyone there?"})
-    check(
-        "no cohort for channel -> VALIDATION_ERROR",
-        result_code_of(no_cohort_result) == ResultCode.VALIDATION_ERROR,
-        no_cohort_result,
-    )
-    unbind()
 
-    inactive_cohort = await make_cohort("inactive", active=False)
-    bind(learner.mattermost_user_id, inactive_cohort.mattermost_channel_id)
-    inactive_result = await escalation_tools.escalate_to_human.ainvoke({"question": "still open?"})
-    check(
-        "deactivated cohort -> VALIDATION_ERROR mentioning it's inactive",
-        result_code_of(inactive_result) == ResultCode.VALIDATION_ERROR and "inactive" in inactive_result.lower(),
-        inactive_result,
+    current_requester.set(
+        RequesterContext(
+            mattermost_user_id=learner.mattermost_user_id,
+            channel_type="O",
+        )
     )
-    unbind()
+    no_channel_result = await escalation_tools.escalate_to_human.ainvoke({"question": "still open?"})
+    check(
+        "no channel id in context -> VALIDATION_ERROR mentioning the channel",
+        result_code_of(no_channel_result) == ResultCode.VALIDATION_ERROR and "channel" in no_channel_result.lower(),
+        no_channel_result,
+    )
+    current_requester.set(None)
 
-    bind(learner.mattermost_user_id, cohort_a.mattermost_channel_id)
+    bind(learner.mattermost_user_id, channel_a)
     empty_result = await escalation_tools.escalate_to_human.ainvoke({"question": "   "})
     check(
         "empty question -> VALIDATION_ERROR", result_code_of(empty_result) == ResultCode.VALIDATION_ERROR, empty_result
     )
     unbind()
 
-    bind(f"{PREFIX}never-synced-{STAMP}", cohort_a.mattermost_channel_id)
+    bind(f"{PREFIX}never-synced-{STAMP}", channel_a)
     unknown_learner_result = await escalation_tools.escalate_to_human.ainvoke({"question": "who am I?"})
     check(
         "learner never synced -> SYSTEM_ERROR, not a crash",
@@ -423,18 +414,42 @@ async def scenario() -> None:
 
     check("edge cases: no ticket rows were added by any of them", await ticket_count() == before)
 
+    print("--- channel id with no stored roles (no registry look-up to crash on)")
+    channel_nowhere = channel_under_test("nowhere")
+    before = (await ticket_count(), len(fake.posts))
+    bind(learner.mattermost_user_id, channel_nowhere)
+    nowhere_result = await escalation_tools.escalate_to_human.ainvoke({"question": "anyone there?"})
+    unbind()
+    check(
+        "unknown channel -> ESCALATION_OPENED_NO_HUMAN, not a crash",
+        result_code_of(nowhere_result) == ResultCode.ESCALATION_OPENED_NO_HUMAN,
+        nowhere_result,
+    )
+    check(
+        "unknown channel: message says nobody is assigned, does not claim a colleague is on it",
+        "ops support" in nowhere_result.lower() and "looped in a colleague" not in nowhere_result.lower(),
+        nowhere_result,
+    )
+    nowhere_tickets = await escalation_repo.list_escalation_tickets(channel_nowhere)
+    check(
+        "unknown channel: ticket stored unassigned (open) and no DM was attempted",
+        len(nowhere_tickets) == 1
+        and nowhere_tickets[0].assigned_human_id is None
+        and nowhere_tickets[0].status == "open"
+        and len(fake.posts) == before[1],
+    )
+
     print("--- fallback: learner_thread_id defaults to channel_id when unset")
-    cohort_f = await make_cohort("f")
-    assert cohort_f.id is not None
+    channel_f = channel_under_test("f")
     lead_f = await make_learner("lead-f")
     learner_f = await make_learner("learner-f")
-    await add_role(lead_f, cohort_f.id, RoleKey.TECH_LEAD)
-    bind(learner_f.mattermost_user_id, cohort_f.mattermost_channel_id)  # no thread_id supplied
+    await add_role(lead_f, channel_f, RoleKey.OPS_SUPPORT)
+    bind(learner_f.mattermost_user_id, channel_f)  # no thread_id supplied
     await escalation_tools.escalate_to_human.ainvoke({"question": "fallback check"})
-    fallback_tickets = await escalation_repo.list_escalation_tickets(cohort_f.id)
+    fallback_tickets = await escalation_repo.list_escalation_tickets(channel_f)
     check(
         "fallback: learner_thread_id falls back to the channel id",
-        len(fallback_tickets) == 1 and fallback_tickets[0].learner_thread_id == cohort_f.mattermost_channel_id,
+        len(fallback_tickets) == 1 and fallback_tickets[0].learner_thread_id == channel_f,
     )
     unbind()
 
@@ -466,7 +481,7 @@ def main() -> int:
         int: 0 when all pass.
     """
     print("=" * 84)
-    print("SprintFlow escalation handoff — in-container probe")
+    print("SprintFlow escalation handoff — in-container probe (channels era)")
     print("=" * 84)
     try:
         asyncio.run(main_async())

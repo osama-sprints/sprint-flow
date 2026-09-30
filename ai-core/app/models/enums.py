@@ -15,6 +15,8 @@ class AnnouncementOutcome(StrEnum):
     RATE_LIMITED = "rate_limited"
     UNAUTHORIZED = "unauthorized"
     FAILED = "failed"
+
+
 class RoleKey(StrEnum):
     """Channel-scoped role keys. A person holds one of these per channel."""
 
@@ -172,15 +174,16 @@ class OnboardingStepStatus(StrEnum):
     FAILED = "failed"
     HALTED = "halted"
 
+
 class KnowledgeCandidateStatus(StrEnum):
     """Lifecycle of a knowledge candidate awaiting human review.
- 
+
     Only APPROVED candidates are ever indexed into policy_document_chunks --
     see app/services/knowledge_review.py. PENDING and REJECTED are both
     excluded from search by construction: nothing ever writes them into the
     vector table in the first place.
     """
- 
+
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"

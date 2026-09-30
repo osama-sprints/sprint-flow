@@ -56,9 +56,7 @@ def test_extraction_rejects_malformed_model_output_rather_than_guessing():
     with patch.object(
         knowledge_extraction,
         "llm_service",
-        SimpleNamespace(
-            call=AsyncMock(return_value=_llm_response("AUDIENCE: everyone\nSTATEMENT: something"))
-        ),
+        SimpleNamespace(call=AsyncMock(return_value=_llm_response("AUDIENCE: everyone\nSTATEMENT: something"))),
     ):
         result = asyncio.run(knowledge_extraction._extract_candidate("q", "a"))
     assert result is None
@@ -106,6 +104,7 @@ class FakeSession:
         class FakeResult:
             def all(self):
                 return list(FakeSession._store.values())
+
         return FakeResult()
 
     def commit(self):
@@ -125,8 +124,7 @@ def reset_store():
 @pytest.fixture
 def mock_session():
     fake = FakeSession()
-    with patch.object(knowledge_review, "session_scope", return_value=fake), \
-         patch.object(knowledge_review, "Session", return_value=fake):
+    with patch.object(knowledge_review, "session_scope", return_value=fake):
         yield
 
 
@@ -148,9 +146,10 @@ def test_approve_indexes_and_transitions_to_approved(mock_session):
     FakeSession._store[1] = candidate
     reviewer = SimpleNamespace(id=7)
 
-    with patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)), patch.object(
-        knowledge_review, "_index_candidate", AsyncMock()
-    ) as index_mock:
+    with (
+        patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)),
+        patch.object(knowledge_review, "_index_candidate", AsyncMock()) as index_mock,
+    ):
         result = asyncio.run(knowledge_review.approve_candidate(1))
 
     assert result.outcome == knowledge_review.ReviewOutcome.APPROVED
@@ -165,9 +164,10 @@ def test_reject_never_indexes(mock_session):
     FakeSession._store[1] = candidate
     reviewer = SimpleNamespace(id=7)
 
-    with patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)), patch.object(
-        knowledge_review, "_index_candidate", AsyncMock()
-    ) as index_mock:
+    with (
+        patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)),
+        patch.object(knowledge_review, "_index_candidate", AsyncMock()) as index_mock,
+    ):
         result = asyncio.run(knowledge_review.reject_candidate(1, reason="too specific to generalize"))
 
     assert result.outcome == knowledge_review.ReviewOutcome.REJECTED
@@ -180,9 +180,10 @@ def test_approve_on_already_decided_candidate_is_refused_not_repeated(mock_sessi
     FakeSession._store[1] = candidate
     reviewer = SimpleNamespace(id=7)
 
-    with patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)), patch.object(
-        knowledge_review, "_index_candidate", AsyncMock()
-    ) as index_mock:
+    with (
+        patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)),
+        patch.object(knowledge_review, "_index_candidate", AsyncMock()) as index_mock,
+    ):
         result = asyncio.run(knowledge_review.approve_candidate(1))
 
     assert result.outcome == knowledge_review.ReviewOutcome.ALREADY_DECIDED
@@ -205,12 +206,13 @@ def test_indexing_writes_audience_and_provenance_into_the_chunk():
         captured["chunks"] = chunks
         captured["embeddings"] = embeddings
 
-    with patch.object(
-        knowledge_review, "generate_embeddings", AsyncMock(return_value=[0.1] * 1536)
-    ), patch.object(
-        knowledge_review,
-        "PolicyVectorStore",
-        return_value=SimpleNamespace(upsert_chunks=fake_upsert),
+    with (
+        patch.object(knowledge_review, "generate_embeddings", AsyncMock(return_value=[0.1] * 1536)),
+        patch.object(
+            knowledge_review,
+            "PolicyVectorStore",
+            return_value=SimpleNamespace(upsert_chunks=fake_upsert),
+        ),
     ):
         asyncio.run(knowledge_review._index_candidate(candidate))
 
@@ -271,9 +273,13 @@ def test_extraction_never_touches_the_vector_store(monkeypatch):
     async def fake_scope():
         yield FakeSession()
 
-    with patch.object(knowledge_extraction, "session_scope", fake_scope), patch.object(
-        knowledge_extraction, "_extract_candidate", AsyncMock(return_value=("learner", "narrowed statement"))
-    ), patch.object(knowledge_extraction, "_notify_reviewer", AsyncMock()):
+    with (
+        patch.object(knowledge_extraction, "session_scope", fake_scope),
+        patch.object(
+            knowledge_extraction, "_extract_candidate", AsyncMock(return_value=("learner", "narrowed statement"))
+        ),
+        patch.object(knowledge_extraction, "_notify_reviewer", AsyncMock()),
+    ):
         asyncio.run(knowledge_extraction.extract_candidate_for_ticket(42))
 
     upsert_mock.assert_not_awaited()
@@ -284,8 +290,10 @@ def test_rejected_candidate_never_reaches_vector_store(mock_session):
     FakeSession._store[1] = candidate
     reviewer = SimpleNamespace(id=7)
 
-    with patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)), \
-         patch.object(knowledge_review, "_index_candidate", AsyncMock()) as index_mock:
+    with (
+        patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)),
+        patch.object(knowledge_review, "_index_candidate", AsyncMock()) as index_mock,
+    ):
         asyncio.run(knowledge_review.reject_candidate(1, reason="one-off exception"))
 
     index_mock.assert_not_awaited()
@@ -321,9 +329,7 @@ def test_internal_knowledge_not_exposed_to_learner_audience():
         yield FakeSession()
 
     with patch("app.services.document_ingestion.vector_store.session_scope", fake_scope):
-        asyncio.run(
-            PolicyVectorStore().similarity_search(query_embedding=[0.1] * 1536, audience="learner")
-        )
+        asyncio.run(PolicyVectorStore().similarity_search(query_embedding=[0.1] * 1536, audience="learner"))
 
     allowed_audiences = captured["stmt"].whereclause.right.value
     assert "internal_operator" not in allowed_audiences
@@ -361,9 +367,7 @@ def test_staff_query_can_see_internal_knowledge():
         yield FakeSession()
 
     with patch("app.services.document_ingestion.vector_store.session_scope", fake_scope):
-        asyncio.run(
-            PolicyVectorStore().similarity_search(query_embedding=[0.1] * 1536, audience=None)
-        )
+        asyncio.run(PolicyVectorStore().similarity_search(query_embedding=[0.1] * 1536, audience=None))
 
     allowed_audiences = captured["stmt"].whereclause.right.value
     assert "internal_operator" in allowed_audiences
@@ -412,9 +416,13 @@ def test_extraction_idempotent_across_two_runs():
     async def fake_scope():
         yield FakeSession()
 
-    with patch.object(knowledge_extraction, "session_scope", fake_scope), patch.object(
-        knowledge_extraction, "_extract_candidate", AsyncMock(return_value=("learner", "narrowed statement"))
-    ), patch.object(knowledge_extraction, "_notify_reviewer", AsyncMock()) as notify_mock:
+    with (
+        patch.object(knowledge_extraction, "session_scope", fake_scope),
+        patch.object(
+            knowledge_extraction, "_extract_candidate", AsyncMock(return_value=("learner", "narrowed statement"))
+        ),
+        patch.object(knowledge_extraction, "_notify_reviewer", AsyncMock()) as notify_mock,
+    ):
         first_run = asyncio.run(knowledge_extraction.extract_candidate_for_ticket(42))
         second_run = asyncio.run(knowledge_extraction.extract_candidate_for_ticket(42))
 
@@ -435,13 +443,10 @@ def test_list_kc_command_is_recognised():
         )
     ]
 
-    with patch.object(
-        knowledge_review, "list_pending_for_review", AsyncMock(return_value=pending_candidates)
-    ), patch.object(
-        knowledge_review, "resolve_requester", AsyncMock(return_value=SimpleNamespace(id=5))
-    ), patch.object(
-        knowledge_review, "mattermost_client",
-        SimpleNamespace(create_post=AsyncMock())
+    with (
+        patch.object(knowledge_review, "list_pending_for_review", AsyncMock(return_value=pending_candidates)),
+        patch.object(knowledge_review, "resolve_requester", AsyncMock(return_value=SimpleNamespace(id=5))),
+        patch.object(knowledge_review, "mattermost_client", SimpleNamespace(create_post=AsyncMock())),
     ):
         result = asyncio.run(
             knowledge_review.handle_reviewer_reply(
@@ -456,13 +461,10 @@ def test_list_kc_command_is_recognised():
 
 
 def test_list_kc_empty_queue():
-    with patch.object(
-        knowledge_review, "list_pending_for_review", AsyncMock(return_value=[])
-    ), patch.object(
-        knowledge_review, "resolve_requester", AsyncMock(return_value=SimpleNamespace(id=5))
-    ), patch.object(
-        knowledge_review, "mattermost_client",
-        SimpleNamespace(create_post=AsyncMock())
+    with (
+        patch.object(knowledge_review, "list_pending_for_review", AsyncMock(return_value=[])),
+        patch.object(knowledge_review, "resolve_requester", AsyncMock(return_value=SimpleNamespace(id=5))),
+        patch.object(knowledge_review, "mattermost_client", SimpleNamespace(create_post=AsyncMock())),
     ):
         asyncio.run(
             knowledge_review.handle_reviewer_reply(
@@ -488,10 +490,14 @@ def test_approve_command_sends_confirmation_message(mock_session):
     async def fake_post(channel_id, text, **kwargs):
         posted_messages.append(text)
 
-    with patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)), \
-         patch.object(knowledge_review, "_index_candidate", AsyncMock()), \
-         patch.object(knowledge_review, "resolve_requester", AsyncMock(return_value=SimpleNamespace(id=7))), \
-         patch.object(knowledge_review, "mattermost_client", SimpleNamespace(create_post=AsyncMock(side_effect=fake_post))):
+    with (
+        patch.object(knowledge_review, "require_requester_user", AsyncMock(return_value=reviewer)),
+        patch.object(knowledge_review, "_index_candidate", AsyncMock()),
+        patch.object(knowledge_review, "resolve_requester", AsyncMock(return_value=SimpleNamespace(id=7))),
+        patch.object(
+            knowledge_review, "mattermost_client", SimpleNamespace(create_post=AsyncMock(side_effect=fake_post))
+        ),
+    ):
         result = asyncio.run(
             knowledge_review.handle_reviewer_reply(
                 mattermost_user_id="abc123",

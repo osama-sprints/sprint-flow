@@ -414,13 +414,13 @@ class MattermostWebSocketListener:
 
         1. Direct and group messages — always ours; there is no one else in the
            conversation and no webhook can reach them.
-          2. The bot is mentioned anywhere in the message — ours. This also picks
+        2. The bot is mentioned anywhere in the message — ours. This also picks
            up mentions that are not the first word ("thanks @bot, can you..."),
-              and ensures public mentions are not lost to channel configuration.
-          3. Public channel, first word is a webhook trigger word — NOT ours. The
-              outgoing webhook is already delivering this message, and answering
-              here too would post the reply twice.
-          4. Inside a thread the bot already participates in — ours. This is
+           and ensures public mentions are not lost to channel configuration.
+        3. Public channel, first word is a webhook trigger word — NOT ours. The
+           outgoing webhook is already delivering this message, and answering
+           here too would post the reply twice.
+        4. Inside a thread the bot already participates in — ours. This is
            thread continuity: once the bot is in a conversation, follow-ups no
            longer need to re-mention it.
         5. Anything else — ignored, with no API call and no model call.
@@ -526,7 +526,7 @@ class MattermostWebSocketListener:
         # DMs (rule 1) and would otherwise let the reply through untouched.
         # Never raised past here: a bug in closure must not take the
         # listener down, same principle as onboarding's arrival handling.
-                # 1. Check Knowledge Candidate commands FIRST (approve KC-X, reject KC-X, list KC)
+        # 1. Check Knowledge Candidate commands FIRST (approve KC-X, reject KC-X, list KC)
         if await knowledge_review.handle_reviewer_reply(
             mattermost_user_id=user_id, channel_id=channel_id, channel_type=channel_type, text=raw_message
         ):

@@ -39,7 +39,11 @@ class PolicyVectorStore:
     ) -> List[Dict[str, Any]]:
         async with session_scope() as session:
             distance_expr = PolicyDocumentChunk.embedding.l2_distance(query_embedding)
-            allowed_audiences = ("admin", "learner", "public" , "internal_operator") if audience in (None, "admin", "superadmin") else (audience,)
+            allowed_audiences = (
+                ("admin", "learner", "public", "internal_operator")
+                if audience in (None, "admin", "superadmin")
+                else (audience,)
+            )
 
             stmt = (
                 select(PolicyDocumentChunk, distance_expr.label("distance"))
@@ -58,21 +62,28 @@ class PolicyVectorStore:
                 }
                 for row in records
             ]
+
     async def index_knowledge_candidate(
-        self, *, escalation_id: int, candidate_id: int, reviewer_id: int, audience: str, statement: str,
+        self,
+        *,
+        escalation_id: int,
+        candidate_id: int,
+        reviewer_id: int,
+        audience: str,
+        statement: str,
         embedding: List[float],
     ) -> None:
         """Index one approved knowledge candidate, the same way any other
         chunk is stored -- only ever called after a candidate has been
         approved (see app.services.knowledge_review.approve_candidate).
- 
+
         The chunk id is deterministic (a hash of the escalation id and the
         statement's own content, mirroring PolicyChunker's own id scheme),
         so calling this twice for the same escalation and the same
         statement text updates the existing row instead of creating a
         second one -- the same idempotency guarantee every other row in
         this table already has.
- 
+
         Args:
             escalation_id: The source EscalationTicket.id -- carried in the
                 chunk's metadata so provenance survives into search results.
@@ -86,7 +97,7 @@ class PolicyVectorStore:
         """
         content_hash = hashlib.sha256(statement.encode("utf-8")).hexdigest()
         chunk_id = hashlib.sha256(f"escalation:{escalation_id}_0_{content_hash}".encode("utf-8")).hexdigest()
- 
+
         chunk = {
             "id": chunk_id,
             "document_id": f"escalation:{escalation_id}",

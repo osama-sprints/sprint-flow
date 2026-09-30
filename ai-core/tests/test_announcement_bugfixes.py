@@ -32,6 +32,7 @@ def anyio_backend():
 # prohibits).
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.anyio
 async def test_channel_is_resolved_from_stored_sprint_not_caller_input(mocker):
     fake_sprint = MagicMock(channel_id="chan-from-db", status="active")
@@ -40,9 +41,7 @@ async def test_channel_is_resolved_from_stored_sprint_not_caller_input(mocker):
         new_callable=AsyncMock,
         return_value=fake_sprint,
     )
-    mock_authority = mocker.patch(
-        "app.services.announcements.require_channel_authority", new_callable=AsyncMock
-    )
+    mock_authority = mocker.patch("app.services.announcements.require_channel_authority", new_callable=AsyncMock)
 
     requester = MagicMock()
     result = await resolve_announcement_channel(AsyncMock(), requester, cohort_id=42)
@@ -81,6 +80,7 @@ async def test_inactive_cohort_raises_validation_failed(mocker):
 # required — omitting it raised a ValidationError on every call before).
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.anyio
 async def test_preview_writes_cohort_id_onto_the_announcement_row(mocker):
     captured = {}
@@ -114,6 +114,7 @@ async def test_preview_writes_cohort_id_onto_the_announcement_row(mocker):
 # Fix 3: resolve_recipients_by_role must call list_channel_roles with the
 # real signature: channel_id positional, session as a keyword.
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 async def test_resolve_by_role_calls_list_channel_roles_with_real_signature(mocker):
@@ -160,6 +161,7 @@ async def test_resolve_by_role_filters_out_non_matching_roles(mocker):
 # get_role_for_user_in_channel with the real signature: user_id, channel_id
 # positional, session as a keyword.
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 async def test_resolve_by_username_calls_get_role_with_real_signature(mocker):
@@ -220,6 +222,7 @@ async def test_resolve_by_username_rejects_nonexistent_user(mocker):
 # resolve_announcement_channel directly and swallowed the exception before
 # this function's own refusal-audit write ever ran.
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 async def test_request_announcement_writes_unauthorized_audit_row_on_refusal(mocker):
@@ -296,6 +299,7 @@ async def test_request_announcement_writes_failed_audit_row_on_validation_error(
 # requester filter — not a live-DB race, which needs the real integration
 # script (verify_announcements.py, scenario 4).
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.anyio
 async def test_confirm_query_filters_by_confirming_user_id():

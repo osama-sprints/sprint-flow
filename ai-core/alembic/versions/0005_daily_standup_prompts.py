@@ -50,24 +50,14 @@ def upgrade() -> None:
             "sprint_id", "learner_id", "local_date", name="uq_daily_standup_prompts_sprint_learner_day"
         ),
     )
-    op.create_index(
-        op.f("ix_daily_standup_prompts_sprint_id"), "daily_standup_prompts", ["sprint_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_daily_standup_prompts_learner_id"), "daily_standup_prompts", ["learner_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_daily_standup_prompts_channel_id"), "daily_standup_prompts", ["channel_id"], unique=False
-    )
+    op.create_index(op.f("ix_daily_standup_prompts_sprint_id"), "daily_standup_prompts", ["sprint_id"], unique=False)
+    op.create_index(op.f("ix_daily_standup_prompts_learner_id"), "daily_standup_prompts", ["learner_id"], unique=False)
+    op.create_index(op.f("ix_daily_standup_prompts_channel_id"), "daily_standup_prompts", ["channel_id"], unique=False)
     op.create_index(
         op.f("ix_daily_standup_prompts_dm_channel_id"), "daily_standup_prompts", ["dm_channel_id"], unique=False
     )
-    op.create_index(
-        op.f("ix_daily_standup_prompts_local_date"), "daily_standup_prompts", ["local_date"], unique=False
-    )
-    op.create_index(
-        op.f("ix_daily_standup_prompts_status"), "daily_standup_prompts", ["status"], unique=False
-    )
+    op.create_index(op.f("ix_daily_standup_prompts_local_date"), "daily_standup_prompts", ["local_date"], unique=False)
+    op.create_index(op.f("ix_daily_standup_prompts_status"), "daily_standup_prompts", ["status"], unique=False)
 
     op.create_table(
         "standup_replies",
@@ -88,18 +78,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["learner_id"], ["users.id"], name="fk_standup_replies_learner_id"),
         sa.UniqueConstraint("post_id", name="uq_standup_replies_post_id"),
     )
-    op.create_index(
-        op.f("ix_standup_replies_prompt_id"), "standup_replies", ["prompt_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_standup_replies_learner_id"), "standup_replies", ["learner_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_standup_replies_dm_channel_id"), "standup_replies", ["dm_channel_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_standup_replies_outcome"), "standup_replies", ["outcome"], unique=False
-    )
+    op.create_index(op.f("ix_standup_replies_prompt_id"), "standup_replies", ["prompt_id"], unique=False)
+    op.create_index(op.f("ix_standup_replies_learner_id"), "standup_replies", ["learner_id"], unique=False)
+    op.create_index(op.f("ix_standup_replies_dm_channel_id"), "standup_replies", ["dm_channel_id"], unique=False)
+    op.create_index(op.f("ix_standup_replies_outcome"), "standup_replies", ["outcome"], unique=False)
 
     # Reply provenance on manually-created entries: NULL for everything written
     # by the older (chat tool) path, set for rows collected through a prompt.

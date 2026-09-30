@@ -385,6 +385,7 @@ class Settings:
         # Which video-meeting backend to use: "jitsi" (default, no credentials
         # needed) or "google_meet" (requires Workspace + domain-wide delegation).
         self.MEETING_LINK_PROVIDER = os.getenv("MEETING_LINK_PROVIDER", "jitsi").strip()
+        self.GOOGLE_CALENDAR_HTTP_TIMEOUT = float(os.getenv("GOOGLE_CALENDAR_HTTP_TIMEOUT", "15"))
 
         # --- Sprint 1 / proactive onboarding (s1e5) ------------------------------
         self.ONBOARDING_ENABLED = os.getenv("ONBOARDING_ENABLED", "true").lower() in ("true", "1", "t", "yes")

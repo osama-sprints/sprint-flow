@@ -5,16 +5,15 @@ Revises: 88dc2e879c6b
 Create Date: 2026-09-16 12:50:32.190730
 
 """
+
 from typing import Sequence, Union
 
 import sqlmodel  # noqa: F401
-from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'e4ec613c2a56'
-down_revision: Union[str, Sequence[str], None] = '88dc2e879c6b'
+revision: str = "e4ec613c2a56"
+down_revision: Union[str, Sequence[str], None] = "88dc2e879c6b"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

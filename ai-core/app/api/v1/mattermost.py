@@ -204,7 +204,11 @@ async def mattermost_webhook(
     # like a new thread root. Fetch the post to restore thread continuity.
     root_id = str((post or {}).get("root_id") or "")
     thread_history = await get_thread_history(root_id, payload.post_id)
-    payload_file_ids = payload.file_ids if isinstance(payload.file_ids, list) else [item for item in payload.file_ids.split(",") if item]
+    payload_file_ids = (
+        payload.file_ids
+        if isinstance(payload.file_ids, list)
+        else [item for item in payload.file_ids.split(",") if item]
+    )
     file_ids = extract_file_ids(post, payload_file_ids)
     if file_ids:
         background_tasks.add_task(

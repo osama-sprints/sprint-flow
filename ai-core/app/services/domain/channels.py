@@ -7,7 +7,7 @@ This module answers the two questions every privileged action asks first:
 from typing import NamedTuple
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models import (
@@ -303,6 +303,8 @@ async def set_channel_role_status(
         await s.flush()
         await s.refresh(membership)
         return membership
+
+
 async def find_any_ops_support_user(
     *,
     session: AsyncSession | None = None,
@@ -322,13 +324,13 @@ async def find_any_ops_support_user(
     """
     statement = (
         select(User)
-        .join(ChannelRole, ChannelRole.user_id == User.id)
-        .join(Role, Role.id == ChannelRole.role_id)
+        .join(ChannelRole, col(ChannelRole.user_id) == col(User.id))
+        .join(Role, col(Role.id) == col(ChannelRole.role_id))
         .where(
             Role.key == RoleKey.OPS_SUPPORT.value,
             ChannelRole.status == MembershipStatus.ACTIVE.value,
         )
-        .order_by(ChannelRole.joined_at)
+        .order_by(col(ChannelRole.joined_at))
         .limit(1)
     )
     async with session_scope(session) as s:

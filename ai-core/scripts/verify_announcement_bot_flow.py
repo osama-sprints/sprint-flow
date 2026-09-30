@@ -1,6 +1,7 @@
-from sqlalchemy import Table, Column, Integer
-from app.models.announcement import Announcement
-Table("cohorts", Announcement.metadata, Column("id", Integer, primary_key=True), extend_existing=True)
+from sqlalchemy import Table, Column, Integer  # noqa: E402
+from app.models.announcement import Announcement  # noqa: E402
+
+Table("cohorts", Announcement.metadata, Column("id", Integer, primary_key=True), extend_existing=True)  # noqa: E402
 """End-to-end verification through the TOOL layer — as close as we get to
 "talking to the bot" without actually running the LLM/graph/Mattermost
 webhook. Calls prepare_announcement_preview_tool / confirm_announcement_tool
@@ -13,16 +14,16 @@ Usage (inside the container, so DATABASE_URL etc. are set):
 EDIT THESE FIRST to real, existing rows in your dev database:
 """
 
-import asyncio
-from unittest.mock import AsyncMock, patch
+import asyncio  # noqa: E402
+from unittest.mock import AsyncMock, patch  # noqa: E402
 
-from app.core.requester import RequesterContext, current_requester
-from app.core.langgraph.tools.back_office import (
+from app.core.requester import RequesterContext, current_requester  # noqa: E402
+from app.core.langgraph.tools.back_office import (  # noqa: E402
     cancel_announcement_tool,
     confirm_announcement_tool,
     prepare_announcement_preview_tool,
 )
-from app.services import announcements as announcements_module
+from app.services import announcements as announcements_module  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # EDIT THESE to real, existing rows in your dev database before running.
@@ -67,9 +68,7 @@ def _set_learner():
 async def scenario_authorized_full_conversation():
     print("\n--- Scenario 1: tech lead asks to announce -> preview -> confirm -> posted ---")
     _set_tech_lead()
-    with patch.object(
-        announcements_module.mattermost_client, "create_post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(announcements_module.mattermost_client, "create_post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = {"id": "mm_post_bot_flow_1"}
 
         preview = await prepare_announcement_preview_tool.ainvoke(
@@ -96,9 +95,7 @@ async def scenario_authorized_full_conversation():
 async def scenario_learner_cannot_announce():
     print("\n--- Scenario 2: learner tries to announce -> refused before preview, audited ---")
     _set_learner()
-    with patch.object(
-        announcements_module.mattermost_client, "create_post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(announcements_module.mattermost_client, "create_post", new_callable=AsyncMock) as mock_post:
         result = await prepare_announcement_preview_tool.ainvoke(
             {
                 "cohort_id": TEST_COHORT_ID,
@@ -119,9 +116,7 @@ async def scenario_learner_cannot_announce():
 async def scenario_replay_confirm():
     print("\n--- Scenario 3: confirming the same announcement twice -> one post only ---")
     _set_tech_lead()
-    with patch.object(
-        announcements_module.mattermost_client, "create_post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(announcements_module.mattermost_client, "create_post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = {"id": "mm_post_bot_flow_3"}
 
         preview = await prepare_announcement_preview_tool.ainvoke(
@@ -150,9 +145,7 @@ async def scenario_replay_confirm():
 async def scenario_wrong_requester_cannot_confirm():
     print("\n--- Scenario 4: a different tech lead cannot confirm someone else's announcement ---")
     _set_tech_lead()
-    with patch.object(
-        announcements_module.mattermost_client, "create_post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(announcements_module.mattermost_client, "create_post", new_callable=AsyncMock) as mock_post:
         preview = await prepare_announcement_preview_tool.ainvoke(
             {
                 "cohort_id": TEST_COHORT_ID,
@@ -183,9 +176,7 @@ async def scenario_wrong_requester_cannot_confirm():
 async def scenario_cancel():
     print("\n--- Scenario 5: cancel -> zero posts ---")
     _set_tech_lead()
-    with patch.object(
-        announcements_module.mattermost_client, "create_post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(announcements_module.mattermost_client, "create_post", new_callable=AsyncMock) as mock_post:
         preview = await prepare_announcement_preview_tool.ainvoke(
             {
                 "cohort_id": TEST_COHORT_ID,
@@ -207,9 +198,7 @@ async def scenario_cancel():
 async def scenario_rate_limit():
     print("\n--- Scenario 6: rate limit after repeated sends ---")
     _set_tech_lead()
-    with patch.object(
-        announcements_module.mattermost_client, "create_post", new_callable=AsyncMock
-    ) as mock_post:
+    with patch.object(announcements_module.mattermost_client, "create_post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = {"id": "mm_post_rate_limit"}
 
         results = []

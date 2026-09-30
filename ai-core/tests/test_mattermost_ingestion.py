@@ -32,7 +32,9 @@ def test_extract_file_ids_reads_post_and_attachment_properties():
 
 def test_non_admin_is_rejected_before_download(monkeypatch):
     client = mattermost_ingestion.mattermost_client
-    monkeypatch.setattr(client, "get_user", AsyncMock(return_value={"roles": "system_user", "email": "learner@example.com"}))
+    monkeypatch.setattr(
+        client, "get_user", AsyncMock(return_value={"roles": "system_user", "email": "learner@example.com"})
+    )
     download = AsyncMock()
     monkeypatch.setattr(client, "download_file", download)
 
